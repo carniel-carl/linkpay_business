@@ -1,0 +1,88 @@
+{
+  "expo": {
+    "name": "LinkPay Business",
+    "slug": "linkpay-business",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "linkpaybusiness",
+    "userInterfaceStyle": "automatic",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.linkpay.business",
+      "supportsTablet": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.linkpay.business",
+      "allowBackup": false,
+      "adaptiveIcon": {
+        "backgroundColor": "#9AE600",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "blockedPermissions": [
+        "android.permission.USE_FINGERPRINT"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#27394D",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 88,
+          "dark": {
+            "backgroundColor": "#1C2D3F",
+            "image": "./assets/images/splash-icon.png"
+          }
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "LinkPay Business uses Face ID to unlock the app and sign you back in."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "LinkPay Business uses Face ID to unlock the app and sign you back in."
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/BricolageDisplay-Medium.ttf",
+            "./assets/fonts/BricolageDisplay-SemiBold.ttf",
+            "./assets/fonts/BricolageDisplay-Bold.ttf",
+            "./assets/fonts/BricolageText-Medium.ttf",
+            "./assets/fonts/BricolageText-SemiBold.ttf"
+          ]
+        }
+      ],
+      "expo-dev-client"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

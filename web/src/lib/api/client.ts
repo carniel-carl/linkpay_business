@@ -1,0 +1,116 @@
+import "server-only"
+import { getBusinessCookie, setBusinessCookie } from "@/lib/business-context"
+import { getSessionToken } from "@/lib/session"
+import { ApiError } from "./errors"
+
+const API_URL = process.env.API_URL ?? "http://localhost:4000"
+
+type Method = "GET" | "POST" | "PATCH" | "DELETE"
+
+type RequestOptions = {
+  method?: Method
+  json?: unknown
+  form?: FormData
+  /** Send the session token. Defaults to true; auth endpoints pass false. */
+  auth?: boolean
+  /** Extra headers, e.g. `Idempotency-Key` on transfers. */
+  headers?: Record<string, string>
+}
+
+/** The business in the cookie is no longer one the user can act on (removed, or a stale id). */
+const STALE_BUSINESS = new Set(["NOT_A_MEMBER", "INVALID_BUSINESS_ID"])
+
+/** Drops the stale business choice. Server Components can't change cookies; the dashboard layout clears it then. */
+async function forgetBusiness() {
+  try {
+    await setBusinessCookie(null)
+  } catch {
+    // Rendering a Server Component: see ClearStaleBusiness.
+  }
+}
+
+function headersFor(token: string | null, businessId: string | null): Record<string, string> {
+  return {
+    ...(token && { Authorization: `Bearer ${token}` }),
+    ...(token && businessId && { "X-Business-Id": businessId }),
+  }
+}
+
+async function request<T>(
+  path: string,
+  method: Method,
+  token: string | null,
+  businessId: string | null,
+  json?: unknown,
+  form?: FormData,
+  extra?: Record<string, string>,
+) {
+  const headers: Record<string, string> = { Accept: "application/json", ...extra, ...headersFor(token, businessId) }
+  if (json !== undefined) headers["Content-Type"] = "application/json"
+
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers,
+      body: form ?? (json !== undefined ? JSON.stringify(json) : undefined),
+      cache: "no-store",
+    })
+  } catch {
+    throw new ApiError(503, "We can't reach LinkPay right now. Check your connection and try again.", "API_UNREACHABLE")
+  }
+
+  // 204 No Content has no body.
+  const body = res.status === 204 ? null : await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      body?.error ?? res.statusText ?? "Request failed",
+      body?.code,
+      body?.details,
+      body?.missing,
+      !!token,
+    )
+  }
+  return body as T
+}
+
+/**
+ * Server-side fetch to the backend. Throws ApiError for non-2xx responses.
+ * Signed-in requests carry the chosen business as `X-Business-Id` (see lib/business-context.ts).
+ */
+export async function api<T>(path: string, { method = "GET", json, form, auth = true, headers }: RequestOptions = {}) {
+  const token = auth ? await getSessionToken() : null
+  const businessId = token ? await getBusinessCookie() : null
+  try {
+    return await request<T>(path, method, token, businessId, json, form, headers)
+  } catch (err) {
+    if (!businessId || !(err instanceof ApiError) || !err.code || !STALE_BUSINESS.has(err.code)) throw err
+    await forgetBusiness()
+    // Reads fall back to the user's default business. Writes never do: they were meant for the
+    // business that's gone, and repeating them elsewhere could change the wrong business.
+    if (method !== "GET") throw err
+    return request<T>(path, method, token, null, json, form, headers)
+  }
+}
+
+/** Streams a file from the backend with the session token (used by the file proxy routes). */
+export async function apiFile(path: string) {
+  const token = await getSessionToken()
+  const businessId = token ? await getBusinessCookie() : null
+  const get = (id: string | null) => fetch(`${API_URL}${path}`, { headers: headersFor(token, id), cache: "no-store" })
+
+  const res = await get(businessId)
+  if (businessId && (res.status === 400 || res.status === 403)) {
+    const code = await res
+      .clone()
+      .json()
+      .then((b) => b?.code)
+      .catch(() => undefined)
+    if (STALE_BUSINESS.has(code)) {
+      await forgetBusiness()
+      return get(null)
+    }
+  }
+  return res
+}

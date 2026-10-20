@@ -1,0 +1,193 @@
+"use client"
+
+import { useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
+import { RotateCw } from "lucide-react"
+import { toast } from "sonner"
+import { actOnTransfer } from "@/app/(dashboard)/transfers/actions"
+import { CopyButton } from "@/components/accounts/copy-button"
+import { FormError } from "@/components/common/form-error"
+import { Button } from "@/components/ui/button"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { Spinner } from "@/components/ui/spinner"
+import { Textarea } from "@/components/ui/textarea"
+import type { Transfer } from "@/lib/api/types"
+import { formatDateTime, formatNaira } from "@/lib/format"
+import { KIND_LABELS } from "@/lib/transfers"
+import { KindIcon, recipientName, TransferAmount, TransferStatusBadge } from "./parts"
+
+/** Everything about one transfer, with approve, reject and cancel where the member may. */
+export function TransferSheet({ transfer, onClose }: { transfer: Transfer | null; onClose: () => void }) {
+  return (
+    <Sheet open={!!transfer} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md">
+        {transfer && <Details key={transfer._id} transfer={transfer} onDone={onClose} />}
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => void }) {
+  const router = useRouter()
+  const [note, setNote] = useState("")
+  const [error, setError] = useState<string>()
+  const [pending, setPending] = useState<"approve" | "reject" | "cancel" | null>(null)
+  const [checking, startCheck] = useTransition()
+
+  async function act(action: "approve" | "reject" | "cancel") {
+    setPending(action)
+    setError(undefined)
+    const result = await actOnTransfer(t._id, action, note)
+    setPending(null)
+    if (!result.ok) return setError(result.error)
+    toast.success(
+      action === "approve"
+        ? `Approved. ${formatNaira(t.amountKobo)} is on its way to ${recipientName(t)}.`
+        : action === "reject"
+          ? "Rejected. The money is available again."
+          : "Transfer cancelled. The money is available again.",
+    )
+    onDone()
+  }
+
+  function check() {
+    startCheck(async () => {
+      const result = await actOnTransfer(t._id, "refresh")
+      if (!result.ok) toast.error(result.error)
+      else router.refresh()
+    })
+  }
+
+  return (
+    <>
+      <SheetHeader className="gap-5 border-b bg-muted/50 p-6 pr-14">
+        <div className="flex items-center gap-3">
+          <KindIcon transfer={t} />
+          <TransferStatusBadge status={t.status} />
+        </div>
+        <div className="grid gap-1.5">
+          <SheetTitle className="type-display text-4xl font-normal">
+            <TransferAmount kobo={t.amountKobo} className="font-[inherit]" />
+          </SheetTitle>
+          <SheetDescription>
+            To <span className="font-medium text-foreground">{recipientName(t)}</span>, {formatDateTime(t.createdAt)}
+          </SheetDescription>
+        </div>
+        {t.status === "failed" && t.failureReason && (
+          <p className="rounded-lg bg-destructive/10 px-3 py-2.5 text-sm text-destructive">{t.failureReason}. Any money taken has been returned.</p>
+        )}
+        {t.status === "rejected" && (
+          <p className="rounded-lg bg-muted px-3 py-2.5 text-sm text-muted-foreground">
+            {t.decision?.by?.name ?? "An approver"} rejected this{t.decision?.note ? `: “${t.decision.note}”` : "."} Nothing was sent.
+          </p>
+        )}
+      </SheetHeader>
+
+      <div className="grid gap-7 p-6">
+        <Group title="Amount">
+          <Row label="Amount sent" value={<span className="figure">{formatNaira(t.amountKobo)}</span>} />
+          <Row
+            label="Fee"
+            value={
+              <span className="grid justify-items-end">
+                <span className="figure">{formatNaira(t.feeKobo)}</span>
+                {t.stampDutyKobo > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    includes <span className="figure">{formatNaira(t.stampDutyKobo)}</span> stamp duty
+                  </span>
+                )}
+              </span>
+            }
+          />
+          <Row label="Total from the account" value={<span className="figure font-semibold">{formatNaira(t.totalKobo)}</span>} />
+        </Group>
+
+        <Group title="Recipient">
+          <Row label="Name" value={t.recipient.accountName} />
+          {t.recipient.branch && <Row label="Branch" value={t.recipient.branch.name} />}
+          <Row label="Bank" value={t.recipient.bankName} />
+          <Row label="Account number" value={<span className="font-mono tracking-[0.04em]">{t.recipient.accountNumber}</span>} />
+        </Group>
+
+        <Group title="Details">
+          <Row label="Type" value={KIND_LABELS[t.kind]} />
+          <Row label="From" value={t.branch?.name} />
+          <Row label="Narration" value={t.narration} />
+          <Row
+            label="Reference"
+            value={
+              <span className="flex min-w-0 items-center justify-end gap-0.5">
+                <span className="truncate font-mono text-xs">{t.reference}</span>
+                <CopyButton value={t.reference} message="Reference copied" label="Copy reference" />
+              </span>
+            }
+          />
+          <Row label="Prepared by" value={t.createdBy?.name} />
+          {t.decision && (
+            <Row
+              label={t.status === "rejected" ? "Rejected by" : "Approved by"}
+              value={`${t.decision.by?.name ?? "Unknown"}, ${formatDateTime(t.decision.at)}`}
+            />
+          )}
+          {t.completedAt && <Row label="Finished" value={formatDateTime(t.completedAt)} />}
+        </Group>
+      </div>
+
+      {(t.canApprove || t.canCancel || t.status === "processing") && (
+        <SheetFooter className="sticky bottom-0 gap-3 border-t bg-card p-6">
+          <FormError message={error} />
+          {t.canApprove && (
+            <>
+              <Field>
+                <FieldLabel htmlFor="decision-note">Note (optional)</FieldLabel>
+                <Textarea id="decision-note" rows={2} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
+                <FieldDescription>The person who prepared it sees this.</FieldDescription>
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" disabled={!!pending} onClick={() => act("reject")}>
+                  {pending === "reject" && <Spinner />}
+                  Reject
+                </Button>
+                <Button disabled={!!pending} onClick={() => act("approve")}>
+                  {pending === "approve" && <Spinner />}
+                  Approve and send
+                </Button>
+              </div>
+            </>
+          )}
+          {t.canCancel && (
+            <Button variant="outline" disabled={!!pending} onClick={() => act("cancel")}>
+              {pending === "cancel" && <Spinner />}
+              Cancel transfer
+            </Button>
+          )}
+          {t.status === "processing" && (
+            <Button variant="outline" disabled={checking} onClick={check}>
+              {checking ? <Spinner /> : <RotateCw data-icon="inline-start" aria-hidden />}
+              Check status now
+            </Button>
+          )}
+        </SheetFooter>
+      )}
+    </>
+  )
+}
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="grid gap-2">
+      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+      <dl className="divide-y rounded-xl border">{children}</dl>
+    </section>
+  )
+}
+
+function Row({ label, value }: { label: string; value?: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-6 px-4 py-3 text-sm">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-right break-words">{value || <span className="text-muted-foreground">Not given</span>}</dd>
+    </div>
+  )
+}
