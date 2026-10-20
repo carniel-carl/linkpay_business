@@ -1,13 +1,30 @@
-import type { RequestHandler, Response } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import { z } from "zod";
 import { UserModel, type UserDocument } from "../models/User";
+import {
+  biometricSecretSchema,
+  createBiometricKey,
+  disableBiometricKey,
+  signInWithBiometricKey,
+} from "../services/biometricKeys";
 import { createOtp, verifyOtp } from "../services/otp";
 import {
   sendLoginCodeEmail,
   sendTwoFactorCodeEmail,
   sendVerificationEmail,
 } from "../services/email";
-import { signAccessToken, signChallengeToken, verifyToken } from "../services/tokens";
+import {
+  deviceSchema,
+  listSessions,
+  refreshTokenSchema,
+  revokeByRefreshToken,
+  revokeOtherSessions,
+  revokeSession,
+  rotateSession,
+  signInResponse,
+  type DeviceInfo,
+} from "../services/sessions";
+import { signChallengeToken, verifyToken } from "../services/tokens";
 import { generateTotpSecret, verifyTotp } from "../services/totp";
 import { HttpError } from "../utils/HttpError";
 
@@ -28,14 +45,21 @@ async function sendIgnoringCooldown(send: () => Promise<unknown>) {
   }
 }
 
-async function issueSession(res: Response, user: UserDocument) {
-  res.json({ accessToken: await signAccessToken(user.id), user });
+/** Responds with the signed-in session. Clients that send `device` (the mobile app) get a device session. */
+async function issueSession(req: Request, res: Response, user: UserDocument, device: DeviceInfo) {
+  res.json(await signInResponse(req, user, device));
 }
 
 /** Finishes a first-factor login: either issues a session or starts the 2FA challenge. */
-async function completeFirstFactor(res: Response, user: UserDocument, { skipEmailFactor = false } = {}) {
+async function completeFirstFactor(
+  req: Request,
+  res: Response,
+  user: UserDocument,
+  device: DeviceInfo,
+  { skipEmailFactor = false } = {},
+) {
   const { enabled, method } = user.twoFactor ?? {};
-  if (!enabled || (method === "email" && skipEmailFactor)) return issueSession(res, user);
+  if (!enabled || (method === "email" && skipEmailFactor)) return issueSession(req, res, user, device);
 
   if (method === "email") {
     await sendIgnoringCooldown(async () => sendTwoFactorCodeEmail(user.email, await createOtp(user.email, "two_factor")));
@@ -71,13 +95,13 @@ export const register: RequestHandler = async (req, res) => {
 };
 
 export const verifyEmail: RequestHandler = async (req, res) => {
-  const body = z.object({ email, code }).parse(req.body);
+  const body = z.object({ email, code, device: deviceSchema }).parse(req.body);
 
   if (!(await verifyOtp(body.email, "verify_email", body.code))) throw invalidCode();
 
-  const user = await UserModel.findOneAndUpdate({ email: body.email }, { emailVerified: true }, { new: true });
+  const user = await UserModel.findOneAndUpdate({ email: body.email }, { emailVerified: true }, { returnDocument: "after" });
   if (!user) throw invalidCode();
-  await issueSession(res, user);
+  await issueSession(req, res, user, body.device);
 };
 
 export const resendVerification: RequestHandler = async (req, res) => {
@@ -94,7 +118,7 @@ export const resendVerification: RequestHandler = async (req, res) => {
 // ---- Password login ----
 
 export const login: RequestHandler = async (req, res) => {
-  const body = z.object({ email, password: z.string().min(1) }).parse(req.body);
+  const body = z.object({ email, password: z.string().min(1), device: deviceSchema }).parse(req.body);
 
   const user = await UserModel.findOne({ email: body.email }).select("+password");
   const valid = await Bun.password.verify(body.password, user?.password ?? DUMMY_HASH);
@@ -105,7 +129,7 @@ export const login: RequestHandler = async (req, res) => {
     throw new HttpError(403, "Email not verified. A verification code has been sent.", "EMAIL_NOT_VERIFIED");
   }
 
-  await completeFirstFactor(res, user);
+  await completeFirstFactor(req, res, user, body.device);
 };
 
 // ---- Passwordless email OTP login ----
@@ -120,7 +144,7 @@ export const requestLoginOtp: RequestHandler = async (req, res) => {
 };
 
 export const verifyLoginOtp: RequestHandler = async (req, res) => {
-  const body = z.object({ email, code }).parse(req.body);
+  const body = z.object({ email, code, device: deviceSchema }).parse(req.body);
 
   if (!(await verifyOtp(body.email, "login", body.code))) throw invalidCode();
 
@@ -132,13 +156,13 @@ export const verifyLoginOtp: RequestHandler = async (req, res) => {
     await user.save();
   }
   // Email 2FA would just repeat the factor already proven, so only TOTP users get a second step.
-  await completeFirstFactor(res, user, { skipEmailFactor: true });
+  await completeFirstFactor(req, res, user, body.device, { skipEmailFactor: true });
 };
 
 // ---- Second factor during login ----
 
 export const verifyTwoFactor: RequestHandler = async (req, res) => {
-  const body = z.object({ challengeToken: z.string(), code }).parse(req.body);
+  const body = z.object({ challengeToken: z.string(), code, device: deviceSchema }).parse(req.body);
 
   const userId = await verifyToken(body.challengeToken, "2fa_challenge");
   const user = await findUserOrThrow(userId, "+twoFactor.totpSecret");
@@ -151,7 +175,7 @@ export const verifyTwoFactor: RequestHandler = async (req, res) => {
       : await verifyOtp(user.email, "two_factor", body.code);
   if (!ok) throw invalidCode();
 
-  await issueSession(res, user);
+  await issueSession(req, res, user, body.device);
 };
 
 export const resendTwoFactor: RequestHandler = async (req, res) => {
@@ -226,4 +250,55 @@ export const disableTwoFactor: RequestHandler = async (req, res) => {
   });
   await user.save();
   res.json({ message: "Two-factor authentication disabled.", user });
+};
+
+// ---- Device sessions (mobile) ----
+
+export const refresh: RequestHandler = async (req, res) => {
+  const body = z.object({ refreshToken: refreshTokenSchema }).parse(req.body);
+  res.json(await rotateSession(req, body.refreshToken));
+};
+
+/**
+ * Signs this device out. Takes the refresh token, so it works even after the access token has expired.
+ * `forgetDevice` also ends the phone's biometric sign-in.
+ */
+export const logout: RequestHandler = async (req, res) => {
+  const body = z.object({ refreshToken: refreshTokenSchema, forgetDevice: z.boolean().optional() }).parse(req.body);
+  await revokeByRefreshToken(body.refreshToken, { forgetDevice: body.forgetDevice });
+  res.status(204).end();
+};
+
+export const sessions: RequestHandler = async (req, res) => {
+  res.json(await listSessions(req.userId!, req.sessionId));
+};
+
+export const revokeDeviceSession: RequestHandler<{ id: string }> = async (req, res) => {
+  const id = z.string().regex(/^[a-f\d]{24}$/i, "Invalid session id").parse(req.params.id);
+  if (!(await revokeSession(req.userId!, id, id === req.sessionId ? "signed_out" : "revoked"))) {
+    throw new HttpError(404, "Session not found", "SESSION_NOT_FOUND");
+  }
+  res.status(204).end();
+};
+
+/** Signs out every other device session. The web's long-lived token isn't a session and is unaffected. */
+export const revokeOtherDeviceSessions: RequestHandler = async (req, res) => {
+  res.json({ revoked: await revokeOtherSessions(req.userId!, req.sessionId) });
+};
+
+// ---- Biometric sign-in (mobile) ----
+
+/** Turns on biometric sign-in for this phone. The secret is returned once, for the phone's keychain. */
+export const enableBiometricSignIn: RequestHandler = async (req, res) => {
+  res.status(201).json(await createBiometricKey(req.userId!, req.sessionId));
+};
+
+export const disableBiometricSignIn: RequestHandler = async (req, res) => {
+  await disableBiometricKey(req.userId!, req.sessionId);
+  res.status(204).end();
+};
+
+export const biometricLogin: RequestHandler = async (req, res) => {
+  const body = z.object({ secret: biometricSecretSchema, device: deviceSchema.unwrap() }).parse(req.body);
+  res.json(await signInWithBiometricKey(req, body.secret, body.device));
 };

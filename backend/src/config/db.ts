@@ -6,7 +6,11 @@ export async function connectDB() {
   mongoose.connection.on("error", (err) => console.error("MongoDB error:", err));
   mongoose.connection.on("disconnected", () => console.warn("MongoDB disconnected"));
 
-  await mongoose.connect(env.mongoUri);
+  await mongoose.connect(env.mongoUri, {
+    dbName: env.mongoDbName,
+    ...(env.mongoUser && { user: env.mongoUser }),
+    ...(env.mongoPassword && { pass: env.mongoPassword }),
+  });
 }
 
 export async function disconnectDB() {

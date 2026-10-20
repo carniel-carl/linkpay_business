@@ -6,6 +6,8 @@ const userSchema = new Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true, select: false },
     emailVerified: { type: Boolean, default: false },
+    // "admin" = platform staff who review business verification. Grant with scripts/make-admin.ts.
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     twoFactor: {
       enabled: { type: Boolean, default: false },
       method: { type: String, enum: ["totp", "email", null], default: null },

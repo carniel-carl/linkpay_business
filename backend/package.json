@@ -6,7 +6,9 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6"
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "mongodb-memory-server": "^11.3.0"
   },
   "peerDependencies": {
     "typescript": "^7"
@@ -17,11 +19,15 @@
     "express-rate-limit": "^8.7.0",
     "jose": "^6.2.12",
     "mongoose": "^9.10.2",
+    "multer": "^2.4.0",
     "otpauth": "^9.5.2",
     "zod": "^4.6.5"
   },
   "scripts": {
     "dev": "bun --watch index.ts",
-    "start": "bun index.ts"
+    "start": "bun index.ts",
+    "check": "bun scripts/check-connections.ts",
+    "migrate:branches": "bun scripts/migrate-branches.ts",
+    "dev:mock": "bun --env-file=/dev/null scripts/dev-mock.ts"
   }
 }
