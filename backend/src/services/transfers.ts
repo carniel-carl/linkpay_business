@@ -324,9 +324,7 @@ export async function createTransfers(opts: {
   });
 
   if (approval) {
-    notifyApprovers(business, branch._id, userId, transfers, batch?.id).catch((err) =>
-      console.error("Couldn't email approvers:", err),
-    );
+    await notifyApprovers(business, branch._id, userId, transfers, batch?.id).catch((err) => console.error("Couldn't email approvers:", err));
   } else {
     for (const transfer of transfers) await submitTransfer(transfer);
   }
@@ -366,7 +364,7 @@ export async function decideTransfers(opts: {
         decision: { by: userId, at: new Date(), note },
         ...(decision === "reject" && { completedAt: new Date() }),
       },
-      { new: true },
+      { returnDocument: "after" },
     );
     if (updated) decided.push(updated);
   }
@@ -374,7 +372,7 @@ export async function decideTransfers(opts: {
   if (decision === "approve") {
     for (const transfer of decided) await submitTransfer(transfer);
   } else if (decided.length) {
-    notifyRejected(decided, note).catch((err) => console.error("Couldn't email the rejection:", err));
+    await notifyRejected(decided, note).catch((err) => console.error("Couldn't email the rejection:", err));
   }
   return decided;
 }

@@ -19,7 +19,8 @@ const { MongoMemoryServer } = await import("mongodb-memory-server");
 const { env } = await import("../src/config/env");
 const { startMockLiquifia } = await import("../tests/mockLiquifia");
 
-const liquifia = startMockLiquifia();
+// Payouts succeed 5 s after they're sent, so transfers move from "processing" to "success" while you watch.
+const liquifia = startMockLiquifia({ autoSettlePayoutsMs: 5_000 });
 env.liquifia.baseUrl = liquifia.url;
 if (!/^http:\/\/127\.0\.0\.1[:/]/.test(env.liquifia.baseUrl)) throw new Error("Refusing a non-local Liquifia");
 env.liquifia.syncIntervalMs = 0;
@@ -29,6 +30,11 @@ await mongoose.connect(mongo.getUri(), { dbName: "dev_mock" });
 await mongoose.connection.syncIndexes();
 
 const { app } = await import("../src/app");
+const { startTransactionSync } = await import("../src/services/transactions");
+const { startTransferProcessor } = await import("../src/services/transfers");
+// Faster than production so settled payouts and the money they move show up within seconds.
+const stopSync = startTransactionSync(10_000);
+const stopTransfers = startTransferProcessor(5_000);
 const server = app.listen(Number(process.env.PORT), async () => {
   console.log(`Mock API on http://localhost:${process.env.PORT} (in-memory MongoDB, mock Liquifia at ${liquifia.url}). Data is lost on exit.`);
   // `bun run dev:mock --seed`: a verified demo business with branches and payments (scripts/dev-seed.ts).
@@ -39,6 +45,8 @@ const server = app.listen(Number(process.env.PORT), async () => {
 });
 
 async function shutdown() {
+  stopSync();
+  stopTransfers();
   server.close();
   liquifia.stop();
   await mongoose.disconnect();

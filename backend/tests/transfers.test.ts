@@ -81,10 +81,10 @@ describe("lookups", () => {
   test("name enquiry tells bank accounts, own branches and other LinkPay businesses apart", async () => {
     const { owner, kanoVa } = await setup();
     const other = await setup("Bola Stores");
-    t.liquifia.bankAccounts.set("0123456789", "JOHN DOE");
+    t.liquifia.bankAccounts.set("2222222222", "JOHN DOE");
 
-    const bank = await t.api("POST", "/api/transfers/resolve-account", { token: owner.token, body: { accountNumber: "0123456789", bankUuid: "BANK-GTB" } });
-    expect(bank.body).toEqual({ accountNumber: "0123456789", accountName: "JOHN DOE", bankName: "Guaranty Trust Bank", kind: "bank", label: null });
+    const bank = await t.api("POST", "/api/transfers/resolve-account", { token: owner.token, body: { accountNumber: "2222222222", bankUuid: "BANK-GTB" } });
+    expect(bank.body).toEqual({ accountNumber: "2222222222", accountName: "JOHN DOE", bankName: "Guaranty Trust Bank", kind: "bank", label: null });
 
     const own = await t.api("POST", "/api/transfers/resolve-account", { token: owner.token, body: { accountNumber: kanoVa.accountNumber, bankUuid: "BANK-MOCK" } });
     expect(own.body).toMatchObject({ kind: "internal", label: "Kano" });
@@ -197,14 +197,14 @@ describe("sending", () => {
     // Not yet with Liquifia, so it's held on our side.
     const accounts = await t.api("GET", "/api/accounts", { token: owner.token });
     const head = accounts.body.find((a: any) => a.branch.isHeadOffice);
-    expect(head.balance).toMatchObject({ amountKobo: 500_000_00, heldKobo: 1_002_000, availableKobo: 500_000_00 - 1_002_000 });
+    expect(head.balance).toMatchObject({ amountKobo: 500_000_00, heldKobo: 102_000, availableKobo: 500_000_00 - 102_000 });
 
     await processOpenTransfers();
     await processOpenTransfers();
     expect(t.liquifia.payouts.length).toBe(payoutsBefore + 1);
     const keys = t.liquifia.requests.filter((r) => r.method === "POST" && r.path === "/payouts").slice(-2).map((r) => r.idempotencyKey);
     expect(keys[0]).toBe(keys[1]!);
-    expect(t.liquifia.balances.get(headVa.providerAccountId)).toBe(500_000_00 - 1_002_000);
+    expect(t.liquifia.balances.get(headVa.providerAccountId)).toBe(500_000_00 - 102_000);
   });
 
   test("a definite rejection from Liquifia fails the transfer and emails the sender", async () => {

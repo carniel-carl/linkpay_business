@@ -34,7 +34,8 @@ export const mockFee = (amountNaira: number) => {
   return { amount: amountNaira, fee_bps: 0, flat_fee: 20, stamp_duty: stampDuty, fee: 20 + stampDuty, total: amountNaira + 20 + stampDuty, currency: "NGN" };
 };
 
-export function startMockLiquifia() {
+/** `autoSettlePayoutsMs`: payouts succeed on their own this long after they're created (dev:mock). Tests settle them by hand. */
+export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
   const customers: Customer[] = [];
   const accounts: VirtualAccount[] = [];
   const balances = new Map<string, number>(); // kobo, like the real API (₦100 is 10000)
@@ -55,13 +56,33 @@ export function startMockLiquifia() {
     /** Make the next N payout creates fail with this error (e.g. a 503 or a timeout-like 502). */
     failNextPayouts: 0,
     failPayoutsWith: { status: 503, code: "UNAVAILABLE", message: "Try again later" },
-    /** Sets a payout's status (as Liquifia's processing would), refunding the account when it fails. */
+    /**
+     * Sets a payout's status (as Liquifia's processing would), refunding the account when it fails. A successful
+     * payout to one of the mock's own accounts lands there as an inbound transfer, like a real bank transfer.
+     */
     settlePayout(id: string, status: "success" | "failed" | "processing") {
       const payout = state.payouts.find((p) => p.id === id || p.reference === id);
       if (!payout) throw new Error(`No mock payout ${id}`);
       if (status === "failed" && payout.status !== "failed") {
         const kobo = Math.round((payout.amount + payout.fee) * 100);
         balances.set(payout.virtual_account_id, (balances.get(payout.virtual_account_id) ?? 0) + kobo);
+      }
+      const destination = accounts.find((a) => a.account_number === payout.destination_account);
+      if (status === "success" && payout.status !== "success" && destination) {
+        const kobo = Math.round(payout.amount * 100);
+        balances.set(destination.id, (balances.get(destination.id) ?? 0) + kobo);
+        const source = accounts.find((a) => a.id === payout.virtual_account_id);
+        state.inboundTransfers.unshift(
+          inboundTransfer(destination.id, kobo, {
+            payer_name: source?.account_name ?? "LinkPay",
+            payer_bank_name: "Mock Bank",
+            payer_bank_account: source?.account_number ?? null,
+            narration: payout.narration ?? null,
+            reference: payout.reference,
+            created_at: new Date().toISOString(),
+            raw_payload: { narration: payout.narration ?? "" },
+          }),
+        );
       }
       payout.status = status;
     },
@@ -181,6 +202,9 @@ export function startMockLiquifia() {
         };
         state.payouts.push(payout);
         payoutKeys.set(idempotencyKey, payout.id);
+        if (opts.autoSettlePayoutsMs) {
+          setTimeout(() => payout.status === "pending" && state.settlePayout(payout.id, "success"), opts.autoSettlePayoutsMs);
+        }
         return json(payout, 201);
       }
 

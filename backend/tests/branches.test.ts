@@ -263,7 +263,7 @@ describe("accounts", () => {
 
     const one = await t.api("GET", `/api/accounts?branch=${branch.body._id}`, { token });
     expect(one.body).toHaveLength(1);
-    expect(one.body[0].balance).toEqual({ amountKobo: 123456, currency: "NGN" });
+    expect(one.body[0].balance).toEqual({ amountKobo: 123456, currency: "NGN", heldKobo: 0, availableKobo: 123456 });
 
     expect((await t.api("GET", "/api/accounts?branch=bad", { token })).status).toBe(400);
   });
