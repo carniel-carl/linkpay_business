@@ -417,7 +417,7 @@ export function RaisedSummary({ progress, latest, className }: { progress: Donat
             initial={{ width: reduce ? `${shown}%` : "0%" }}
             animate={{ width: `${shown}%` }}
             transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 55, damping: 18, mass: 1.1, delay: 0.15 }}
-            className="relative h-full overflow-hidden rounded-full bg-(--biz-strong)"
+            className="relative h-full overflow-hidden rounded-full bg-(--fund-progress)"
           >
             {!reduce && <span key={latest?._id ?? "first"} aria-hidden className="donation-sheen absolute inset-y-0 -left-1/2 w-1/2" />}
           </motion.div>
@@ -450,7 +450,7 @@ export function FundraiserGallery({ images, title, className }: { images: Summar
   const shown = images[Math.min(index, images.length - 1)]
   return (
     <figure className={cn("flex flex-col gap-2.5", className)}>
-      <div className="relative h-[min(26rem,52vw)] overflow-hidden rounded-[18px] bg-muted lg:h-[min(26rem,44vh)]">
+      <div className="relative h-[min(26rem,52vw)] overflow-hidden rounded-[18px] bg-muted lg:h-[min(24rem,38vh)]">
         {/* A blurred copy fills the frame, so a tall poster or a wide photo both keep their shape. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={shown.src} alt="" aria-hidden className="absolute inset-0 size-full scale-125 object-cover blur-2xl saturate-150" />
@@ -533,16 +533,26 @@ const GIFT_STEPS = ["Amount", "Your details", "Transfer"] as const
 /** Where the donor is: 0 amount, 1 details, 2 transfer, 3 landed. */
 export type GiftStep = 0 | 1 | 2 | 3
 
-/** Three short bars over the giving card. */
+/** Three bars over the giving card, green up to the step the donor is on. */
 export function GiftSteps({ step, className }: { step: GiftStep; className?: string }) {
   return (
     <ol aria-label="Progress" className={cn("grid grid-cols-3 gap-2", className)}>
       {GIFT_STEPS.map((label, i) => {
         const state = i < step ? "done" : i === step ? "current" : "next"
         return (
-          <li key={label} aria-current={state === "current" ? "step" : undefined} className="grid gap-1.5">
-            <span aria-hidden className={cn("h-1 rounded-full transition-colors duration-500", state === "next" ? "bg-border" : "bg-(--biz-strong)")} />
-            <span className={cn("text-xs", state === "current" ? "font-medium text-foreground" : "text-muted-foreground")}>
+          <li key={label} aria-current={state === "current" ? "step" : undefined} className="grid gap-2">
+            <span
+              aria-hidden
+              className={cn("h-1.5 rounded-full transition-colors duration-500", state === "next" ? "bg-border" : "bg-(--fund-progress)")}
+            />
+            <span
+              className={cn(
+                "flex items-center gap-1.5 text-xs",
+                state === "current" ? "font-semibold text-foreground" : state === "done" ? "font-medium text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {state === "done" && <Check className="size-3.5 shrink-0 text-(--fund-progress)" strokeWidth={3} aria-hidden />}
+              {state === "current" && <span aria-hidden className="size-2 shrink-0 rounded-full bg-(--fund-progress) ring-3 ring-[color-mix(in_oklch,var(--fund-progress)_25%,transparent)]" />}
               {label}
               <span className="sr-only">, {state === "done" ? "done" : state === "current" ? "current step" : "to come"}</span>
             </span>
@@ -650,7 +660,7 @@ export function DonateBar({ progress, visible, onDonate }: { progress: DonationP
           </p>
           {goalKobo !== null && (
             <div aria-hidden className="h-1.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-(--biz-strong)" style={{ width: `${shown}%` }} />
+              <div className="h-full rounded-full bg-(--fund-progress)" style={{ width: `${shown}%` }} />
             </div>
           )}
         </div>

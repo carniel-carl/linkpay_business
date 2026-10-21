@@ -446,6 +446,46 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   return `${swift.business.name} (${raised} automatic flags), ${quick.business.name} (flagged and suspended). Owners: swift@linkpay.test, quickcash@linkpay.test / ${DEMO_PASSWORD}.`;
 }
 
+/** A flat illustration of a primary school with half its roof torn off: zinc on the left, bare rafters on the right. */
+function schoolPicture() {
+  const ridges = (x0: number, x1: number, y: number, h: number) =>
+    Array.from({ length: Math.floor((x1 - x0) / 22) }, (_, i) => `<rect x="${x0 + i * 22}" y="${y}" width="9" height="${h}" fill="#7b8794"/>`).join("");
+  const windows = [210, 330, 450, 690, 810, 930].map((x) => `<rect x="${x}" y="470" width="80" height="110" rx="4" fill="#2f4858"/><rect x="${x + 38}" y="470" width="4" height="110" fill="#f2e3c6"/>`).join("");
+  const rafters = Array.from({ length: 9 }, (_, i) => `<line x1="${610 + i * 52}" y1="392" x2="${600 + i * 52}" y2="300" stroke="#6b4426" stroke-width="12"/>`).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900">
+    <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fa8c4"/><stop offset="1" stop-color="#dfe9ee"/></linearGradient></defs>
+    <rect width="1200" height="900" fill="url(#sky)"/>
+    <ellipse cx="260" cy="130" rx="190" ry="60" fill="#9aaab5" opacity="0.7"/><ellipse cx="900" cy="100" rx="240" ry="70" fill="#a8b6bf" opacity="0.6"/>
+    <rect y="700" width="1200" height="200" fill="#b5653a"/><rect y="690" width="1200" height="22" fill="#6f9a4c"/>
+    <ellipse cx="760" cy="800" rx="150" ry="20" fill="#8ab3c9" opacity="0.8"/>
+    <rect x="150" y="390" width="900" height="320" fill="#f2e3c6"/><rect x="150" y="650" width="900" height="60" fill="#c9563c"/>
+    ${windows}
+    <rect x="560" y="520" width="80" height="190" rx="4" fill="#6b4426"/>
+    <polygon points="110,392 600,392 600,290 170,290" fill="#9aa7b3"/>${ridges(175, 600, 296, 92)}
+    <rect x="600" y="384" width="490" height="12" fill="#6b4426"/>${rafters}
+    <polygon points="620,300 700,300 690,330 640,322" fill="#9aa7b3" transform="rotate(-18 660 310)"/>
+    <rect x="380" y="610" width="440" height="34" rx="4" fill="#1e3a5f"/>
+    <text x="600" y="634" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="3">ST. MARY'S PRIMARY SCHOOL</text>
+  </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+/** A flat illustration of roofing sheets and timber stacked in the school yard (portrait). */
+function sheetsPicture() {
+  const sheet = (y: number, colour: string) =>
+    `<rect x="130" y="${y}" width="640" height="30" rx="3" fill="${colour}"/>` +
+    Array.from({ length: 29 }, (_, i) => `<rect x="${140 + i * 22}" y="${y + 3}" width="8" height="24" fill="#00000022"/>`).join("");
+  const stack = Array.from({ length: 12 }, (_, i) => sheet(940 - i * 34, i % 4 === 3 ? "#3f6f9e" : "#a7b1bb")).join("");
+  const planks = Array.from({ length: 6 }, (_, i) => `<rect x="${170 + (i % 2) * 20}" y="${516 - i * 24}" width="560" height="22" rx="3" fill="${i % 2 ? "#a86b3c" : "#c08350"}"/>`).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200">
+    <rect width="900" height="1200" fill="#cfe0ea"/><rect y="760" width="900" height="440" fill="#b5653a"/>
+    <rect x="0" y="300" width="900" height="460" fill="#f2e3c6"/><rect x="0" y="700" width="900" height="60" fill="#c9563c"/>
+    <rect x="110" y="980" width="680" height="40" fill="#6b4426"/>${stack}
+    <rect x="150" y="540" width="600" height="20" fill="#6b4426"/>${planks}
+  </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
 /**
  * A fundraiser (donation link) with a goal, 120 donations over the past three weeks (some anonymous, some
  * with a message) and one open report about a donation's message, for admin/'s queue.
@@ -471,6 +511,10 @@ async function seedDonations(
     phone: "off",
     successMessage: "Thank you for helping the pupils of St. Mary's get back under a roof.",
   });
+  // Two made-up pictures so the page shows what the money is for: the school with half its roof gone
+  // (landscape, the cover) and the stacked roofing sheets waiting to go up (portrait).
+  const pictures = await Promise.all([schoolPicture(), sheetsPicture()].map((png) => png.then((buf) => uploadLinkImage(business._id, userId, buf))));
+  await setLinkImages(link, pictures);
   const first = ["Chinedu", "Amaka", "Tunde", "Bisi", "Musa", "Ngozi", "Femi", "Halima", "Kunle", "Ifeoma", "Yusuf", "Toyin", "Emeka", "Zainab", "Seun", "Chioma"];
   const last = ["Okafor", "Adeyemi", "Bello", "Eze", "Balogun", "Nwosu", "Ibrahim", "Ojo", "Lawal", "Obi"];
   const messages = ["God bless you all", "For the children of Ikorodu", "Proud old pupil, class of 2004", "Keep going!", "Small but from the heart", "Education first", "Sending love from Abuja"];

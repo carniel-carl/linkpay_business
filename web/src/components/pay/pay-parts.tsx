@@ -412,8 +412,8 @@ export function Perforation({ notched }: { notched: boolean }) {
       <div className="absolute inset-x-6 top-1/2 border-t-2 border-dashed border-border sm:inset-x-8" />
       {notched && (
         <>
-          <span className="absolute top-1/2 -left-3.5 size-7 -translate-y-1/2 rounded-full bg-background shadow-[inset_-2px_0_3px_oklch(0.3_0.04_252/0.16)]" />
-          <span className="absolute top-1/2 -right-3.5 size-7 -translate-y-1/2 rounded-full bg-background shadow-[inset_2px_0_3px_oklch(0.3_0.04_252/0.16)]" />
+          <span className="absolute top-1/2 -left-3.5 size-7 -translate-y-1/2 rounded-full bg-[var(--notch,var(--background))] shadow-[inset_-2px_0_3px_oklch(0.3_0.04_252/0.16)]" />
+          <span className="absolute top-1/2 -right-3.5 size-7 -translate-y-1/2 rounded-full bg-[var(--notch,var(--background))] shadow-[inset_2px_0_3px_oklch(0.3_0.04_252/0.16)]" />
         </>
       )}
     </div>

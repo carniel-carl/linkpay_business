@@ -424,7 +424,7 @@ function FundraiserPage({
   // The left column's rows, so the roll and the card span exactly them (the roll joins the column below xl).
   const rows = 4 + (hasPictures ? 1 : 0) + (story ? 1 : 0)
   return (
-    <main style={vars} className="pay-brand min-h-dvh bg-(--fund-ground)">
+    <main style={vars} className="pay-brand min-h-dvh bg-(--fund-ground) [--notch:var(--fund-ground)]">
       <div
         style={{ "--rows-lg": rows, "--rows-xl": rows - 1 } as React.CSSProperties}
         className="mx-auto grid w-full max-w-360 gap-x-10 gap-y-8 px-4 pt-6 pb-28 sm:px-6 sm:pt-10 lg:grid-cols-[minmax(0,1fr)_24rem] lg:px-10 lg:pb-16 xl:grid-cols-[minmax(0,1fr)_20rem_24rem] xl:gap-x-12 xl:pt-0 2xl:grid-cols-[minmax(0,1fr)_22rem_25rem]"
@@ -663,19 +663,27 @@ function PayForm({
   return (
     <form onSubmit={submit} noValidate className="page-enter grid gap-5 px-6 pt-6 pb-7 sm:px-8 sm:pt-8 sm:pb-8 short:gap-3.5 short:pt-6 short:pb-6">
       {donation ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl bg-(--biz-soft) py-3 pr-2 pl-4">
-          <div className="grid">
-            <span className="text-xs text-muted-foreground">Your gift</span>
-            <span className="type-display text-[1.75rem] leading-tight">
-              <Money kobo={amountKobo ?? 0} />
-            </span>
-          </div>
-          {!lockedAmount && (
-            <Button type="button" variant="ghost" size="sm" onClick={() => go("amount")}>
-              Change
-            </Button>
-          )}
-        </div>
+        // The donor's ticket fills in as they type: the amount they chose, their name (or Anonymous) and their words.
+        <Ticket
+          label="Your ticket"
+          name={anonymous ? null : name.trim() || "Your name"}
+          toneKey={(data.donation?.donationsCount ?? 0) + 1}
+          amountKobo={amountKobo ?? 0}
+          message={message.trim() || null}
+          when="Once it lands"
+          action={
+            !lockedAmount && (
+              <button
+                type="button"
+                onClick={() => go("amount")}
+                className="-mr-2 rounded-full px-2.5 py-1 font-sans text-xs font-medium tracking-normal normal-case underline-offset-2 outline-none hover:bg-[color-mix(in_oklch,var(--tone-ink)_12%,transparent)] focus-visible:ring-2 focus-visible:ring-(--tone-ink)"
+              >
+                Change amount
+              </button>
+            )
+          }
+          className="rounded-[6px] transition-colors duration-300"
+        />
       ) : (
         <div className="grid gap-1">
           <h2 className="type-display text-2xl">Your details</h2>
@@ -771,23 +779,7 @@ function PayForm({
           </Field>
         )
       })}
-      {donation && (
-        <>
-          <DonorOptions anonymous={anonymous} message={message} onAnonymous={setAnonymous} onMessage={setMessage} error={errors.message} />
-          <div className="grid gap-2">
-            <p className="text-sm text-muted-foreground">Your ticket on the roll</p>
-            <Ticket
-              label="Your ticket"
-              name={anonymous ? null : name.trim() || "Your name"}
-              toneKey={(data.donation?.donationsCount ?? 0) + 1}
-              amountKobo={amountKobo ?? null}
-              message={message.trim() || null}
-              when="Prints once your transfer lands"
-              className="rounded-[6px] transition-colors duration-300"
-            />
-          </div>
-        </>
-      )}
+      {donation && <DonorOptions anonymous={anonymous} message={message} onAnonymous={setAnonymous} onMessage={setMessage} error={errors.message} />}
       <Button type="submit" size="lg" disabled={busy} className={cn(BIZ_BUTTON, "mt-2")}>
         {busy ? <Spinner /> : <Landmark data-icon="inline-start" aria-hidden />}
         {donation ? `Donate ${amountKobo ? giftAmount(amountKobo) : ""} by bank transfer` : "Pay by bank transfer"}
