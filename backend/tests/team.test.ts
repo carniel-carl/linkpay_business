@@ -191,7 +191,7 @@ describe("permissions and branch scope", () => {
     const overview = await t.api("GET", "/api/business", { token });
     expect(overview.status).toBe(200);
     expect(overview.body.membership).toMatchObject({ role: "finance", branches: null });
-    expect(overview.body.membership.permissions).toEqual(["accounts.view", "transfers.create", "invoices.manage"]);
+    expect(overview.body.membership.permissions).toEqual(["accounts.view", "transfers.create", "invoices.manage", "savings.manage"]);
     expect(overview.body.documents).toEqual([]);
     expect(overview.body.business.people).toEqual([]);
     expect(overview.body.checklist.items).toEqual([]);

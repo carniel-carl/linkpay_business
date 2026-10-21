@@ -1,12 +1,15 @@
 // Demo data for `bun run dev:mock --seed`: a verified business with three branches, balances and a fortnight
 // of incoming payments, all in the in-memory database and the mock Liquifia. Never run against real services.
+import type { Types } from "mongoose";
 import { BusinessModel, type BusinessDocument } from "../src/models/Business";
+import { POCKET_COLORS, PocketModel } from "../src/models/Pocket";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { provisionBusinessAccount } from "../src/services/accounts";
 import { addDays, addPayment, createInvoice, sendInvoice, todayInLagos } from "../src/services/invoices";
+import { closePocket, movePocketMoney } from "../src/services/pockets";
 import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
 import { encrypt } from "../src/utils/crypto";
@@ -109,7 +112,8 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   }
   await syncInboundTransfers();
   const invoices = await seedInvoices(business, owner.id, accounts, liquifia);
-  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  const pockets = await seedPockets(business, owner.id, accounts);
+  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
 }
 
 /** Invoices in every state: paid by hand, part-paid by a matched transfer, overdue, open, draft and void. */
@@ -147,4 +151,33 @@ async function seedInvoices(
 
   await syncInboundTransfers();
   return 6;
+}
+
+/** Savings pockets: one with auto-save and a target, one past its target, plain ones, and a closed one. */
+async function seedPockets(business: BusinessDocument, userId: string, accounts: { _id: Types.ObjectId; branch?: Types.ObjectId | null }[]) {
+  const today = todayInLagos();
+  const make = async (
+    account: (typeof accounts)[number],
+    fields: { name: string; emoji?: string; color?: (typeof POCKET_COLORS)[number]; target?: { amountKobo: number; date?: string }; autoSave?: { percentBps?: number; amountKobo?: number } },
+    deposits: number[],
+  ) => {
+    const pocket = await PocketModel.create({
+      business: business._id,
+      branch: account.branch!,
+      virtualAccount: account._id,
+      createdBy: userId,
+      ...fields,
+      autoSave: fields.autoSave && { ...fields.autoSave, since: new Date() },
+    });
+    for (const amountKobo of deposits) await movePocketMoney({ pocket, kind: "deposit", amountKobo, userId });
+    return pocket;
+  };
+  const [head, ikeja] = [accounts[0]!, accounts[1]!];
+  await make(head, { name: "VAT & tax", emoji: "🧾", color: "amber", target: { amountKobo: 400_000_00, date: addDays(today, 70) }, autoSave: { percentBps: 500 } }, [80_000_00, 45_000_00]);
+  await make(head, { name: "Payroll", emoji: "👥", color: "blue" }, [210_000_00]);
+  await make(head, { name: "New generator", emoji: "⚡", color: "lime", target: { amountKobo: 150_000_00 } }, [100_000_00, 60_000_00]);
+  const old = await make(head, { name: "Eid stock", color: "slate" }, [30_000_00]);
+  await closePocket(old, userId);
+  if (ikeja) await make(ikeja, { name: "Shop rent", emoji: "🏠", color: "violet", target: { amountKobo: 120_000_00, date: addDays(today, 120) } }, [35_000_00]);
+  return ikeja ? 5 : 4;
 }

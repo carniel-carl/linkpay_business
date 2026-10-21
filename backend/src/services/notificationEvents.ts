@@ -126,6 +126,28 @@ export async function paymentReceived(
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Savings
+// ---------------------------------------------------------------------------------------------------------
+
+/** A pocket's balance reached its target: everyone who can see that branch's money. */
+export async function pocketTargetReached(
+  business: BusinessLike,
+  pocket: { _id: Id; name: string; branch: Id; target?: { amountKobo?: number | null } | null },
+) {
+  await notifyUsers(
+    await membersWith(business, "accounts.view", { branch: pocket.branch }),
+    {
+      type: "savings.target_reached",
+      title: "Savings target reached",
+      body: `${pocket.name} has reached its target of ${formatNaira(pocket.target?.amountKobo ?? 0)}.`,
+      link: `/savings?pocket=${pocket._id}`,
+      data: { pocketId: String(pocket._id), branchId: String(pocket.branch) },
+    },
+    business,
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Invoices: the person who created it, plus anyone who manages invoices for that branch.
 // ---------------------------------------------------------------------------------------------------------
 

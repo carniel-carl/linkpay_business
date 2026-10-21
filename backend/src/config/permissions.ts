@@ -9,6 +9,7 @@ export const PERMISSIONS = {
   "transfers.approve": "Approve transfers",
   "transfers.manage": "Set the rules for approving transfers",
   "invoices.manage": "Create and send invoices",
+  "savings.manage": "Move money into and out of savings",
 } as const;
 export type Permission = keyof typeof PERMISSIONS;
 
@@ -24,7 +25,7 @@ const ALL = Object.keys(PERMISSIONS) as Permission[];
 export const ROLE_PERMISSIONS: Record<TeamRole, Permission[]> = {
   owner: ALL,
   admin: ALL,
-  finance: ["accounts.view", "transfers.create", "invoices.manage"],
+  finance: ["accounts.view", "transfers.create", "invoices.manage", "savings.manage"],
   approver: ["accounts.view", "transfers.approve"],
   viewer: ["accounts.view"],
 };

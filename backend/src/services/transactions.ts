@@ -4,6 +4,7 @@ import { VirtualAccountModel } from "../models/VirtualAccount";
 import { liquifia, type LiquifiaInboundTransfer } from "./liquifia/client";
 import { matchInvoicePayments } from "./invoices";
 import { paymentReceived } from "./notificationEvents";
+import { applyAutoSaves } from "./pockets";
 
 const PAGE_SIZE = 100;
 // Safety cap per run. The API's sort order isn't documented, so each run reads every page up to this.
@@ -86,7 +87,7 @@ async function notifyPaymentReceived(providerTransactionId: string, businessId: 
 
 /**
  * Pulls incoming transfers from Liquifia and records any new ones or status changes, then links new
- * payments to the invoices their narration mentions. Safe to run repeatedly.
+ * payments to the invoices their narration mentions and applies savings auto-save rules. Safe to run repeatedly.
  */
 export async function syncInboundTransfers() {
   const counts = await pullInboundTransfers();
@@ -94,7 +95,11 @@ export async function syncInboundTransfers() {
     console.error("Matching payments to invoices failed:", err);
     return { checked: 0, matched: 0 };
   });
-  return { ...counts, invoicesMatched: invoices.matched };
+  const autoSaves = await applyAutoSaves().catch((err) => {
+    console.error("Applying savings auto-saves failed:", err);
+    return { checked: 0, saved: 0 };
+  });
+  return { ...counts, invoicesMatched: invoices.matched, autoSaved: autoSaves.saved };
 }
 
 async function pullInboundTransfers() {

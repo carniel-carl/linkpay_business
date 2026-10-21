@@ -17,6 +17,7 @@ import { HttpError } from "../utils/HttpError";
 import { sendTransferAwaitingApprovalEmail, sendTransferFailedEmail, sendTransferRejectedEmail } from "./email";
 import { liquifia, LiquifiaError, newIdempotencyKey, toKobo, toNaira, type LiquifiaBank } from "./liquifia/client";
 import { transferApprovalRequested, transferSettled, transfersDecided } from "./notificationEvents";
+import { savedByAccount } from "./savings";
 import { canAccessBranch, hasPermission, permissionsFor } from "./team";
 
 // ---------------------------------------------------------------------------------------------------------
@@ -161,20 +162,23 @@ export async function heldByAccount(accountIds: Types.ObjectId[]) {
   return new Map(rows.map((r) => [String(r._id), r.heldKobo]));
 }
 
+/** What can be spent: Liquifia's balance less transfer holds and money set aside in savings. */
 export async function availableBalance(account: { _id: Types.ObjectId; providerAccountId: string }) {
-  const [balance, held] = await Promise.all([
+  const [balance, held, saved] = await Promise.all([
     liquifia.getVirtualAccountBalance(account.providerAccountId),
     heldByAccount([account._id]),
+    savedByAccount([account._id]),
   ]);
   const balanceKobo = Math.round(balance.balance);
   const heldKobo = held.get(String(account._id)) ?? 0;
-  return { balanceKobo, heldKobo, availableKobo: balanceKobo - heldKobo };
+  const savedKobo = saved.get(String(account._id)) ?? 0;
+  return { balanceKobo, heldKobo, savedKobo, availableKobo: balanceKobo - heldKobo - savedKobo };
 }
 
 const LOCK_MS = 15_000;
 
-/** Runs `fn` while holding a short lock on the account, so two transfers can't spend the same money. */
-async function withAccountLock<T>(accountId: Types.ObjectId, fn: () => Promise<T>): Promise<T> {
+/** Runs `fn` while holding a short lock on the account, so two transfers (or savings moves) can't spend the same money. */
+export async function withAccountLock<T>(accountId: Types.ObjectId, fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < 50; attempt++) {
     const now = new Date();
     const locked = await VirtualAccountModel.findOneAndUpdate(
@@ -190,7 +194,7 @@ async function withAccountLock<T>(accountId: Types.ObjectId, fn: () => Promise<T
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new HttpError(409, "Another transfer from this account is in progress. Try again in a moment.", "ACCOUNT_BUSY");
+  throw new HttpError(409, "Another payment from this account is in progress. Try again in a moment.", "ACCOUNT_BUSY");
 }
 
 // ---------------------------------------------------------------------------------------------------------
