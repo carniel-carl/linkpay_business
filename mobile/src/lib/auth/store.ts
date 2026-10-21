@@ -18,6 +18,7 @@ import {
   setUnlocked,
   type SessionEndReason,
 } from "./session";
+import { unregisterPush } from "@/lib/push";
 
 /**
  * booting: reading the keychain. signedOut: auth screens. needsPasscode: signed in on this phone,
@@ -194,6 +195,8 @@ export const useAuth = create<AuthState>((set, get) => ({
     setUnlocked(false);
     const keep = !forget && get().biometricSignIn && (reason === "signedOut" || reason === "expired");
     if (reason === "signedOut" || reason === "tooManyAttempts") {
+      // While the session still works: this phone stops getting this account's pushes.
+      await unregisterPush();
       await endSessionOnServer({ forgetDevice: !keep });
     }
     await forgetSession();

@@ -1,9 +1,11 @@
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, ScrollView, Switch, Text, View } from "react-native";
+import { Alert, AppState, Linking, ScrollView, Switch, Text, View } from "react-native";
 import { ListRow, ListSection } from "@/components/ui/list";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { can, useMemberships, useOverview } from "@/lib/api/banking";
+import { useUnreadCount } from "@/lib/api/notifications";
+import { askForPush, pushStatus, type PushStatus } from "@/lib/push";
 import { useAuth } from "@/lib/auth/store";
 import { capitalized, getBiometry, type Biometry } from "@/lib/security/biometrics";
 import { LOCK_AFTER_BACKGROUND_MS, LOCK_AFTER_IDLE_MS } from "@/lib/security/app-lock";
@@ -88,6 +90,8 @@ export default function More() {
         </ListSection>
       )}
 
+      <NotificationsSection />
+
       <ListSection
         title="Security"
         footer={`LinkPay locks when you've been away for ${LOCK_AFTER_BACKGROUND_MS / 60_000} minute or idle for ${LOCK_AFTER_IDLE_MS / 60_000} minutes.`}
@@ -154,3 +158,52 @@ const APPEARANCES: { value: ThemePreference; title: string; icon: Parameters<typ
   { value: "light", title: "Light", icon: { ios: "sun.max", android: "light_mode" } },
   { value: "dark", title: "Dark", icon: { ios: "moon", android: "dark_mode" } },
 ];
+
+const PUSH_DETAIL: Record<PushStatus, string> = {
+  granted: "On. Payments, transfers, invoices and account changes",
+  undetermined: "Off. Tap to turn on",
+  denied: "Off. Turn them on in your phone's settings",
+  unavailable: "Not in this version of the app yet",
+};
+
+/**
+ * The inbox, and whether this phone gets pushes. Tapping the push row asks (first time) or opens the phone's
+ * settings (after a refusal). The status is checked again on return to the app, since it changes in Settings.
+ */
+function NotificationsSection() {
+  const [status, setStatus] = useState<PushStatus>();
+  const unread = useUnreadCount().data?.total ?? 0;
+  useEffect(() => {
+    let live = true;
+    const check = () => void pushStatus().then((s) => live && setStatus(s));
+    check();
+    const sub = AppState.addEventListener("change", (state) => state === "active" && check());
+    return () => {
+      live = false;
+      sub.remove();
+    };
+  }, []);
+  return (
+    <ListSection title="Notifications">
+      <ListRow
+        icon={{ ios: "bell", android: "notifications" }}
+        title="Notifications"
+        detail={unread ? (unread === 1 ? "1 unread" : `${unread} unread`) : undefined}
+        onPress={() => router.push("/notifications")}
+      />
+      <ListRow
+        icon={{ ios: "app.badge", android: "notifications_active" }}
+        title="Push notifications"
+        detail={status ? PUSH_DETAIL[status] : " "}
+        chevron={status === "undetermined" || status === "denied"}
+        onPress={
+          status === "undetermined"
+            ? () => void askForPush().then(setStatus)
+            : status === "denied"
+              ? () => void Linking.openSettings()
+              : undefined
+        }
+      />
+    </ListSection>
+  );
+}

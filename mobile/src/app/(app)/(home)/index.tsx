@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import Animated, { FadeInLeft, FadeInRight } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,7 +9,7 @@ import { Logo } from "@/components/brand/logo";
 import { BranchDeck } from "@/components/home/branch-deck";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { PaymentRow, PaymentRowSkeleton } from "@/components/payments/payment-row";
-import { TextButton } from "@/components/ui/button";
+import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
 import { FocusStatusBar } from "@/components/ui/status-bar";
@@ -33,6 +33,7 @@ import { useBusinessContext } from "@/lib/business-context";
 import { formatNaira } from "@/lib/format";
 import { usePaymentFilters } from "@/lib/payment-filters";
 import { queryClient } from "@/lib/query";
+import { askForPush, dismissPushPrompt, pushPromptDismissed, pushStatus, type PushStatus } from "@/lib/push";
 import { useSendDraft } from "@/lib/send-draft";
 import { shareAccount } from "@/lib/share";
 import { useTheme } from "@/theme/theme";
@@ -149,6 +150,7 @@ export default function Home() {
               }
             />
             <AwaitingApproval enabled={can(gate.overview, "transfers.approve")} />
+            <PushPrompt />
             {accounts.isError && (
               <View className="mx-5">
                 <FormError message={friendlyMessage(accounts.error)} />
@@ -286,6 +288,53 @@ function MoneyInToday({ card, direction }: { card: BranchCard; direction: number
         </View>
       )}
     </Animated.View>
+  );
+}
+
+/**
+ * Explains pushes before the system prompt, once the business is open (never at launch). Shows only while
+ * the phone hasn't been asked yet; "Not now" is remembered on the phone, and More › Notifications can ask later.
+ */
+function PushPrompt() {
+  const { colors, shadows } = useTheme();
+  const [status, setStatus] = useState<PushStatus>();
+  const [hidden, setHidden] = useState(pushPromptDismissed);
+  useEffect(() => {
+    let live = true;
+    void pushStatus().then((s) => live && setStatus(s));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (hidden || status !== "undetermined") return null;
+  return (
+    <View style={{ boxShadow: shadows.surface }} className="mx-5 gap-3 rounded-surface bg-card p-4">
+      <View className="flex-row items-start gap-3">
+        <View className="h-9 w-9 items-center justify-center rounded-[11px] bg-brand-subtle">
+          <Icon ios="bell" android="notifications" size={18} color={colors.primary} />
+        </View>
+        <View className="flex-1 gap-0.5">
+          <Text className="text-[15px] font-semibold text-foreground">Know when money lands</Text>
+          <Text className="text-[14px] leading-5 text-muted-foreground">
+            Get a notification when a customer pays, a transfer needs you or an invoice is paid.
+          </Text>
+        </View>
+      </View>
+      <View className="flex-row items-center justify-end gap-4">
+        <TextButton
+          tone="muted"
+          onPress={() => {
+            dismissPushPrompt();
+            setHidden(true);
+          }}
+        >
+          Not now
+        </TextButton>
+        <Button size="sm" onPress={() => void askForPush().then(setStatus)}>
+          Turn on
+        </Button>
+      </View>
+    </View>
   );
 }
 

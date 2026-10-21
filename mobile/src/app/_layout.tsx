@@ -8,6 +8,7 @@ import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { LaunchOverlay } from "@/components/brand/launch-overlay";
+import { PushBridge } from "@/components/notifications/push-bridge";
 import { LockScreen } from "@/components/security/lock-screen";
 import { PrivacyCover } from "@/components/security/privacy-cover";
 import { useAuth } from "@/lib/auth/store";
@@ -102,6 +103,7 @@ function Navigator() {
         {status === "locked" && <LockScreen />}
         {covered && <PrivacyCover />}
         <LaunchOverlay />
+        <PushBridge />
       </View>
     </ThemeProvider>
   );
