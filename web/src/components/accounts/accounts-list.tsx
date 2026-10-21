@@ -10,7 +10,7 @@ import type { AccountsResult } from "@/lib/accounts"
 import type { Account, AccountSetupStatus, AccountWithBalance } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { AccountSetupNotice, ProviderDownNotice } from "./account-notices"
-import { availableKobo, HeldNote, heldKobo } from "./balance"
+import { availableKobo, HeldNote, heldKobo, SavedNote, savedKobo } from "./balance"
 import { CopyButton, shareText } from "./copy-button"
 import { useAccounts } from "./use-accounts"
 
@@ -31,6 +31,7 @@ export function AccountsList({ initial, setupStatus, fallback }: Props) {
   // Integer kobo sums; only shown when every balance is known.
   const totalKobo = allKnown ? accounts.reduce((sum, a) => sum + availableKobo(a.balance!), 0) : null
   const totalHeldKobo = allKnown ? accounts.reduce((sum, a) => sum + heldKobo(a.balance!), 0) : 0
+  const totalSavedKobo = allKnown ? accounts.reduce((sum, a) => sum + savedKobo(a.balance!), 0) : 0
 
   return (
     <section className="surface overflow-hidden">
@@ -43,6 +44,7 @@ export function AccountsList({ initial, setupStatus, fallback }: Props) {
             <>
               <p className="type-display text-4xl sm:text-5xl figure">{formatNaira(totalKobo)}</p>
               <HeldNote kobo={totalHeldKobo} className="text-sm" />
+              <SavedNote kobo={totalSavedKobo} className="text-sm" />
             </>
           ) : (
             <p className="type-display text-3xl text-muted-foreground">Balance unavailable</p>
@@ -164,6 +166,7 @@ function AccountBalance({ account }: { account: AccountWithBalance }) {
     <span className="grid justify-items-end gap-0.5">
       <span className="font-medium figure">{formatNaira(availableKobo(account.balance))}</span>
       <HeldNote kobo={heldKobo(account.balance)} short />
+      <SavedNote kobo={savedKobo(account.balance)} short />
     </span>
   )
 }

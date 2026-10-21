@@ -46,6 +46,25 @@ const light = {
   "paper-muted": "#606369",
   "paper-rule": "#dcdee1",
   "paper-tint": "#f6f7f8",
+  // Savings pocket colours (keys from the API): a strong fill for progress and a subtle tile (web: --pocket-*).
+  "pocket-lime": "#92ce14",
+  "pocket-lime-subtle": "#e0f4c9",
+  "pocket-green": "#2e9e52",
+  "pocket-green-subtle": "#d0f7d6",
+  "pocket-teal": "#00a19a",
+  "pocket-teal-subtle": "#bdf9f4",
+  "pocket-blue": "#2f8adc",
+  "pocket-blue-subtle": "#ceefff",
+  "pocket-violet": "#8e71d6",
+  "pocket-violet-subtle": "#ede4ff",
+  "pocket-pink": "#c65b93",
+  "pocket-pink-subtle": "#ffdbf1",
+  "pocket-orange": "#cb6620",
+  "pocket-orange-subtle": "#ffe0c8",
+  "pocket-amber": "#dc9e12",
+  "pocket-amber-subtle": "#ffe8be",
+  "pocket-slate": "#657383",
+  "pocket-slate-subtle": "#ddedff",
 };
 
 export type TokenName = keyof typeof light;
@@ -91,6 +110,25 @@ const dark: Palette = {
   "paper-muted": "#606369",
   "paper-rule": "#dcdee1",
   "paper-tint": "#f6f7f8",
+  // Savings pocket colours (web: --pocket-*, dark).
+  "pocket-lime": "#a0e300",
+  "pocket-lime-subtle": "#475a2e",
+  "pocket-green": "#6fd087",
+  "pocket-green-subtle": "#345d3e",
+  "pocket-teal": "#00d3cb",
+  "pocket-teal-subtle": "#135f5b",
+  "pocket-blue": "#6dbdff",
+  "pocket-blue-subtle": "#335578",
+  "pocket-violet": "#bea4ff",
+  "pocket-violet-subtle": "#554a75",
+  "pocket-pink": "#f990c4",
+  "pocket-pink-subtle": "#704258",
+  "pocket-orange": "#fe9b61",
+  "pocket-orange-subtle": "#71462e",
+  "pocket-amber": "#e6ac3d",
+  "pocket-amber-subtle": "#674e21",
+  "pocket-slate": "#a5bad1",
+  "pocket-slate-subtle": "#465463",
 };
 
 export const palettes = { light, dark } as const;

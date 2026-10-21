@@ -25,6 +25,10 @@ export function hrefFor({ type, data }: NotificationTarget): Href {
     const id = str(data.invoiceId);
     return id ? { pathname: "/invoices/[id]", params: { id } } : "/invoices";
   }
+  if (family === "savings") {
+    const id = str(data.pocketId);
+    return id ? { pathname: "/savings/[id]", params: { id } } : "/savings";
+  }
   if (type === "kyb.changes_requested" || type === "kyb.rejected") return "/onboarding";
   if (type === "team.member_joined") return "/team";
   if (type === "security.new_sign_in") return "/more/devices";

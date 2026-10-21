@@ -3,12 +3,15 @@ import type { ReactNode } from "react";
 import { View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-/** A full navy field for passcode and lock moments, inside the safe area. */
-export function BandScreen({ children, topOffset = 40 }: { children: ReactNode; topOffset?: number }) {
+/**
+ * A full navy field for passcode and lock moments, inside the safe area. `sheet` leaves the bottom edge
+ * to the passcode sheet, which pads for the home indicator itself.
+ */
+export function BandScreen({ children, topOffset = 40, sheet = false }: { children: ReactNode; topOffset?: number; sheet?: boolean }) {
   return (
-    <SafeAreaView edges={["top", "bottom"]} className="flex-1 bg-band">
+    <SafeAreaView edges={sheet ? ["top"] : ["top", "bottom"]} className="flex-1 bg-band">
       <FocusStatusBar style="light" />
-      <View style={{ paddingTop: topOffset, paddingBottom: 8 }} className="flex-1">
+      <View style={{ paddingTop: topOffset, paddingBottom: sheet ? 0 : 8 }} className="flex-1">
         {children}
       </View>
     </SafeAreaView>

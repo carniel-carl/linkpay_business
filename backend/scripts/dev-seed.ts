@@ -2,7 +2,7 @@
 // of incoming payments, all in the in-memory database and the mock Liquifia. Never run against real services.
 import type { Types } from "mongoose";
 import { BusinessModel, type BusinessDocument } from "../src/models/Business";
-import { POCKET_COLORS, PocketModel } from "../src/models/Pocket";
+import { POCKET_COLORS, POCKET_ICONS, PocketModel } from "../src/models/Pocket";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
 import { UserModel } from "../src/models/User";
@@ -158,7 +158,7 @@ async function seedPockets(business: BusinessDocument, userId: string, accounts:
   const today = todayInLagos();
   const make = async (
     account: (typeof accounts)[number],
-    fields: { name: string; emoji?: string; color?: (typeof POCKET_COLORS)[number]; target?: { amountKobo: number; date?: string }; autoSave?: { percentBps?: number; amountKobo?: number } },
+    fields: { name: string; icon?: (typeof POCKET_ICONS)[number]; color?: (typeof POCKET_COLORS)[number]; target?: { amountKobo: number; date?: string }; autoSave?: { percentBps?: number; amountKobo?: number } },
     deposits: number[],
   ) => {
     const pocket = await PocketModel.create({
@@ -173,11 +173,11 @@ async function seedPockets(business: BusinessDocument, userId: string, accounts:
     return pocket;
   };
   const [head, ikeja] = [accounts[0]!, accounts[1]!];
-  await make(head, { name: "VAT & tax", emoji: "🧾", color: "amber", target: { amountKobo: 400_000_00, date: addDays(today, 70) }, autoSave: { percentBps: 500 } }, [80_000_00, 45_000_00]);
-  await make(head, { name: "Payroll", emoji: "👥", color: "blue" }, [210_000_00]);
-  await make(head, { name: "New generator", emoji: "⚡", color: "lime", target: { amountKobo: 150_000_00 } }, [100_000_00, 60_000_00]);
+  await make(head, { name: "VAT & tax", icon: "tax", color: "amber", target: { amountKobo: 400_000_00, date: addDays(today, 70) }, autoSave: { percentBps: 500 } }, [80_000_00, 45_000_00]);
+  await make(head, { name: "Payroll", icon: "payroll", color: "blue" }, [210_000_00]);
+  await make(head, { name: "New generator", icon: "power", color: "lime", target: { amountKobo: 150_000_00 } }, [100_000_00, 60_000_00]);
   const old = await make(head, { name: "Eid stock", color: "slate" }, [30_000_00]);
   await closePocket(old, userId);
-  if (ikeja) await make(ikeja, { name: "Shop rent", emoji: "🏠", color: "violet", target: { amountKobo: 120_000_00, date: addDays(today, 120) } }, [35_000_00]);
+  if (ikeja) await make(ikeja, { name: "Shop rent", icon: "rent", color: "violet", target: { amountKobo: 120_000_00, date: addDays(today, 120) } }, [35_000_00]);
   return ikeja ? 5 : 4;
 }

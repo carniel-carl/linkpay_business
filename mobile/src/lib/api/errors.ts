@@ -71,6 +71,11 @@ const MESSAGES: Record<string, string> = {
   PAYMENT_TOO_LARGE: "That's more than the balance due.",
   TRANSACTION_ALREADY_LINKED: "That payment is already linked to another invoice.",
   INVALID_DATES: "The due date can't be before the issue date.",
+  INSUFFICIENT_POCKET_BALANCE: "There isn't that much in this pocket.",
+  POCKET_NAME_TAKEN: "This branch already has a pocket with that name. Choose another.",
+  POCKET_LIMIT: "This branch already has 20 open pockets. Close one before adding another.",
+  POCKET_CLOSED: "This pocket is closed, so it can't be changed.",
+  POCKET_NOT_FOUND: "We couldn't find that pocket. It may be on a branch you can't see.",
 };
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

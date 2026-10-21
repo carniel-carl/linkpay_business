@@ -10,7 +10,7 @@ import { RecentTransactions } from "@/components/transactions/recent-transaction
 import type { Account, AccountSetupStatus, AccountWithBalance, Transaction } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { AccountSetupNotice, ProviderDownNotice } from "./account-notices"
-import { availableKobo, HeldNote, heldKobo } from "./balance"
+import { availableKobo, HeldNote, heldKobo, SavedNote, savedKobo } from "./balance"
 import { CopyButton, shareText } from "./copy-button"
 import { useAccounts } from "./use-accounts"
 
@@ -87,6 +87,7 @@ function AccountCard({
                 {formatNaira(availableKobo(account.balance))}
               </p>
               <HeldNote kobo={heldKobo(account.balance)} className="text-sm" />
+              <SavedNote kobo={savedKobo(account.balance)} className="text-sm" />
             </>
           ) : (
             <div className="flex flex-wrap items-center gap-3">

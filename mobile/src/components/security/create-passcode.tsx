@@ -8,13 +8,11 @@ export function CreatePasscode({
   subtitle = "You'll use it to open LinkPay Business on this phone.",
   onCreated,
   footer,
-  header,
 }: {
   title?: string;
   subtitle?: string;
   onCreated: (code: string) => Promise<void>;
   footer?: ReactNode;
-  header?: ReactNode;
 }) {
   const [first, setFirst] = useState<string>();
   const [message, setMessage] = useState<string>();
@@ -40,8 +38,6 @@ export function CreatePasscode({
 
   return (
     <PasscodeEntry
-      header={header}
-      key={first ? "confirm" : "create"}
       title={first ? "Enter it again" : title}
       subtitle={first ? "Confirm your new passcode." : subtitle}
       message={message}

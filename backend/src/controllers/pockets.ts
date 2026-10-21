@@ -2,7 +2,7 @@ import type { Request, RequestHandler } from "express";
 import { isValidObjectId, Types } from "mongoose";
 import { z } from "zod";
 import { BranchModel } from "../models/Branch";
-import { POCKET_COLORS, POCKET_STATUSES, PocketModel, PocketMovementModel, type PocketDocument, type PocketMovementDocument } from "../models/Pocket";
+import { POCKET_COLORS, POCKET_ICONS, POCKET_STATUSES, PocketModel, PocketMovementModel, type PocketDocument, type PocketMovementDocument } from "../models/Pocket";
 import { UserModel } from "../models/User";
 import {
   assertNameFree,
@@ -23,12 +23,6 @@ const objectId = z.string().refine(isValidObjectId, "Invalid id");
 // ₦1 to ₦100m per move; the available balance is the real limit.
 const amountKobo = z.number().int().min(100, "The smallest amount is ₦1").max(100_000_000_00);
 const name = z.string().trim().min(1, "Give the pocket a name").max(40);
-// One emoji (or a short sequence of them, like a flag). Anything with letters or digits is refused.
-const emoji = z
-  .string()
-  .trim()
-  .max(16)
-  .refine((v) => /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(v) && !/[\p{L}\p{N}]/u.test(v.replace(/[#*0-9]️?⃣/gu, "")), "Use an emoji");
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 const target = z.object({ amountKobo, date: day.nullable().optional() });
 const autoSave = z.union([
@@ -61,7 +55,7 @@ async function serialize(req: Request, pockets: PocketDocument[]) {
     return {
       _id: p.id as string,
       name: p.name,
-      emoji: p.emoji ?? null,
+      icon: p.icon ?? null,
       color: p.color,
       status: p.status,
       branch: b ? { _id: b.id, name: b.name, isHeadOffice: b.isHeadOffice } : null,
@@ -144,7 +138,7 @@ export const createPocket: RequestHandler = async (req, res) => {
     .object({
       branch: objectId,
       name,
-      emoji: emoji.optional(),
+      icon: z.enum(POCKET_ICONS).optional(),
       color: z.enum(POCKET_COLORS).optional(),
       target: target.optional(),
       autoSave: autoSave.optional(),
@@ -160,7 +154,7 @@ export const createPocket: RequestHandler = async (req, res) => {
     branch: branch._id,
     virtualAccount: account._id,
     name: body.name,
-    emoji: body.emoji,
+    icon: body.icon,
     color: body.color,
     target: body.target ? { amountKobo: body.target.amountKobo, date: body.target.date ?? undefined } : undefined,
     autoSave: body.autoSave ? { ...body.autoSave, since: new Date() } : undefined,
@@ -170,12 +164,12 @@ export const createPocket: RequestHandler = async (req, res) => {
   res.status(201).json((await serialize(req, [pocket]))[0]);
 };
 
-/** Edits the name, look, target or auto-save rule. `null` removes the target, emoji or rule. */
+/** Edits the name, look, target or auto-save rule. `null` removes the target, icon or rule. */
 export const updatePocket: RequestHandler<IdParams> = async (req, res) => {
   const body = z
     .object({
       name: name.optional(),
-      emoji: emoji.nullable().optional(),
+      icon: z.enum(POCKET_ICONS).nullable().optional(),
       color: z.enum(POCKET_COLORS).optional(),
       target: target.nullable().optional(),
       autoSave: autoSave.nullable().optional(),
@@ -189,7 +183,7 @@ export const updatePocket: RequestHandler<IdParams> = async (req, res) => {
     await assertNameFree(pocket.branch, body.name, pocket._id);
     pocket.name = body.name;
   }
-  if (body.emoji !== undefined) pocket.set("emoji", body.emoji ?? undefined);
+  if (body.icon !== undefined) pocket.set("icon", body.icon ?? undefined);
   if (body.color) pocket.color = body.color;
   if (body.target !== undefined) {
     if (body.target === null) pocket.set("target", undefined);

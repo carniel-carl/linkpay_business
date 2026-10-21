@@ -2,6 +2,11 @@ import { Schema, Types, model, type HydratedDocument, type InferSchemaType } fro
 
 /** Colours the apps can show a pocket in. The apps map each key to their own palette. */
 export const POCKET_COLORS = ["lime", "green", "teal", "blue", "violet", "pink", "orange", "amber", "slate"] as const;
+/** Icons the apps can show on a pocket's tile. Each app maps a key to its own icon set; no icon shows a savings glyph. */
+export const POCKET_ICONS = [
+  "savings", "tax", "payroll", "rent", "shop", "stock", "delivery", "power", "repairs", "equipment",
+  "vehicle", "travel", "marketing", "growth", "emergency", "loan", "training", "health", "events", "goal",
+] as const;
 export const POCKET_STATUSES = ["active", "closed"] as const;
 
 // A named pot of money inside a branch's account ("Tax", "Payroll"). Nothing moves at the bank: the money
@@ -13,7 +18,7 @@ const pocketSchema = new Schema(
     branch: { type: Types.ObjectId, ref: "Branch", required: true },
     virtualAccount: { type: Types.ObjectId, ref: "VirtualAccount", required: true },
     name: { type: String, required: true, trim: true },
-    emoji: { type: String },
+    icon: { type: String, enum: POCKET_ICONS },
     color: { type: String, enum: POCKET_COLORS, default: "lime" },
     // Integer kobo, never negative.
     balanceKobo: { type: Number, required: true, default: 0, min: 0 },

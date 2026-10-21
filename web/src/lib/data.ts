@@ -16,6 +16,8 @@ import type {
   InvoiceSummary,
   MembershipSummary,
   Overview,
+  Pocket,
+  PocketList,
   RolesResponse,
   TeamMember,
   TransactionList,
@@ -173,3 +175,13 @@ export const getInvoiceDefaults = () => load<InvoiceDefaults>("/api/invoices/def
 
 /** How the business's invoices look (logo, accent colour, defaults). */
 export const getBranding = cache(() => load<Branding>("/api/branding"))
+
+/** GET /api/pockets for a branch (or every branch the member sees). Needs `accounts.view`. */
+export const getPockets = (status: "active" | "closed", branchId?: string) => {
+  const params = new URLSearchParams({ status })
+  if (branchId) params.set("branch", branchId)
+  return load<PocketList>(`/api/pockets?${params}`)
+}
+
+/** One pocket, for links to a pocket that isn't in the list on screen (a closed one, or another branch's). */
+export const getPocket = (id: string) => load<Pocket>(`/api/pockets/${encodeURIComponent(id)}`)

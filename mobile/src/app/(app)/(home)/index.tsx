@@ -140,6 +140,7 @@ export default function Home() {
                 void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 void shareAccount(details);
               }}
+              onSavings={(c) => router.push({ pathname: "/savings", params: { branch: c.branch._id } })}
               onSend={
                 can(gate.overview, "transfers.create")
                   ? (c) => {

@@ -71,6 +71,13 @@ const MESSAGES: Record<string, string> = {
   ACCOUNT_BUSY: "Another transfer from this account is going through. Try again in a moment.",
   RECIPIENT_BANK_UNKNOWN: "We can't send to this account's bank automatically yet. Contact support.",
   INVALID_ROWS: "Some rows need fixing before anything is sent.",
+  // Savings pockets
+  INSUFFICIENT_POCKET_BALANCE: "There isn't that much in this pocket.",
+  POCKET_NAME_TAKEN: "This branch already has a pocket with that name. Choose another.",
+  POCKET_LIMIT: "This branch already has 20 open pockets. Close one before adding another.",
+  POCKET_CLOSED: "This pocket is closed, so it can't be changed.",
+  POCKET_NOT_FOUND: "We couldn't find that pocket. It may be on a branch you can't see.",
+  INVALID_DATES: "Choose a date in the future.",
 }
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

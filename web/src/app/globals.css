@@ -142,6 +142,26 @@
   --sidebar-accent-foreground: oklch(0.24 0.04 252);
   --sidebar-border: oklch(0.89 0.01 250);
   --sidebar-ring: oklch(0.45 0.08 252);
+
+  /* Savings pocket colours (keys from the API): a strong fill for progress and a subtle tile. */
+  --pocket-lime: oklch(0.78 0.2 128);
+  --pocket-lime-subtle: oklch(0.94 0.06 128);
+  --pocket-green: oklch(0.62 0.15 150);
+  --pocket-green-subtle: oklch(0.94 0.06 150);
+  --pocket-teal: oklch(0.62 0.15 190);
+  --pocket-teal-subtle: oklch(0.94 0.06 190);
+  --pocket-blue: oklch(0.62 0.15 250);
+  --pocket-blue-subtle: oklch(0.94 0.06 250);
+  --pocket-violet: oklch(0.62 0.15 295);
+  --pocket-violet-subtle: oklch(0.94 0.06 295);
+  --pocket-pink: oklch(0.62 0.15 350);
+  --pocket-pink-subtle: oklch(0.94 0.06 350);
+  --pocket-orange: oklch(0.62 0.15 50);
+  --pocket-orange-subtle: oklch(0.94 0.06 50);
+  --pocket-amber: oklch(0.74 0.15 80);
+  --pocket-amber-subtle: oklch(0.94 0.06 80);
+  --pocket-slate: oklch(0.55 0.03 250);
+  --pocket-slate-subtle: oklch(0.94 0.03 250);
 }
 
 .dark {
@@ -197,6 +217,26 @@
   --sidebar-accent-foreground: oklch(0.98 0.005 250);
   --sidebar-border: oklch(0.32 0.04 250);
   --sidebar-ring: oklch(0.841 0.238 128.85);
+
+  /* Savings pocket colours */
+  --pocket-lime: oklch(0.84 0.22 128);
+  --pocket-lime-subtle: oklch(0.44 0.07 128);
+  --pocket-green: oklch(0.78 0.14 150);
+  --pocket-green-subtle: oklch(0.44 0.07 150);
+  --pocket-teal: oklch(0.78 0.14 190);
+  --pocket-teal-subtle: oklch(0.44 0.07 190);
+  --pocket-blue: oklch(0.78 0.14 250);
+  --pocket-blue-subtle: oklch(0.44 0.07 250);
+  --pocket-violet: oklch(0.78 0.14 295);
+  --pocket-violet-subtle: oklch(0.44 0.07 295);
+  --pocket-pink: oklch(0.78 0.14 350);
+  --pocket-pink-subtle: oklch(0.44 0.07 350);
+  --pocket-orange: oklch(0.78 0.14 50);
+  --pocket-orange-subtle: oklch(0.44 0.07 50);
+  --pocket-amber: oklch(0.78 0.14 80);
+  --pocket-amber-subtle: oklch(0.44 0.07 80);
+  --pocket-slate: oklch(0.78 0.04 250);
+  --pocket-slate-subtle: oklch(0.44 0.03 250);
 }
 
 @layer base {

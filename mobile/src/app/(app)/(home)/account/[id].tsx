@@ -7,7 +7,7 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display, Figure } from "@/components/ui/typography";
 import { useAccounts } from "@/lib/api/banking";
 import { HIDDEN_AMOUNT, useBalanceVisibility } from "@/lib/balance-visibility";
-import { formatAccountNumber, nairaParts } from "@/lib/format";
+import { formatAccountNumber, formatNaira, nairaParts } from "@/lib/format";
 import { usePaymentFilters } from "@/lib/payment-filters";
 import { shareAccount } from "@/lib/share";
 
@@ -61,6 +61,9 @@ export default function AccountDetails() {
         ) : (
           <Text className="text-[15px] text-muted-foreground">Unavailable right now</Text>
         )}
+        {!!account.balance?.savedKobo && !hidden && (
+          <Text className="text-[13px] text-muted-foreground">{formatNaira(account.balance.savedKobo)} set aside in savings</Text>
+        )}
       </View>
 
       <DetailList>
@@ -84,6 +87,12 @@ export default function AccountDetails() {
           }}
         >
           View payments
+        </Button>
+        <Button
+          variant="outline"
+          onPress={() => router.push({ pathname: "/savings", params: { branch: account.branch._id } })}
+        >
+          Savings
         </Button>
       </View>
     </ScrollView>

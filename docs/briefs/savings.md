@@ -54,15 +54,15 @@ Approved business, `X-Business-Id` as usual. Reads need `accounts.view`; every w
 | Method and path | Body / query | Response |
 | --- | --- | --- |
 | `GET /` | `?branch=<id>&status=active\|closed\|all` (default `active`) | `{ items: Pocket[], savedKobo, currency }`. Open pockets first, then oldest first. `savedKobo` sums the open pockets in the list |
-| `POST /` | `{ branch, name, emoji?, color?, target?: { amountKobo, date? }, autoSave?: { percentBps } \| { amountKobo } }` | `201` Pocket |
+| `POST /` | `{ branch, name, icon?, color?, target?: { amountKobo, date? }, autoSave?: { percentBps } \| { amountKobo } }` | `201` Pocket |
 | `GET /:id` | | Pocket |
-| `PATCH /:id` | `{ name?, emoji?, color?, target?, autoSave? }`. `null` removes the emoji, target or auto-save | Pocket. Open pockets only |
+| `PATCH /:id` | `{ name?, icon?, color?, target?, autoSave? }`. `null` removes the icon, target or auto-save | Pocket. Open pockets only |
 | `POST /:id/deposit` | `{ amountKobo, note? }`, optional `Idempotency-Key` header | `201 { pocket, movement }` (`200` on a replay of the same key) |
 | `POST /:id/withdraw` | `{ amountKobo, note? }`, optional `Idempotency-Key` header | `201 { pocket, movement }` (`200` on a replay) |
 | `POST /:id/close` | | Pocket (`status: "closed"`, `balanceKobo: 0`) |
 | `GET /:id/activity` | `?before=<movement id>&take=1..100` (default 20) | `{ items: Movement[], nextBefore: id \| null }`, newest first. Next page: `before=nextBefore` |
 
-Validation: `name` 1–40 characters. `emoji` is one emoji (letters are refused). `color` is one of `lime green teal blue violet pink orange amber slate` (default `lime`). Each app maps these keys to its own palette. Amounts are ₦1 to ₦100m (`100`..`10_000_000_000` kobo). `percentBps` is 100–10000 (1%–100%). Send either `percentBps` or `amountKobo` for auto-save, not both. A target date must be in the future, but an unchanged past date can be kept on edit. `note` is up to 100 characters. The `Idempotency-Key` format is 8–100 characters of `[A-Za-z0-9_-]`, the same as transfers.
+Validation: `name` 1–40 characters. `icon` is one of `savings tax payroll rent shop stock delivery power repairs equipment vehicle travel marketing growth emergency loan training health events goal` (no icon shows `savings`). Each app maps these keys to its own icon set (Lucide on web, SF Symbols / Material Symbols on mobile). `color` is one of `lime green teal blue violet pink orange amber slate` (default `lime`). Each app maps these keys to its own palette. Amounts are ₦1 to ₦100m (`100`..`10_000_000_000` kobo). `percentBps` is 100–10000 (1%–100%). Send either `percentBps` or `amountKobo` for auto-save, not both. A target date must be in the future, but an unchanged past date can be kept on edit. `note` is up to 100 characters. The `Idempotency-Key` format is 8–100 characters of `[A-Za-z0-9_-]`, the same as transfers.
 
 ### Pocket
 
@@ -70,7 +70,7 @@ Validation: `name` 1–40 characters. `emoji` is one emoji (letters are refused)
 {
   _id: string;
   name: string;
-  emoji: string | null;
+  icon: PocketIcon | null;
   color: "lime" | "green" | "teal" | "blue" | "violet" | "pink" | "orange" | "amber" | "slate";
   status: "active" | "closed";
   branch: { _id: string; name: string; isHeadOffice: boolean } | null;
@@ -139,9 +139,9 @@ New type `savings.target_reached` (push: yes; Android channel `account`, since `
 
 ## 5. Suggested screens (not prescriptive; follow each app's DESIGN.md)
 
-- **Savings page / tab**: total saved (sum `savedKobo` from the list, or per branch from `/api/accounts`), pocket cards (emoji, colour, name, balance, progress bar when there's a target, "Auto-saving 5%" tag), "New pocket". Respect the branch switcher (`?branch=`). An empty state explains what pockets are for.
+- **Savings page / tab**: total saved (sum `savedKobo` from the list, or per branch from `/api/accounts`), pocket cards (icon, colour, name, balance, progress bar when there's a target, "Auto-saving 5%" tag), "New pocket". Respect the branch switcher (`?branch=`). An empty state explains what pockets are for.
 - **Pocket detail**: balance, target progress with date, auto-save rule, Add money / Withdraw (amount sheet showing the branch's available balance or the pocket balance as the limit), activity list (paged), Edit, Close (confirm: "₦X goes back to <branch>'s available balance").
-- **Create / edit**: name, emoji picker, colour swatches, branch (pocket's branch can't change after creation), optional target (amount and date), optional auto-save (percent or fixed amount per payment).
+- **Create / edit**: name, icon picker, colour swatches, branch (pocket's branch can't change after creation), optional target (amount and date), optional auto-save (percent or fixed amount per payment).
 - Hide every write when `canManage` is false (or the member lacks `savings.manage`).
 - Mobile: confirm Add money / Withdraw without the passcode. No money leaves the account, so it's like moving between your own pots. Close could ask for it. Your call.
 

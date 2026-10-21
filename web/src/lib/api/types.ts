@@ -60,9 +60,10 @@ export type Account = {
 
 /**
  * `amountKobo` is the bank balance. `heldKobo` is held by transfers waiting for approval (or for the bank),
- * and `availableKobo` is what can be sent. The last two are absent from older backends.
+ * `savedKobo` is set aside in savings pockets, and `availableKobo` is what can be sent
+ * (bank balance minus held and saved). The last three are absent from older backends.
  */
-export type Balance = { amountKobo: number; currency: "NGN"; heldKobo?: number; availableKobo?: number }
+export type Balance = { amountKobo: number; currency: "NGN"; heldKobo?: number; savedKobo?: number; availableKobo?: number }
 
 /** GET /api/accounts. `balance: null` means the balance is temporarily unavailable. */
 export type AccountWithBalance = Account & { balance: Balance | null }
@@ -174,6 +175,7 @@ export type Permission =
   | "transfers.approve"
   | "transfers.manage"
   | "invoices.manage"
+  | "savings.manage"
 
 /** Fixed roles today; custom roles may come later, so treat unknown names gracefully. */
 export type TeamRole = "owner" | "admin" | "finance" | "approver" | "viewer" | (string & {})
@@ -559,6 +561,7 @@ export type NotificationType =
   | "team.role_changed"
   | "team.removed"
   | "security.new_sign_in"
+  | "savings.target_reached"
 
 /** One notification, across all the user's businesses. `link` is a path in this app. */
 export type AppNotification = {
@@ -579,3 +582,66 @@ export type NotificationPage = { items: AppNotification[]; nextBefore: string | 
 
 /** GET /api/notifications/unread-count */
 export type UnreadCount = { total: number; byBusiness: Record<string, number> }
+
+// ---------------------------------------------------------------------------------------------------------
+// Savings pockets (/api/pockets). Contract: docs/briefs/savings.md.
+
+export type PocketColor = "lime" | "green" | "teal" | "blue" | "violet" | "pink" | "orange" | "amber" | "slate"
+
+/** Icon keys the API accepts. `POCKET_ICONS` in lib/savings maps each to a Lucide icon. */
+export type PocketIcon =
+  | "savings" | "tax" | "payroll" | "rent" | "shop" | "stock" | "delivery" | "power" | "repairs" | "equipment"
+  | "vehicle" | "travel" | "marketing" | "growth" | "emergency" | "loan" | "training" | "health" | "events" | "goal"
+
+export type PocketTarget = {
+  amountKobo: number
+  /** YYYY-MM-DD (Lagos). */
+  date: string | null
+  /** When the balance first reached the amount; null again if it drops below. */
+  reachedAt: string | null
+  /** 0..10000, capped at 10000. */
+  progressBps: number
+  remainingKobo: number
+}
+
+export type PocketAutoSave =
+  | { percentBps: number; amountKobo: null; since: string }
+  | { percentBps: null; amountKobo: number; since: string }
+
+/** Money set aside inside one branch's account. */
+export type Pocket = {
+  _id: string
+  name: string
+  /** null shows the savings icon. */
+  icon: PocketIcon | null
+  color: PocketColor
+  status: "active" | "closed"
+  branch: BranchRef | null
+  balanceKobo: number
+  currency: "NGN"
+  target: PocketTarget | null
+  autoSave: PocketAutoSave | null
+  createdBy: { _id: string; name: string } | null
+  createdAt: string
+  closedAt: string | null
+  /** The member has savings.manage and the pocket is open. */
+  canManage: boolean
+}
+
+/** GET /api/pockets. `savedKobo` sums the open pockets in the list. */
+export type PocketList = { items: Pocket[]; savedKobo: number; currency: "NGN" }
+
+export type PocketMovement = {
+  _id: string
+  kind: "deposit" | "withdrawal" | "auto_save" | "close"
+  direction: "in" | "out"
+  amountKobo: number
+  balanceAfterKobo: number
+  note: string | null
+  /** auto_save: the incoming payment it came from. */
+  transaction: string | null
+  createdBy: { _id: string; name: string } | null
+  createdAt: string
+}
+
+export type PocketActivity = { items: PocketMovement[]; nextBefore: string | null }

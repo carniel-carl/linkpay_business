@@ -11,6 +11,7 @@ import {
   Hourglass,
   KeyRound,
   Landmark,
+  PiggyBank,
   ReceiptText,
   ShieldX,
   TriangleAlert,
@@ -43,6 +44,7 @@ export const NOTIFICATION_META: Record<NotificationType, { icon: LucideIcon; ton
   "team.role_changed": { icon: UserCog, tone: "default" },
   "team.removed": { icon: UserMinus, tone: "danger" },
   "security.new_sign_in": { icon: KeyRound, tone: "warning" },
+  "savings.target_reached": { icon: PiggyBank, tone: "success" },
 }
 
 export const TONE_CLASSES: Record<NotificationTone, string> = {

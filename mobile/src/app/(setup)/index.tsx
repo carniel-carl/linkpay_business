@@ -1,6 +1,5 @@
 import { router } from "expo-router";
-import { Alert, View } from "react-native";
-import { LogoTile } from "@/components/brand/logo";
+import { Alert } from "react-native";
 import { BandScreen } from "@/components/security/band-screen";
 import { CreatePasscode } from "@/components/security/create-passcode";
 import { TextButton } from "@/components/ui/button";
@@ -19,13 +18,8 @@ export default function SetPasscode() {
   }
 
   return (
-    <BandScreen>
+    <BandScreen sheet topOffset={16}>
       <CreatePasscode
-        header={
-          <View className="mb-4">
-            <LogoTile size={52} />
-          </View>
-        }
         onCreated={created}
         footer={
           <TextButton

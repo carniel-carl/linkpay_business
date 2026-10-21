@@ -38,7 +38,7 @@ export function ConfirmPasscode({ title, subtitle, onConfirmed, onCancel }: { ti
     <Modal visible animationType="fade" onRequestClose={onCancel} statusBarTranslucent navigationBarTranslucent>
       <View className="flex-1 bg-band">
       <StatusBar style="light" />
-      <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, paddingTop: 40, paddingBottom: 8 }}>
+      <SafeAreaView edges={["top"]} style={{ flex: 1, paddingTop: 16 }}>
         <PasscodeEntry
           title={title}
           subtitle={subtitle}

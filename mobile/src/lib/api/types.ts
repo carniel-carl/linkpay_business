@@ -110,7 +110,8 @@ export type Permission =
   | "transfers.create"
   | "transfers.approve"
   | "transfers.manage"
-  | "invoices.manage";
+  | "invoices.manage"
+  | "savings.manage";
 
 /** `branches: null` means every branch. Decide from `permissions`, never from the role name. */
 export type Membership = { _id: string; role: string; permissions: Permission[]; branches: string[] | null };
@@ -143,8 +144,11 @@ export type Account = {
   accountName?: string;
   bankName?: string;
   currency: "NGN";
-  /** `availableKobo` (balance minus money held for pending transfers) arrives with Transfers; use it when present. */
-  balance: { amountKobo: number; currency: "NGN"; heldKobo?: number; availableKobo?: number } | null;
+  /**
+   * `availableKobo` is what can be sent: the bank balance minus money held for pending transfers and money set
+   * aside in savings (`savedKobo`). Use it when present.
+   */
+  balance: { amountKobo: number; currency: "NGN"; heldKobo?: number; savedKobo?: number; availableKobo?: number } | null;
 };
 
 // ---- Transactions ----
@@ -445,3 +449,61 @@ export type AppNotification = {
 
 export type NotificationList = { items: AppNotification[]; nextBefore: string | null };
 export type UnreadCount = { total: number; byBusiness: Record<string, number> };
+
+// ---- Savings (docs/briefs/savings.md) ----
+
+export type PocketColor = "lime" | "green" | "teal" | "blue" | "violet" | "pink" | "orange" | "amber" | "slate";
+
+/** Icon keys the API accepts. `POCKET_ICONS` in lib/savings maps each to SF Symbols and Material Symbols. */
+export type PocketIcon =
+  | "savings" | "tax" | "payroll" | "rent" | "shop" | "stock" | "delivery" | "power" | "repairs" | "equipment"
+  | "vehicle" | "travel" | "marketing" | "growth" | "emergency" | "loan" | "training" | "health" | "events" | "goal";
+
+export type PocketAutoSave =
+  | { percentBps: number; amountKobo: null; since: string }
+  | { percentBps: null; amountKobo: number; since: string };
+
+/** A named pot inside one branch's account. The money never leaves the account; it's taken out of `availableKobo`. */
+export type Pocket = {
+  _id: string;
+  name: string;
+  /** null shows the savings icon. */
+  icon: PocketIcon | null;
+  color: PocketColor;
+  status: "active" | "closed";
+  branch: BranchRef | null;
+  balanceKobo: number;
+  currency: "NGN";
+  target: {
+    amountKobo: number;
+    /** YYYY-MM-DD */
+    date: string | null;
+    reachedAt: string | null;
+    /** 0..10000, capped. */
+    progressBps: number;
+    remainingKobo: number;
+  } | null;
+  autoSave: PocketAutoSave | null;
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+  closedAt: string | null;
+  /** The member has savings.manage and the pocket is open. */
+  canManage: boolean;
+};
+
+export type PocketList = { items: Pocket[]; savedKobo: number; currency: "NGN" };
+
+export type PocketMovement = {
+  _id: string;
+  kind: "deposit" | "withdrawal" | "auto_save" | "close";
+  direction: "in" | "out";
+  amountKobo: number;
+  balanceAfterKobo: number;
+  note: string | null;
+  /** auto_save: the incoming payment. */
+  transaction: string | null;
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+};
+
+export type PocketActivity = { items: PocketMovement[]; nextBefore: string | null };

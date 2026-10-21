@@ -76,6 +76,14 @@ export default function More() {
           {business.status === "approved" && (
             <ListRow icon={{ ios: "storefront", android: "storefront" }} title="Branches" onPress={() => router.push("/more/branches")} />
           )}
+          {business.status === "approved" && can(overview.data, "accounts.view") && (
+            <ListRow
+              icon={{ ios: "banknote", android: "savings" }}
+              title="Savings"
+              detail="Pockets for VAT, payroll, rent and more"
+              onPress={() => router.push("/savings")}
+            />
+          )}
           {business.status === "approved" && can(overview.data, "invoices.manage") && (
             <ListRow
               icon={{ ios: "paintpalette", android: "palette" }}

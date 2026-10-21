@@ -26,7 +26,7 @@ export default function ChangePasscode() {
   }
 
   return (
-    <BandScreen topOffset={56}>
+    <BandScreen sheet topOffset={44}>
       {verified ? (
         <CreatePasscode
           title="Choose a new passcode"

@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { BalanceToggle } from "@/components/ui/balance-toggle";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { Figure } from "@/components/ui/typography";
 import type { BranchCard } from "@/lib/api/banking";
 import { HIDDEN_AMOUNT, useBalanceVisibility } from "@/lib/balance-visibility";
@@ -27,6 +28,7 @@ export function BranchDeck({
   onOpen,
   onShare,
   onSend,
+  onSavings,
 }: {
   cards: BranchCard[];
   active: number;
@@ -36,6 +38,8 @@ export function BranchDeck({
   onShare: (card: BranchCard) => void;
   /** Only for members who can send money. */
   onSend?: (card: BranchCard) => void;
+  /** Opens the branch's savings; shown on cards with money in pockets. */
+  onSavings: (card: BranchCard) => void;
 }) {
   const { width } = useWindowDimensions();
   const single = cards.length === 1;
@@ -76,6 +80,7 @@ export function BranchDeck({
             onOpen={() => onOpen(card)}
             onShare={() => onShare(card)}
             onSend={onSend && card.account ? () => onSend(card) : undefined}
+            onSavings={() => onSavings(card)}
           />
         ))}
       </ScrollView>
@@ -93,6 +98,7 @@ function Card({
   onOpen,
   onShare,
   onSend,
+  onSavings,
 }: {
   card: BranchCard;
   width: number;
@@ -102,14 +108,16 @@ function Card({
   onOpen: () => void;
   onShare: () => void;
   onSend?: () => void;
+  onSavings: () => void;
 }) {
-  const { shadows } = useTheme();
+  const { colors, shadows } = useTheme();
   const { branch, account } = card;
   const number = account?.accountNumber ?? branch.account?.accountNumber;
   const balance = account?.balance;
   const available = balance ? (balance.availableKobo ?? balance.amountKobo) : undefined;
   const parts = available !== undefined ? nairaParts(available) : undefined;
   const held = balance?.heldKobo ?? 0;
+  const saved = balance?.savedKobo ?? 0;
   const hidden = useBalanceVisibility((s) => s.hidden);
 
   return (
@@ -164,6 +172,18 @@ function Card({
             )}
           </View>
           {held > 0 && !hidden && <Text className="text-[13px] text-muted-foreground">{formatNaira(held)} held for transfers</Text>}
+          {saved > 0 && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={hidden ? "Money in savings, hidden. Open savings" : `${formatNaira(saved)} in savings. Open savings`}
+              hitSlop={8}
+              onPress={onSavings}
+              className="flex-row items-center gap-1 self-start active:opacity-60"
+            >
+              <Text className="text-[13px] font-medium text-primary">{hidden ? "Money in savings" : `${formatNaira(saved)} in savings`}</Text>
+              <Icon ios="chevron.right" android="chevron_right" size={12} color={colors.primary} />
+            </Pressable>
+          )}
           <View className="mt-[18px] flex-row items-center justify-between gap-3 border-t border-border pt-3.5">
             <View className="shrink">
               <Text className="text-[12px] text-muted-foreground">Account number</Text>

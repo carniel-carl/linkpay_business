@@ -64,11 +64,11 @@ const available = async (token: string, branch: string) =>
 describe("pockets", () => {
   test("create, set money aside, and the available balance drops by it", async () => {
     const { owner, headOfficeId, create } = await setup();
-    const res = await create({ name: "Tax", emoji: "🧾", color: "amber", target: { amountKobo: 200_000_00, date: "2099-12-31" } });
+    const res = await create({ name: "Tax", icon: "tax", color: "amber", target: { amountKobo: 200_000_00, date: "2099-12-31" } });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       name: "Tax",
-      emoji: "🧾",
+      icon: "tax",
       color: "amber",
       status: "active",
       balanceKobo: 0,
@@ -157,22 +157,22 @@ describe("pockets", () => {
     expect((await t.api("GET", "/api/pockets?status=all", { token: owner.token })).body.items).toHaveLength(2);
   });
 
-  test("editing: rename, target, emoji and auto-save; bad input is refused", async () => {
+  test("editing: rename, target, icon and auto-save; bad input is refused", async () => {
     const { owner, create } = await setup();
     const pocket = (await create({ name: "Stock", autoSave: { percentBps: 1000 } })).body;
     expect(pocket.autoSave).toMatchObject({ percentBps: 1000, amountKobo: null });
 
     const edit = await t.api("PATCH", `/api/pockets/${pocket._id}`, {
       token: owner.token,
-      body: { name: "New stock", emoji: null, target: { amountKobo: 1_000_00 }, autoSave: { amountKobo: 5_000_00 } },
+      body: { name: "New stock", icon: null, target: { amountKobo: 1_000_00 }, autoSave: { amountKobo: 5_000_00 } },
     });
     expect(edit.status).toBe(200);
-    expect(edit.body).toMatchObject({ name: "New stock", emoji: null, target: { amountKobo: 1_000_00, date: null }, autoSave: { percentBps: null, amountKobo: 5_000_00 } });
+    expect(edit.body).toMatchObject({ name: "New stock", icon: null, target: { amountKobo: 1_000_00, date: null }, autoSave: { percentBps: null, amountKobo: 5_000_00 } });
 
     const off = await t.api("PATCH", `/api/pockets/${pocket._id}`, { token: owner.token, body: { target: null, autoSave: null } });
     expect(off.body).toMatchObject({ target: null, autoSave: null });
 
-    expect((await t.api("PATCH", `/api/pockets/${pocket._id}`, { token: owner.token, body: { emoji: "abc" } })).status).toBe(400);
+    expect((await t.api("PATCH", `/api/pockets/${pocket._id}`, { token: owner.token, body: { icon: "🧾" } })).status).toBe(400);
     expect((await t.api("PATCH", `/api/pockets/${pocket._id}`, { token: owner.token, body: { target: { amountKobo: 100, date: "2020-01-01" } } })).body.code).toBe(
       "INVALID_DATES",
     );
