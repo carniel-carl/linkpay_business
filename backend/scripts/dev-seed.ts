@@ -12,6 +12,9 @@ import { addDays, addPayment, createInvoice, sendInvoice, todayInLagos } from ".
 import { closePocket, movePocketMoney } from "../src/services/pockets";
 import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
+import { raiseFlag, suspendBusiness } from "../src/services/compliance";
+import { audit } from "../src/services/audit";
+import { runRiskChecks } from "../src/services/risk";
 import { encrypt } from "../src/utils/crypto";
 import { inboundTransfer, type MockLiquifia } from "../tests/mockLiquifia";
 
@@ -113,7 +116,9 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   await syncInboundTransfers();
   const invoices = await seedInvoices(business, owner.id, accounts, liquifia);
   const pockets = await seedPockets(business, owner.id, accounts);
+  const risky = await seedCompliance(liquifia, apiUrl);
   console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  console.log(`Compliance demo: ${risky}`);
 }
 
 /** Invoices in every state: paid by hand, part-paid by a matched transfer, overdue, open, draft and void. */
@@ -180,4 +185,80 @@ async function seedPockets(business: BusinessDocument, userId: string, accounts:
   await closePocket(old, userId);
   if (ikeja) await make(ikeja, { name: "Shop rent", icon: "rent", color: "violet", target: { amountKobo: 120_000_00, date: addDays(today, 120) } }, [35_000_00]);
   return ikeja ? 5 : 4;
+}
+
+/**
+ * Two businesses for the compliance screens: one the automatic rules flag (a large payment passed straight
+ * through), and one a reviewer flagged and suspended. Both owners sign in with DEMO_PASSWORD.
+ */
+async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
+  const password = await Bun.password.hash(DEMO_PASSWORD);
+  const make = async (name: string, email: string, ownerName: string) => {
+    const owner = await UserModel.create({ name: ownerName, email, password, emailVerified: true });
+    const business = await BusinessModel.create({
+      owner: owner._id,
+      name,
+      type: "limited_liability_company",
+      email: `hello@${email.split("@")[0]}.test`,
+      address: { street: "4 Allen Avenue", city: "Ikeja", state: "Lagos" },
+      people: [{ fullName: ownerName, roles: ["director"], bvnEncrypted: encrypt("32345678901"), bvnLast4: "8901" }],
+      status: "approved",
+      submittedAt: new Date(Date.now() - 9 * 86_400_000),
+      reviewedAt: new Date(Date.now() - 8 * 86_400_000),
+    });
+    await provisionBusinessAccount(business._id);
+    const account = (await VirtualAccountModel.findOne({ business: business._id }))!;
+    return { owner, business, account };
+  };
+  const credit = (account: { providerAccountId: string }, kobo: number, payer: string, payerAccount: string, hoursAgo: number) =>
+    inboundTransfer(account.providerAccountId, kobo, {
+      id: `seed_risk_${payerAccount}_${hoursAgo}`,
+      payer_name: payer,
+      payer_bank_name: "Opay",
+      payer_bank_account: payerAccount,
+      created_at: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(),
+    });
+
+  // 1. Money in and straight back out: the rules flag it (large payment, pass-through).
+  const swift = await make("Swift Gadgets Ltd", "swift@linkpay.test", "Kunle Ajayi");
+  liquifia.inboundTransfers.unshift(
+    credit(swift.account, 6_500_000_00, "Emeka Nnaji", "2034567890", 5),
+    credit(swift.account, 2_100_000_00, "Bisi Lawal", "2045678901", 3),
+  );
+  liquifia.balances.set(swift.account.providerAccountId, 8_600_000_00);
+  await syncInboundTransfers();
+  const swiftToken = await signAccessToken(swift.owner.id);
+  for (const [accountNumber, amountKobo] of [["0123456789", 4_200_000_00], ["2222222222", 3_500_000_00]] as const) {
+    const res = await fetch(`${apiUrl}/api/transfers`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${swiftToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ branch: String(swift.account.branch), amountKobo, narration: "Stock", recipient: { type: "bank", accountNumber, bankUuid: "BANK-GTB" } }),
+    });
+    if (!res.ok) throw new Error(`Seeding a Swift Gadgets transfer failed: ${res.status} ${await res.text()}`);
+  }
+  const { raised } = await runRiskChecks();
+
+  // 2. Reported by a customer's bank; a reviewer flagged it, left a note and suspended it.
+  const quick = await make("Quick Cash Ventures", "quickcash@linkpay.test", "Tobi Adeyemi");
+  liquifia.inboundTransfers.unshift(credit(quick.account, 450_000_00, "Grace Udo", "2056789012", 30));
+  liquifia.balances.set(quick.account.providerAccountId, 450_000_00);
+  await syncInboundTransfers();
+  const reviewer = (await StaffModel.findOne({ email: "compliance@linkpay.test" }))!;
+  const actor = { type: "staff" as const, staff: reviewer.id as string, name: reviewer.name };
+  await raiseFlag(actor, {
+    business: quick.business,
+    category: "fraud_report",
+    severity: "high",
+    summary: "Customer's bank reports a ₦450,000 payment as fraud",
+    note: "Zenith fraud desk, ref ZF-20931. Payer says the goods never arrived.",
+  });
+  await audit(actor, {
+    action: "note.added",
+    business: quick.business._id,
+    target: { kind: "business", id: quick.business._id },
+    summary: "Called the owner twice, no answer. Emailed for delivery proof.",
+  });
+  await suspendBusiness(actor, quick.business, { reason: "fraud_report", note: "Pending delivery proof for the reported payment" });
+
+  return `${swift.business.name} (${raised} automatic flags), ${quick.business.name} (flagged and suspended). Owners: swift@linkpay.test, quickcash@linkpay.test / ${DEMO_PASSWORD}.`;
 }

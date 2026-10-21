@@ -1,7 +1,9 @@
 import { app } from "./src/app";
 import { connectDB, disconnectDB } from "./src/config/db";
 import { env } from "./src/config/env";
+import { RISK_CHECK_INTERVAL_MS } from "./src/config/compliance";
 import { startInvoiceReminders } from "./src/services/invoices";
+import { startRiskChecks } from "./src/services/risk";
 import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
 
@@ -17,11 +19,14 @@ const stopSync = startTransactionSync(env.liquifia.syncIntervalMs);
 const stopTransfers = startTransferProcessor(env.liquifia.syncIntervalMs);
 // Emails invoice reminders (3 days before, on the day, 3 and 10 days after the due date). Each goes once.
 const stopReminders = startInvoiceReminders(15 * 60 * 1000);
+// Automatic risk rules over recent payments and transfers; they raise flags for the compliance team.
+const stopRiskChecks = startRiskChecks(RISK_CHECK_INTERVAL_MS);
 
 async function shutdown() {
   stopSync();
   stopTransfers();
   stopReminders();
+  stopRiskChecks();
   server.close();
   await disconnectDB();
   process.exit(0);

@@ -73,6 +73,26 @@ const ROUTES: RouteCase[] = [
     path: () => `/businesses/${fakeId}/branches/${fakeId}/provision-account`,
   },
   { method: "POST", route: "/transactions/sync", permission: "transactions.sync", path: () => "/transactions/sync" },
+  { method: "GET", route: "/businesses/:id/activity", permission: "activity.view", path: () => `/businesses/${businessId}/activity` },
+  { method: "GET", route: "/businesses/:id/transactions", permission: "activity.view", path: () => `/businesses/${businessId}/transactions` },
+  { method: "GET", route: "/businesses/:id/transfers", permission: "activity.view", path: () => `/businesses/${businessId}/transfers` },
+  { method: "GET", route: "/businesses/:id/members", permission: "activity.view", path: () => `/businesses/${businessId}/members` },
+  { method: "GET", route: "/activity/transactions", permission: "activity.view", path: () => "/activity/transactions" },
+  { method: "GET", route: "/compliance/summary", permission: "compliance.view", path: () => "/compliance/summary" },
+  { method: "GET", route: "/compliance/rules", permission: "compliance.view", path: () => "/compliance/rules" },
+  { method: "GET", route: "/compliance/flags", permission: "compliance.view", path: () => "/compliance/flags" },
+  { method: "GET", route: "/compliance/flags/:id", permission: "compliance.view", path: () => `/compliance/flags/${fakeId}` },
+  // Stops at validation (no outcome), so nothing changes.
+  { method: "POST", route: "/compliance/flags/:id/resolve", permission: "compliance.manage", path: () => `/compliance/flags/${fakeId}/resolve`, body: {} },
+  { method: "POST", route: "/compliance/run-checks", permission: "compliance.manage", path: () => "/compliance/run-checks" },
+  { method: "GET", route: "/businesses/:id/compliance", permission: "compliance.view", path: () => `/businesses/${businessId}/compliance` },
+  { method: "POST", route: "/businesses/:id/flags", permission: "compliance.manage", path: () => `/businesses/${fakeId}/flags`, body: {} },
+  { method: "POST", route: "/businesses/:id/notes", permission: "compliance.manage", path: () => `/businesses/${fakeId}/notes`, body: {} },
+  { method: "POST", route: "/businesses/:id/suspend", permission: "compliance.manage", path: () => `/businesses/${fakeId}/suspend`, body: {} },
+  { method: "POST", route: "/businesses/:id/reinstate", permission: "compliance.manage", path: () => `/businesses/${fakeId}/reinstate`, body: {} },
+  { method: "POST", route: "/businesses/:id/ban", permission: "compliance.ban", path: () => `/businesses/${fakeId}/ban`, body: {} },
+  { method: "POST", route: "/businesses/:id/unban", permission: "compliance.ban", path: () => `/businesses/${fakeId}/unban`, body: {} },
+  { method: "GET", route: "/audit", permission: "compliance.view", path: () => "/audit" },
   { method: "GET", route: "/users", permission: "users.view", path: () => "/users" },
   { method: "GET", route: "/users/:id", permission: "users.view", path: () => `/users/${fakeId}` },
   { method: "GET", route: "/staff/roles", permission: null, path: () => "/staff/roles" },
@@ -149,7 +169,7 @@ describe("every admin route has a permission", () => {
       role: "support",
       label: "Support (read only)",
       description: expect.any(String),
-      permissions: ["businesses.view", "users.view"],
+      permissions: ["businesses.view", "users.view", "activity.view"],
     });
   });
 });
@@ -158,7 +178,7 @@ describe("role and permissions on the staff member", () => {
   test("/me returns role and permissions", async () => {
     const res = await t.api("GET", "/api/admin/auth/me", { token: await signStaffToken("me-ops@linkpay.test", "operations") });
     expect(res.body.role).toBe("operations");
-    expect(res.body.permissions).toEqual(["businesses.view", "accounts.provision", "transactions.sync", "users.view"]);
+    expect(res.body.permissions).toEqual(["businesses.view", "accounts.provision", "transactions.sync", "users.view", "activity.view"]);
   });
 
   test("a role change applies to the next request with the same token", async () => {
@@ -168,7 +188,7 @@ describe("role and permissions on the staff member", () => {
 
     const changed = await staffApi("PATCH", `/${await staffIdOf(email)}`, superToken, { role: "support" });
     expect(changed.status).toBe(200);
-    expect(changed.body).toMatchObject({ role: "support", permissions: ["businesses.view", "users.view"] });
+    expect(changed.body).toMatchObject({ role: "support", permissions: ["businesses.view", "users.view", "activity.view"] });
 
     const after = await t.api("POST", "/api/admin/transactions/sync", { token });
     expect(after.body.code).toBe("STAFF_PERMISSION_DENIED");

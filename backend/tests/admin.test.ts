@@ -92,6 +92,7 @@ describe("GET /api/admin/summary", () => {
       counts: { draft: 1, submitted: 2, changes_requested: 0, approved: 1, rejected: 0 },
       total: 4,
       accountSetupFailed: 1,
+      compliance: { flagged: 0, suspended: 0, banned: 0 },
     });
   });
 

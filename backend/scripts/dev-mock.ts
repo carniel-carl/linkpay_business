@@ -33,10 +33,12 @@ const { app } = await import("../src/app");
 const { startTransactionSync } = await import("../src/services/transactions");
 const { startTransferProcessor } = await import("../src/services/transfers");
 const { startInvoiceReminders } = await import("../src/services/invoices");
+const { startRiskChecks } = await import("../src/services/risk");
 // Faster than production so settled payouts and the money they move show up within seconds.
 const stopSync = startTransactionSync(10_000);
 const stopTransfers = startTransferProcessor(5_000);
 const stopReminders = startInvoiceReminders(60_000);
+const stopRiskChecks = startRiskChecks(60_000);
 const server = app.listen(Number(process.env.PORT), async () => {
   console.log(`Mock API on http://localhost:${process.env.PORT} (in-memory MongoDB, mock Liquifia at ${liquifia.url}). Data is lost on exit.`);
   // `bun run dev:mock --seed`: a verified demo business with branches and payments (scripts/dev-seed.ts).

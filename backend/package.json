@@ -33,6 +33,7 @@
     "migrate:branches": "bun scripts/migrate-branches.ts",
     "migrate:staff": "bun scripts/migrate-staff.ts",
     "staff": "bun scripts/staff.ts",
-    "dev:mock": "bun --env-file=/dev/null scripts/dev-mock.ts"
+    "dev:mock": "bun --env-file=/dev/null scripts/dev-mock.ts",
+    "dev:seed": "bun --env-file=/dev/null scripts/dev-mock.ts --seed"
   }
 }

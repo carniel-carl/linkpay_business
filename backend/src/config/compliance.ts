@@ -77,7 +77,7 @@ export const RISK_RULES = {
     windowHours: 24,
     minCount: 5,
   },
-} as const satisfies Record<string, { label: string; description: string; severity: FlagSeverity; windowHours: number }>;
+} as const satisfies Record<string, { label: string; description: string; severity: FlagSeverity; windowHours: number; [threshold: string]: unknown }>;
 export type RiskRule = keyof typeof RISK_RULES;
 export const RISK_RULE_KEYS = Object.keys(RISK_RULES) as [RiskRule, ...RiskRule[]];
 
