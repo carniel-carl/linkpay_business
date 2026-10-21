@@ -2,8 +2,9 @@ import type { Metadata } from "next"
 import { BusinessesTable } from "@/components/admin/businesses-table"
 import { PageHeader } from "@/components/common/page-header"
 import { requirePermission } from "@/lib/guard"
-import { parseAdminQuery, STATUS_FILTER_LABELS } from "@/lib/admin"
-import { getAdminBusinesses, getAdminSummary } from "@/lib/data"
+import { COMPLIANCE_FILTER_LABELS, parseAdminQuery, STATUS_FILTER_LABELS } from "@/lib/admin"
+import { getAdminBusinesses, getAdminSummary, getStaff } from "@/lib/data"
+import { can } from "@/lib/permissions"
 import type { BusinessStatus } from "@/lib/kyb"
 
 export const metadata: Metadata = { title: "Businesses" }
@@ -22,7 +23,7 @@ export default async function BusinessesPage({ searchParams }: PageProps<"/busin
   if (blocked) return blocked
   // Newest sign-ups first: drafts have no submission date, so sorting by it would bury the rest.
   const query = parseAdminQuery(await searchParams, { sort: "created", dir: "desc" })
-  const [data, summary] = await Promise.all([getAdminBusinesses(query), getAdminSummary()])
+  const [data, summary, staff] = await Promise.all([getAdminBusinesses(query), getAdminSummary(), getStaff()])
   const status = query.status ?? "all"
 
   return (
@@ -33,9 +34,10 @@ export default async function BusinessesPage({ searchParams }: PageProps<"/busin
         query={query}
         counts={{ ...summary.counts, all: summary.total }}
         hiddenColumns={["registrationNumber", "people"]}
-        caption={status === "all" ? "All businesses" : `${STATUS_FILTER_LABELS[status]} businesses`}
+        caption={[status === "all" ? "All businesses" : `${STATUS_FILTER_LABELS[status]} businesses`, query.compliance && COMPLIANCE_FILTER_LABELS[query.compliance].toLowerCase()].filter(Boolean).join(", ")}
         emptyTitle="Nothing here"
         emptyDescription={EMPTY[status]}
+        compliance={{ counts: summary.compliance, showFlags: can(staff, "compliance.view") }}
       />
     </>
   )

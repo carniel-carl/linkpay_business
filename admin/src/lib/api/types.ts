@@ -91,6 +91,8 @@ export type Business = {
   /** The staff member who last reviewed it. Absent for reviews from before staff accounts. */
   reviewedBy?: { _id: string; name: string; email: string }
   liquifia?: LiquifiaInfo
+  /** Staff-only compliance state. Older businesses may not have it yet (read as active). */
+  compliance?: BusinessCompliance
   createdAt: string
   updatedAt: string
 }
@@ -143,6 +145,10 @@ export type StaffPermission =
   | "accounts.provision"
   | "transactions.sync"
   | "users.view"
+  | "activity.view"
+  | "compliance.view"
+  | "compliance.manage"
+  | "compliance.ban"
   | "staff.manage"
 
 /** Two-step is mandatory for staff: only the method changes. */
@@ -197,6 +203,7 @@ export type AdminSummary = {
   total: number
   /** Approved businesses whose bank account setup failed. */
   accountSetupFailed: number
+  compliance: { flagged: number; suspended: number; banned: number }
 }
 
 export type AdminBusinessList = {
@@ -211,7 +218,14 @@ export type AdminBusinessList = {
 /** One staff notification. `link` is a path in this app, e.g. "/businesses/<id>". */
 export type AppNotification = {
   _id: string
-  type: "kyb.submitted" | "account.setup_failed" | "staff.invite_accepted" | "staff.role_changed" | (string & {})
+  type:
+    | "kyb.submitted"
+    | "account.setup_failed"
+    | "staff.invite_accepted"
+    | "staff.role_changed"
+    | "compliance.flag_raised"
+    | "compliance.business_restricted"
+    | (string & {})
   title: string
   body: string
   link: string | null
@@ -223,3 +237,241 @@ export type AppNotification = {
 
 /** Newest first; pass `nextBefore` as `before` for the next page (null when there are no more). */
 export type NotificationPage = { items: AppNotification[]; nextBefore: string | null }
+
+// ---- Compliance (docs/briefs/compliance.md) ----
+
+/** `banned` is shown to staff as "Closed". */
+export type ComplianceStatus = "active" | "suspended" | "banned"
+export type FlagSeverity = "low" | "medium" | "high"
+export type FlagCategory = "suspicious_transactions" | "fraud_report" | "identity_concern" | "sanctions" | "other"
+export type FlagOutcome = "cleared" | "actioned"
+export type StaffRef = { _id: string; name: string }
+
+/** The counters kept on each business, as the business list returns them. */
+export type BusinessCompliance = {
+  status?: ComplianceStatus
+  openFlags?: number
+  highestOpenSeverity?: FlagSeverity | null
+  lastFlaggedAt?: string | null
+}
+
+/** GET /api/admin/businesses/:id/compliance → compliance. Reason, note, since and by are null while active. */
+export type ComplianceState = {
+  status: ComplianceStatus
+  reason: FlagCategory | null
+  reasonLabel: string | null
+  note: string | null
+  since: string | null
+  by: StaffRef | null
+  openFlags: number
+  highestOpenSeverity: FlagSeverity | null
+  lastFlaggedAt: string | null
+}
+
+export type Flag<Evidence = FlagEvidenceIds> = {
+  _id: string
+  business: { _id: string; name?: string; status?: BusinessStatus; compliance?: ComplianceStatus }
+  source: "rule" | "staff"
+  rule: string | null
+  ruleLabel: string | null
+  category: FlagCategory
+  categoryLabel: string
+  severity: FlagSeverity
+  summary: string
+  note: string | null
+  evidence: Evidence
+  status: "open" | "resolved"
+  raisedBy: StaffRef | null
+  resolution: { outcome: FlagOutcome | null; note: string | null; by: StaffRef | null; at: string | null } | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type FlagEvidenceIds = { transactions: string[]; transfers: string[]; metrics: Record<string, unknown> }
+
+/** GET /api/admin/compliance/flags/:id: the evidence expanded to full items. */
+export type FlagDetail = Flag<{ transactions: Transaction[]; transfers: AdminTransfer[]; metrics: Record<string, unknown> }>
+
+export type FlagList = { items: Flag[]; total: number; skip: number; take: number }
+
+export type ComplianceSummary = {
+  openFlags: { total: number; high: number; medium: number; low: number; fromRules: number; fromStaff: number }
+  flaggedBusinesses: number
+  suspended: number
+  banned: number
+  raisedLast7d: number
+  resolvedLast7d: number
+}
+
+export type RiskRuleInfo = {
+  key: string
+  label: string
+  description: string
+  severity: FlagSeverity
+  windowHours: number
+  [threshold: string]: unknown
+}
+
+/** GET /api/admin/compliance/rules (also feeds the category and severity pickers). */
+export type ComplianceRules = {
+  rules: RiskRuleInfo[]
+  categories: { key: FlagCategory; label: string }[]
+  severities: FlagSeverity[]
+  statuses: ComplianceStatus[]
+}
+
+export type AuditAction =
+  | "kyb.approved"
+  | "kyb.changes_requested"
+  | "kyb.rejected"
+  | "account.provision_retried"
+  | "flag.raised"
+  | "flag.resolved"
+  | "note.added"
+  | "business.suspended"
+  | "business.reinstated"
+  | "business.banned"
+  | "business.unbanned"
+  | "staff.invited"
+  | "staff.invite_revoked"
+  | "staff.role_changed"
+  | "staff.disabled"
+  | "staff.enabled"
+  | "staff.signed_out"
+
+/** One audit log entry. On a business's timeline `business` is its id; the audit log expands it. */
+export type AuditEntry<B = string | null> = {
+  _id: string
+  action: AuditAction
+  summary: string
+  actor: { type: "staff" | "system"; _id: string | null; name: string }
+  business: B
+  target: { kind: "business" | "flag" | "staff" | "staff_invite" | "branch"; _id: string } | null
+  details: Record<string, unknown>
+  createdAt: string
+}
+
+export type AuditPage = { items: AuditEntry<{ _id: string; name: string | null } | null>[]; nextBefore: string | null }
+
+/** GET /api/admin/businesses/:id/compliance */
+export type BusinessComplianceView = {
+  business: { _id: string; name: string; status: BusinessStatus }
+  compliance: ComplianceState
+  flags: Flag[]
+  timeline: AuditEntry[]
+  timelineNextBefore: string | null
+}
+
+// ---- Activity (activity.view) ----
+
+export type TransactionStatus = "pending" | "success" | "failed" | "reversed"
+export type TransactionDirection = "credit" | "debit"
+
+/** A payment in or out, as the business API's /api/transactions returns it. */
+export type Transaction = {
+  _id: string
+  type: "inbound_transfer" | "payout" | (string & {})
+  direction: TransactionDirection
+  amountKobo: number
+  feeKobo: number
+  netKobo: number
+  currency: "NGN"
+  status: TransactionStatus
+  counterparty: { name?: string; bankName?: string; accountNumber?: string }
+  narration: string | null
+  reference: string | null
+  occurredAt: string
+  branch: BranchRef | null
+  account: { _id: string; label: string; accountNumber: string; bankName?: string } | null
+  transfer: string | null
+}
+
+export type Paged<T> = { items: T[]; total: number; skip: number; take: number }
+
+/** GET /api/admin/activity/transactions: every business's payments. */
+export type FeedTransaction = Transaction & {
+  business: { _id: string; name: string; compliance: ComplianceStatus; openFlags: number } | null
+}
+
+export type TransferStatus = "pending_approval" | "rejected" | "cancelled" | "processing" | "success" | "failed"
+export type TransferKind = "bank" | "internal" | "linkpay"
+type UserRef = { _id: string; name: string; email: string }
+
+export type AdminTransfer = {
+  _id: string
+  business: string
+  kind: TransferKind
+  status: TransferStatus
+  amountKobo: number
+  feeKobo: number
+  totalKobo: number
+  currency: "NGN"
+  branch: BranchRef | null
+  batch: string | null
+  recipient: {
+    accountNumber: string
+    accountName: string
+    bankName: string | null
+    /** Set when the recipient is a business on LinkPay. */
+    business: string | null
+    branch: BranchRef | null
+  }
+  narration: string | null
+  reference: string
+  failureReason: string | null
+  /** Approved but not yet accepted by the bank partner, e.g. held while the business is suspended. */
+  awaitingProvider: boolean
+  providerError: string | null
+  createdBy: UserRef | null
+  decision: { by: UserRef | null; at: string; note: string | null } | null
+  createdAt: string
+  submittedAt: string | null
+  completedAt: string | null
+}
+
+type Flow = { kobo: number; count: number }
+type Flows = { last24h: Flow; last7d: Flow; last30d: Flow }
+
+/** GET /api/admin/businesses/:id/activity */
+export type BusinessActivity = {
+  business: { _id: string; name: string; status: BusinessStatus; compliance: ComplianceStatus }
+  moneyIn: Flows
+  moneyOut: Flows
+  /** Days with activity in the last 30, oldest first. `day` is a Lagos date. */
+  daily: { day: string; inKobo: number; outKobo: number }[]
+  transfers: { last30d: Record<TransferStatus, { count: number; kobo: number }> }
+  counterparties: { payers30d: number; recipients30d: number }
+  accounts: {
+    _id: string
+    accountNumber: string
+    accountName: string | null
+    bankName: string | null
+    branch: BranchRef | null
+    /** Live from the bank partner; null when the lookup failed. */
+    balanceKobo: number | null
+  }[]
+  team: { members: number }
+  lastActivityAt: string | null
+}
+
+/** GET /api/admin/businesses/:id/members */
+export type BusinessMembers = {
+  members: {
+    user: {
+      _id: string
+      name: string
+      email: string
+      emailVerified: boolean
+      twoFactor: TwoFactorMethod | null
+      lastSignInAt: string | null
+      lastSignInIp: string | null
+      createdAt: string
+    }
+    role: string
+    roleLabel: string
+    branches: { _id: string; name: string | null }[]
+    joinedAt: string
+    activeDevices: number
+  }[]
+  invites: { _id: string; email: string; role: string; roleLabel: string; expiresAt: string; createdAt: string }[]
+}

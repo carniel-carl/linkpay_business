@@ -7,6 +7,8 @@ import {
   BellOff,
   CheckCheck,
   ClipboardCheck,
+  Flag,
+  ShieldAlert,
   TriangleAlert,
   UserCog,
   UserPlus,
@@ -31,7 +33,12 @@ const ICONS: Record<string, LucideIcon> = {
   "account.setup_failed": TriangleAlert,
   "staff.invite_accepted": UserPlus,
   "staff.role_changed": UserCog,
+  "compliance.flag_raised": Flag,
+  "compliance.business_restricted": ShieldAlert,
 }
+
+// Needs attention: shown with the destructive tint.
+const ALERT_TYPES = new Set(["account.setup_failed", "compliance.flag_raised", "compliance.business_restricted"])
 
 // After the stream closes for good (e.g. the server refused it), try again this long after.
 const RETRY_MS = 30_000
@@ -297,7 +304,7 @@ function NotificationRow({
       <span
         className={cn(
           "mt-0.5 grid size-8 shrink-0 place-items-center rounded-[30%]",
-          n.type === "account.setup_failed" ? "bg-destructive-subtle text-destructive" : "bg-brand-subtle text-primary",
+          ALERT_TYPES.has(n.type) ? "bg-destructive-subtle text-destructive" : "bg-brand-subtle text-primary",
         )}
       >
         <Icon className="size-4" aria-hidden />

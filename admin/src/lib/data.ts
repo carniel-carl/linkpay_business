@@ -4,10 +4,31 @@ import { redirect } from "next/navigation"
 import { api } from "@/lib/api/client"
 import { ApiError } from "@/lib/api/errors"
 import { toApiParams, type AdminListQuery } from "@/lib/admin"
+import {
+  auditApiParams,
+  flagApiParams,
+  paymentApiParams,
+  transferApiParams,
+  type AuditQuery,
+  type FlagQuery,
+  type PaymentQuery,
+  type TransferQuery,
+} from "@/lib/compliance"
 import type {
   AdminBusinessList,
   AdminSummary,
+  AdminTransfer,
+  AuditPage,
+  BusinessActivity,
+  BusinessComplianceView,
+  BusinessMembers,
+  ComplianceRules,
+  ComplianceSummary,
+  FeedTransaction,
+  FlagList,
   Overview,
+  Paged,
+  Transaction,
   Staff,
   StaffInvite,
   StaffMember,
@@ -49,14 +70,15 @@ export const getAdminSummary = cache(async () => {
   }
 })
 
-export async function getAdminBusiness(id: string) {
+/** One business with its documents and branches. Cached per request: the header and the tabs share it. */
+export const getAdminBusiness = cache(async (id: string) => {
   try {
     return await api<Overview>(`/api/admin/businesses/${encodeURIComponent(id)}`)
   } catch (err) {
     if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
     onReadError(err)
   }
-}
+})
 
 /** The staff roles with labels and descriptions. Any staff member can read them. */
 export const getStaffRoles = cache(async () => {
@@ -92,5 +114,75 @@ export async function getUnreadNotifications() {
   } catch (err) {
     if (err instanceof ApiError && err.sessionExpired) onReadError(err)
     return 0
+  }
+}
+
+// ---- Activity (activity.view) ----
+
+const businessPath = (id: string) => `/api/admin/businesses/${encodeURIComponent(id)}`
+
+/** Reads that 404 for an unknown business return null, so the page can show "not found". */
+async function read<T>(path: string) {
+  try {
+    return await api<T>(path)
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
+    onReadError(err)
+  }
+}
+
+export const getBusinessActivity = (id: string) => read<BusinessActivity>(`${businessPath(id)}/activity`)
+
+export const getBusinessTransactions = (id: string, query: PaymentQuery) =>
+  read<Paged<Transaction>>(`${businessPath(id)}/transactions?${paymentApiParams(query)}`)
+
+export const getBusinessTransfers = (id: string, query: TransferQuery) =>
+  read<Paged<AdminTransfer>>(`${businessPath(id)}/transfers?${transferApiParams(query)}`)
+
+export const getBusinessMembers = (id: string) => read<BusinessMembers>(`${businessPath(id)}/members`)
+
+/** Every business's payments, newest first. */
+export async function getPaymentsFeed(query: PaymentQuery) {
+  try {
+    return await api<Paged<FeedTransaction>>(`/api/admin/activity/transactions?${paymentApiParams(query)}`)
+  } catch (err) {
+    onReadError(err)
+  }
+}
+
+// ---- Compliance (compliance.view) ----
+
+export const getComplianceSummary = cache(async () => {
+  try {
+    return await api<ComplianceSummary>("/api/admin/compliance/summary")
+  } catch (err) {
+    onReadError(err)
+  }
+})
+
+/** The automatic rules and the category and severity lists for the forms. */
+export const getComplianceRules = cache(async () => {
+  try {
+    return await api<ComplianceRules>("/api/admin/compliance/rules")
+  } catch (err) {
+    onReadError(err)
+  }
+})
+
+export async function getFlags(query: FlagQuery) {
+  try {
+    return await api<FlagList>(`/api/admin/compliance/flags?${flagApiParams(query)}`)
+  } catch (err) {
+    onReadError(err)
+  }
+}
+
+export const getBusinessCompliance = (id: string) => read<BusinessComplianceView>(`${businessPath(id)}/compliance`)
+
+export async function getAuditLog(query: AuditQuery) {
+  try {
+    return await api<AuditPage>(`/api/admin/audit?${auditApiParams(query)}`)
+  } catch (err) {
+    onReadError(err)
   }
 }

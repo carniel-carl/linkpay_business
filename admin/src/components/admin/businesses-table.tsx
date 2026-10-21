@@ -20,11 +20,17 @@ import { DataTableViewOptions } from "@/components/data-table/data-table-view-op
 import { SearchBox } from "@/components/data-table/search-box"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { ADMIN_SORTS, PAGE_SIZES, STATUS_FILTER_LABELS, STATUS_FILTERS, type AdminListQuery, type AdminSort } from "@/lib/admin"
+import {
+  ADMIN_SORTS,
+  COMPLIANCE_FILTER_LABELS,
+  COMPLIANCE_FILTERS,
+  PAGE_SIZES, STATUS_FILTER_LABELS, STATUS_FILTERS, type AdminListQuery, type AdminSort } from "@/lib/admin"
 import type { AdminBusinessList, AdminSummary } from "@/lib/api/types"
 import { formatDate, timeAgo } from "@/lib/format"
 import { BUSINESS_TYPE_INFO, type BusinessStatus } from "@/lib/kyb"
 import { cn } from "@/lib/utils"
+import { RestrictionBadge, SeverityDot } from "@/components/compliance/badges"
+import { SEVERITY_LABELS } from "@/lib/compliance"
 import { AccountSetupBadge } from "./account-setup-badge"
 
 type Row = AdminBusinessList["items"][number]
@@ -36,12 +42,15 @@ const columns = helper.columns([
     header: ({ column }) => <DataTableColumnHeader column={column} title="Business" />,
     cell: ({ row }) => (
       <div className="grid min-w-48 gap-0.5">
-        <Link
-          href={`/businesses/${row.original._id}`}
-          className="w-fit font-medium outline-none after:absolute after:inset-0 hover:underline focus-visible:underline"
-        >
-          {row.original.name}
-        </Link>
+        <span className="flex flex-wrap items-center gap-2">
+          <Link
+            href={`/businesses/${row.original._id}`}
+            className="w-fit font-medium outline-none after:absolute after:inset-0 hover:underline focus-visible:underline"
+          >
+            {row.original.name}
+          </Link>
+          <RestrictionBadge status={row.original.compliance?.status} />
+        </span>
         <span className="truncate text-xs text-muted-foreground">
           {[row.original.owner?.name, row.original.owner?.email].filter(Boolean).join(", ")}
         </span>
@@ -94,6 +103,24 @@ const columns = helper.columns([
     enableSorting: false,
     meta: { label: "Bank account" },
   }),
+  helper.accessor((b) => b.compliance?.openFlags ?? 0, {
+    id: "flags",
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Open flags" />,
+    cell: ({ row, getValue }) => {
+      const count = getValue()
+      const severity = row.original.compliance?.highestOpenSeverity
+      if (!count) return <span className="text-muted-foreground">None</span>
+      return (
+        <span className="inline-flex items-center gap-2 whitespace-nowrap">
+          {severity && <SeverityDot severity={severity} />}
+          <span className="figure">{count}</span>
+          {severity && <span className="text-xs text-muted-foreground">{SEVERITY_LABELS[severity].toLowerCase()} at most</span>}
+        </span>
+      )
+    },
+    sortDescFirst: true,
+    meta: { label: "Open flags" },
+  }),
   helper.accessor("status", {
     header: "Status",
     cell: ({ getValue }) => <StatusBadge status={getValue()} />,
@@ -127,6 +154,11 @@ type Props = {
   caption: string
   emptyTitle: string
   emptyDescription: string
+  /**
+   * Compliance chips with counts. Flags (the chip and the column) need compliance.view; any role can
+   * filter to suspended and closed businesses.
+   */
+  compliance?: { counts: AdminSummary["compliance"]; showFlags: boolean }
 }
 
 export function BusinessesTable({
@@ -138,6 +170,7 @@ export function BusinessesTable({
   caption,
   emptyTitle,
   emptyDescription,
+  compliance,
 }: Props) {
   const router = useRouter()
   const pathname = usePathname()
@@ -165,9 +198,12 @@ export function BusinessesTable({
     [hiddenColumns],
   )
 
+  const showFlags = !!compliance?.showFlags
+  const visibleColumns = useMemo(() => (showFlags ? columns : columns.filter((c) => c.id !== "flags")), [showFlags])
+
   const table = useTable({
     features: dataTableFeatures,
-    columns,
+    columns: visibleColumns,
     data: data.items,
     getRowId: (row) => row._id,
     manualSorting: true,
@@ -193,7 +229,8 @@ export function BusinessesTable({
   })
 
   const currentStatus = query.status ?? "all"
-  const filtered = !!query.q || !!query.account
+  const filtered = !!query.q || !!query.account || !!query.compliance
+  const complianceChips = compliance ? COMPLIANCE_FILTERS.filter((c) => c !== "flagged" || showFlags) : []
 
   return (
     <div className="surface overflow-hidden">
@@ -246,6 +283,34 @@ export function BusinessesTable({
           value={query.q ?? ""}
           onSearch={(q) => navigate({ q, page: undefined })}
         />
+        {complianceChips.length > 0 && (
+          <div role="group" aria-label="Compliance" className="flex flex-wrap gap-2">
+            {complianceChips.map((c) => {
+              const active = query.compliance === c
+              return (
+                <Button
+                  key={c}
+                  variant={active ? "default" : "outline"}
+                  size="sm"
+                  aria-pressed={active}
+                  onClick={() =>
+                    navigate({
+                      compliance: active ? undefined : c,
+                      page: undefined,
+                      // Most flags first is what the Flagged view is for.
+                      ...(c === "flagged" && !active ? { sort: "flags", dir: "desc" } : {}),
+                    })
+                  }
+                >
+                  {COMPLIANCE_FILTER_LABELS[c]}
+                  <span className={cn("figure text-xs", active ? "opacity-80" : "text-muted-foreground")}>
+                    {compliance!.counts[c]}
+                  </span>
+                </Button>
+              )
+            })}
+          </div>
+        )}
         {query.account === "failed" && (
           <Button variant="outline" size="sm" onClick={() => navigate({ account: undefined, page: undefined })}>
             Account setup failed
@@ -278,7 +343,7 @@ export function BusinessesTable({
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
-                  <Button variant="outline" onClick={() => navigate({ q: undefined, account: undefined, page: undefined })}>
+                  <Button variant="outline" onClick={() => navigate({ q: undefined, account: undefined, compliance: undefined, page: undefined })}>
                     Clear search and filters
                   </Button>
                 </EmptyContent>

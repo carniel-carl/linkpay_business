@@ -21,7 +21,14 @@ export default async function ConsoleLayout({ children }: LayoutProps<"/">) {
       >
         Skip to content
       </a>
-      <AdminSidebar summary={summary} canManageStaff={can(staff, "staff.manage")} />
+      <AdminSidebar
+        summary={summary}
+        access={{
+          staff: can(staff, "staff.manage"),
+          activity: can(staff, "activity.view"),
+          compliance: can(staff, "compliance.view"),
+        }}
+      />
       {/* Same framed sheet as the business dashboard; the header is fixed (see PinnedHeader). */}
       <SidebarInset
         data-band

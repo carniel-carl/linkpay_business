@@ -2,7 +2,17 @@
 
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
-import { Building2, ClipboardCheck, MessageSquareWarning, TriangleAlert, UsersRound, type LucideIcon } from "lucide-react"
+import {
+  ArrowLeftRight,
+  Building2,
+  ClipboardCheck,
+  MessageSquareWarning,
+  ScrollText,
+  ShieldAlert,
+  TriangleAlert,
+  UsersRound,
+  type LucideIcon,
+} from "lucide-react"
 import { Logo } from "@/components/brand/logo"
 import {
   Sidebar,
@@ -33,8 +43,11 @@ type Item = {
   isActive: (pathname: string, params: URLSearchParams) => boolean
 }
 
-/** Staff console navigation. Counts come from GET /api/admin/summary; Staff shows to those who manage staff. */
-export function AdminSidebar({ summary, canManageStaff }: { summary: AdminSummary | null; canManageStaff: boolean }) {
+/** What the signed-in staff member's role can open (see lib/permissions.ts). */
+export type NavAccess = { staff: boolean; activity: boolean; compliance: boolean }
+
+/** Staff console navigation. Counts come from GET /api/admin/summary; each group shows only what the role can open. */
+export function AdminSidebar({ summary, access }: { summary: AdminSummary | null; access: NavAccess }) {
   return (
     <Sidebar collapsible="icon" variant="inset" aria-label="Staff console">
       <SidebarHeader className="px-2 pt-3">
@@ -50,7 +63,8 @@ export function AdminSidebar({ summary, canManageStaff }: { summary: AdminSummar
       </SidebarHeader>
       <SidebarContent className="pt-2">
         {summary && <BusinessNav summary={summary} />}
-        {canManageStaff && <NavGroup label="Team" items={TEAM} />}
+        <MonitoringNav summary={summary} access={access} />
+        {access.staff && <NavGroup label="Team" items={TEAM} />}
       </SidebarContent>
       <SidebarRail />
     </Sidebar>
@@ -106,6 +120,32 @@ function BusinessNav({ summary }: { summary: AdminSummary }) {
       <NavGroup label="Directory" items={directory} />
     </>
   )
+}
+
+function MonitoringNav({ summary, access }: { summary: AdminSummary | null; access: NavAccess }) {
+  const flagged = summary?.compliance.flagged ?? 0
+  const items: Item[] = [
+    ...(access.compliance
+      ? [
+          {
+            href: "/compliance",
+            label: "Compliance",
+            icon: ShieldAlert,
+            count: flagged,
+            countLabel: flagged === 1 ? "business flagged" : "businesses flagged",
+            alert: flagged > 0,
+            isActive: (p: string) => p === "/compliance",
+          },
+        ]
+      : []),
+    ...(access.activity
+      ? [{ href: "/payments", label: "Payments", icon: ArrowLeftRight, isActive: (p: string) => p === "/payments" }]
+      : []),
+    ...(access.compliance
+      ? [{ href: "/audit", label: "Audit log", icon: ScrollText, isActive: (p: string) => p === "/audit" }]
+      : []),
+  ]
+  return items.length ? <NavGroup label="Monitoring" items={items} /> : null
 }
 
 function NavGroup({ label, items }: { label: string; items: Item[] }) {

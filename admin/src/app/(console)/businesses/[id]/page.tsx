@@ -7,10 +7,9 @@ import { BranchesPanel } from "@/components/admin/branches-panel"
 import { DocumentViewer, type ViewerDocument } from "@/components/admin/document-viewer"
 import { ReviewActions } from "@/components/admin/review-actions"
 import { BusinessSummary } from "@/components/business/business-summary"
-import { StatusBadge } from "@/components/business/status-badge"
-import { PageHeader } from "@/components/common/page-header"
+import { BusinessHeader } from "@/components/admin/business-header"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import type { Overview, Owner } from "@/lib/api/types"
+import type { Overview } from "@/lib/api/types"
 import { getAdminBusiness, getStaff } from "@/lib/data"
 import { requirePermission } from "@/lib/guard"
 import { can } from "@/lib/permissions"
@@ -32,7 +31,6 @@ export default async function AdminBusinessPage({ params }: PageProps<"/business
   if (!overview) notFound()
   const canProvision = can(staff, "accounts.provision")
   const { business, documents, checklist } = overview
-  const owner = business.owner as Owner
   const approved = business.status === "approved"
   const provided = checklist.items.filter((i) => i.done).length
 
@@ -61,18 +59,10 @@ export default async function AdminBusinessPage({ params }: PageProps<"/business
 
   return (
     <>
-      <PageHeader
-        back={{ href: "/", label: "Review queue" }}
-        title={business.name}
-        description={
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <StatusBadge status={business.status} tone="ink" />
-            <span>
-              {owner?.name}, {owner?.email}
-            </span>
-            {business.submittedAt && <span className="figure">Submitted {formatDateTime(business.submittedAt)}</span>}
-          </span>
-        }
+      <BusinessHeader
+        overview={overview}
+        staff={staff}
+        tab="overview"
         actions={
           business.status === "submitted" &&
           can(staff, "kyb.review") && (

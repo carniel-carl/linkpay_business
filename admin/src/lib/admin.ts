@@ -7,10 +7,19 @@ import type { BusinessStatus } from "@/lib/kyb"
  * client table.
  */
 
-export const ADMIN_SORTS = ["submitted", "created", "name"] as const
+export const ADMIN_SORTS = ["submitted", "created", "name", "flags"] as const
 export type AdminSort = (typeof ADMIN_SORTS)[number]
 export const PAGE_SIZES = [10, 20, 50, 100] as const
 const ACCOUNT_STATUSES: AccountSetupStatus[] = ["not_started", "pending", "active", "failed"]
+
+/** Compliance filter chips on the businesses list: open flags, or a restriction. */
+export const COMPLIANCE_FILTERS = ["flagged", "suspended", "banned"] as const
+export type ComplianceFilter = (typeof COMPLIANCE_FILTERS)[number]
+export const COMPLIANCE_FILTER_LABELS: Record<ComplianceFilter, string> = {
+  flagged: "Flagged",
+  suspended: "Suspended",
+  banned: "Closed",
+}
 
 export const STATUS_FILTERS: (BusinessStatus | "all")[] = [
   "all",
@@ -34,6 +43,7 @@ export const STATUS_FILTER_LABELS: Record<BusinessStatus | "all", string> = {
 export type AdminListQuery = {
   status?: BusinessStatus
   account?: AccountSetupStatus
+  compliance?: ComplianceFilter
   q?: string
   sort: AdminSort
   dir: "asc" | "desc"
@@ -50,12 +60,14 @@ export function parseAdminQuery(
 ): AdminListQuery {
   const status = one(params.status)
   const account = one(params.account)
+  const compliance = one(params.compliance)
   const sort = one(params.sort)
   const dir = one(params.dir)
   const size = Number(one(params.size))
   return {
     status: status === "all" ? undefined : (STATUS_FILTERS as string[]).includes(status ?? "") ? (status as BusinessStatus) : defaults.status,
     account: (ACCOUNT_STATUSES as string[]).includes(account ?? "") ? (account as AccountSetupStatus) : undefined,
+    compliance: (COMPLIANCE_FILTERS as readonly string[]).includes(compliance ?? "") ? (compliance as ComplianceFilter) : undefined,
     q: one(params.q)?.trim().slice(0, 100) || undefined,
     sort: (ADMIN_SORTS as readonly string[]).includes(sort ?? "") ? (sort as AdminSort) : (defaults.sort ?? "submitted"),
     dir: dir === "asc" || dir === "desc" ? dir : (defaults.dir ?? "asc"),
@@ -73,6 +85,7 @@ export function toApiParams(query: AdminListQuery) {
   })
   if (query.status) q.set("status", query.status)
   if (query.account) q.set("account", query.account)
+  if (query.compliance) q.set("compliance", query.compliance)
   if (query.q) q.set("q", query.q)
   return q
 }
