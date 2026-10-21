@@ -89,7 +89,7 @@ export default function More() {
               icon={{ ios: "link", android: "link" }}
               title="Payment links"
               detail="Get paid with a link or your website"
-              onPress={() => router.push("/more/payment-links")}
+              onPress={() => router.push("/payment-links")}
             />
           )}
           {business.status === "approved" && can(overview.data, "invoices.manage") && (

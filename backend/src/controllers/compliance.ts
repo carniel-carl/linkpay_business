@@ -15,6 +15,7 @@ import {
 import { AUDIT_ACTIONS, AuditLogModel } from "../models/AuditLog";
 import { BusinessModel, type BusinessDocument } from "../models/Business";
 import { ComplianceFlagModel, type ComplianceFlagDocument } from "../models/ComplianceFlag";
+import { LinkReportModel } from "../models/PaymentLink";
 import { StaffModel } from "../models/Staff";
 import { TransactionModel } from "../models/Transaction";
 import { TransferModel } from "../models/Transfer";
@@ -114,7 +115,7 @@ async function complianceState(business: BusinessDocument) {
 /** Tiles for the compliance page. */
 export const getComplianceSummary: RequestHandler = async (_req, res) => {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [bySeverity, bySource, restricted, flagged, raisedLast7d, resolvedLast7d] = await Promise.all([
+  const [bySeverity, bySource, restricted, flagged, raisedLast7d, resolvedLast7d, openLinkReports] = await Promise.all([
     ComplianceFlagModel.aggregate<{ _id: string; count: number }>([{ $match: { status: "open" } }, { $group: { _id: "$severity", count: { $sum: 1 } } }]),
     ComplianceFlagModel.aggregate<{ _id: string; count: number }>([{ $match: { status: "open" } }, { $group: { _id: "$source", count: { $sum: 1 } } }]),
     BusinessModel.aggregate<{ _id: string; count: number }>([
@@ -124,6 +125,7 @@ export const getComplianceSummary: RequestHandler = async (_req, res) => {
     BusinessModel.countDocuments({ "compliance.openFlags": { $gt: 0 } }),
     ComplianceFlagModel.countDocuments({ createdAt: { $gte: weekAgo } }),
     ComplianceFlagModel.countDocuments({ "resolution.at": { $gte: weekAgo } }),
+    LinkReportModel.countDocuments({ status: "open" }),
   ]);
   const count = (rows: { _id: string; count: number }[], key: string) => rows.find((r) => r._id === key)?.count ?? 0;
   res.json({
@@ -140,6 +142,8 @@ export const getComplianceSummary: RequestHandler = async (_req, res) => {
     banned: count(restricted, "banned"),
     raisedLast7d,
     resolvedLast7d,
+    // Reports about payment links from the public, waiting for review.
+    openLinkReports,
   });
 };
 

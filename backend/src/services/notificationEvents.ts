@@ -129,23 +129,36 @@ export async function paymentReceived(
 /** A payment-link checkout was paid: whoever made the link, plus everyone who manages links for that branch. */
 export async function paymentLinkPaid(
   business: BusinessLike,
-  link: { _id: Id; title: string; branch: Id; createdBy: Id },
-  checkout: { _id: Id; status: string; priceKobo: number; paidKobo?: number | null; payer?: { name: string } | null },
+  link: { _id: Id; title: string; branch: Id; createdBy: Id; kind?: string | null },
+  checkout: {
+    _id: Id;
+    status: string;
+    priceKobo: number;
+    paidKobo?: number | null;
+    payer?: { name: string } | null;
+    donor?: { anonymous?: boolean | null } | null;
+    mode?: string | null;
+  },
 ) {
   const paid = formatNaira(checkout.paidKobo ?? 0);
   const payer = checkout.payer?.name ?? "Someone";
+  const test = checkout.mode === "test";
+  // The team always sees a donor's name; "anonymous" only hides it on the public page.
   const body =
-    checkout.status === "underpaid"
-      ? `${payer} paid ${paid} of ${formatNaira(checkout.priceKobo)} for ${link.title}.`
-      : `${payer} paid ${paid} for ${link.title}.`;
+    link.kind === "donation"
+      ? `${payer}${checkout.donor?.anonymous ? " (anonymous on the page)" : ""} donated ${paid} to ${link.title}.`
+      : checkout.status === "underpaid"
+        ? `${payer} paid ${paid} of ${formatNaira(checkout.priceKobo)} for ${link.title}.`
+        : `${payer} paid ${paid} for ${link.title}.`;
+  const title = link.kind === "donation" ? "New donation" : checkout.status === "underpaid" ? "Payment link part paid" : "Payment link paid";
   await notifyUsers(
     [String(link.createdBy), ...(await membersWith(business, "payments.manage", { branch: link.branch }))],
     {
       type: "payment_link.paid",
-      title: checkout.status === "underpaid" ? "Payment link part paid" : "Payment link paid",
+      title: test ? `${title} (test)` : title,
       body,
       link: `/payment-links/${link._id}?checkout=${checkout._id}`,
-      data: { paymentLinkId: String(link._id), checkoutId: String(checkout._id), branchId: String(link.branch) },
+      data: { paymentLinkId: String(link._id), checkoutId: String(checkout._id), branchId: String(link.branch), mode: test ? "test" : "live" },
     },
     business,
   );
@@ -436,4 +449,52 @@ export async function businessRestrictedForStaff(business: BizRef, change: "susp
     link: `/businesses/${business._id}/compliance`,
     data: { businessId: String(business._id) },
   });
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Payment link reports and moderation
+// ---------------------------------------------------------------------------------------------------------
+
+/** Someone on a public page reported the link (or a donation on it): the compliance team reviews it. */
+export async function linkReported(
+  business: BizRef,
+  link: { _id: Id; title: string },
+  report: { _id: Id; reason: string },
+  { openOnLink, aboutDonation }: { openOnLink: number; aboutDonation: boolean },
+) {
+  const what = aboutDonation ? `a donation on "${link.title}"` : `"${link.title}"`;
+  await notifyStaff(await staffWith("compliance.manage"), {
+    type: "compliance.link_reported",
+    title: `Report: ${business.name}`,
+    body: `Someone reported ${what}${openOnLink > 1 ? ` (${openOnLink} open reports on this link)` : ""}.`,
+    link: `/reports?report=${report._id}`,
+    data: { businessId: String(business._id), paymentLinkId: String(link._id), reportId: String(report._id) },
+  });
+}
+
+/** Staff took a link down or restored it: the people who manage it. The reason stays with staff. */
+export async function paymentLinkModerated(
+  business: BusinessLike,
+  link: { _id: Id; title: string; branch: Id; createdBy: Id },
+  change: "taken_down" | "restored",
+) {
+  await notifyUsers(
+    [String(link.createdBy), ...(await membersWith(business, "payments.manage", { branch: link.branch }))],
+    change === "taken_down"
+      ? {
+          type: "payment_link.taken_down",
+          title: "Payment link taken down",
+          body: `LinkPay has paused ${link.title} while we review it. It can't take payments for now. Contact support to find out more.`,
+          link: `/payment-links/${link._id}`,
+          data: { paymentLinkId: String(link._id), branchId: String(link.branch) },
+        }
+      : {
+          type: "payment_link.restored",
+          title: "Payment link restored",
+          body: `${link.title} can take payments again.`,
+          link: `/payment-links/${link._id}`,
+          data: { paymentLinkId: String(link._id), branchId: String(link.branch) },
+        },
+    business,
+  );
 }

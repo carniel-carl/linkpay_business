@@ -20,8 +20,8 @@ import { keyById, LIST_PERFORMANCE } from "@/lib/list";
 import { CHECKOUT_TABS, LINK_TABS, type CheckoutTab, type LinkTab } from "@/lib/payment-links";
 import { useTheme } from "@/theme/theme";
 
-const openLink = (link: PaymentLink) => router.push({ pathname: "/more/payment-links/[id]", params: { id: link._id } });
-const openCheckout = (c: LinkCheckout) => router.push({ pathname: "/more/payment-links/checkout/[id]", params: { id: c._id } });
+const openLink = (link: PaymentLink) => router.push({ pathname: "/payment-links/[id]", params: { id: link._id } });
+const openCheckout = (c: LinkCheckout) => router.push({ pathname: "/payment-links/checkout/[id]", params: { id: c._id } });
 
 /** Links, or every payment through them, with what's been collected. "New" for members with payments.manage. */
 export default function PaymentLinks() {
@@ -57,7 +57,7 @@ export default function PaymentLinks() {
   }
 
   const manager = can(gate.overview, "payments.manage");
-  const create = () => router.push("/more/payment-links/edit");
+  const create = () => router.push("/payment-links/edit");
   const firstEver = view === "links" && tab === "all" && !q && links.data?.pages[0]?.total === 0;
 
   return (

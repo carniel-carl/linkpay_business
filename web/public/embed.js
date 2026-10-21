@@ -10,6 +10,8 @@
  *
  * Payments are bank transfers: the checkout shows an exact amount and account details, and tells this page
  * when the money lands. Confirm on your server (GET <api>/api/public/checkouts/<token>) before fulfilling.
+ * A link in test mode works the same, with simulated payments: the checkout's `mode` is "test", so fulfil
+ * only when it is "live".
  */
 ;(function () {
   "use strict"

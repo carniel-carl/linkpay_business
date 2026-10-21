@@ -6,6 +6,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Button } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
 import { FormError } from "@/components/ui/form-error";
+import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { Segmented } from "@/components/ui/segmented";
 import { FocusStatusBar } from "@/components/ui/status-bar";
@@ -158,11 +159,10 @@ function Form({ inv }: { inv: Invoice }) {
         )
       ) : (
         <View className="gap-5">
-          <TextField
+          <NairaField
             label="Amount (₦)"
             value={amount}
-            onChangeText={(v) => setAmount(v.replace(/[^\d.,]/g, ""))}
-            keyboardType="decimal-pad"
+            onChangeText={setAmount}
             error={submitted ? amountError : undefined}
             hint={kobo && !amountError ? formatNaira(kobo) : undefined}
             style={{ fontFamily: "BricolageText-SemiBold", fontSize: 22 }}

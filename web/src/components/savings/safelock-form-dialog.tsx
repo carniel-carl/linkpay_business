@@ -5,6 +5,7 @@ import { Lock } from "lucide-react"
 import { toast } from "sonner"
 import { createSafelock } from "@/app/(dashboard)/savings/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -25,7 +26,7 @@ import { formatNaira } from "@/lib/format"
 import { addDays, daysBetween, formatDay, todayInLagos } from "@/lib/savings"
 import { parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
-import { NairaInput, type PocketBranch } from "./pocket-form-dialog"
+import type { PocketBranch } from "./pocket-form-dialog"
 
 const PRESETS = [30, 90, 180, 365]
 

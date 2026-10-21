@@ -1,8 +1,8 @@
-import { Code2, Globe, Lock } from "lucide-react"
+import { Code2, FlaskConical, Globe, HandHeart, Lock } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import type { CheckoutStatus, LinkCheckout, PaymentLink } from "@/lib/api/types"
+import type { CheckoutStatus, LinkCheckout, PaymentLink, PaymentMode } from "@/lib/api/types"
 import { CHECKOUT_STATUS_LABELS, linkStateLabel, originLabel } from "@/lib/payment-links"
 import { cn } from "@/lib/utils"
 
@@ -26,6 +26,50 @@ export function LinkStateBadge({ link, className }: { link: Pick<PaymentLink, "a
   return (
     <Badge variant={link.available ? "success" : link.unavailableReason === "inactive" ? "muted" : "warning"} className={className}>
       {linkStateLabel(link)}
+    </Badge>
+  )
+}
+
+/** "Test" on a link or checkout in test mode; nothing for live ones. */
+export function TestBadge({ mode, className }: { mode: PaymentMode | undefined; className?: string }) {
+  if (mode !== "test") return null
+  return (
+    <Badge variant="warning" className={cn("border-dashed border-warning/60", className)}>
+      <FlaskConical aria-hidden />
+      Test
+    </Badge>
+  )
+}
+
+/** A donation link's progress towards its goal, as a slim bar with the percentage; nothing without a goal. */
+export function DonationBar({ link, className }: { link: Pick<PaymentLink, "donation">; className?: string }) {
+  const d = link.donation
+  if (!d?.goalKobo) return null
+  const pct = Math.min(100, (d.raisedKobo / d.goalKobo) * 100)
+  return (
+    <span className={cn("flex items-center gap-2", className)}>
+      <span
+        role="progressbar"
+        aria-label="Raised towards the goal"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+        className="h-1.5 w-20 overflow-hidden rounded-full bg-muted"
+      >
+        <span className="block h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="text-xs text-muted-foreground figure">{d.percent}%</span>
+    </span>
+  )
+}
+
+/** "Donation" on fundraiser links, so they stand out in lists. */
+export function KindBadge({ link, className }: { link: Pick<PaymentLink, "kind">; className?: string }) {
+  if (link.kind !== "donation") return null
+  return (
+    <Badge variant="donation" className={className}>
+      <HandHeart aria-hidden />
+      Donation
     </Badge>
   )
 }

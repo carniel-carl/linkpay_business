@@ -43,14 +43,16 @@ export function linkBrand(business: BusinessDocument, link: { slug: string }): I
   };
 }
 
-export type UnavailableReason = "inactive" | "expired" | "sold_out" | "account_not_ready";
+export type UnavailableReason = "taken_down" | "inactive" | "expired" | "sold_out" | "account_not_ready";
 
 /** Why the link can't take a new payment right now, or null when it can. */
 export async function unavailableReason(link: PaymentLinkDocument, now = new Date()): Promise<UnavailableReason | null> {
+  if (link.takenDown?.at) return "taken_down";
   if (link.status !== "active") return "inactive";
   if (link.expiresAt && link.expiresAt <= now) return "expired";
   if (link.maxPayments && link.paymentsCount >= link.maxPayments) return "sold_out";
-  if (!(await VirtualAccountModel.exists({ branch: link.branch }))) return "account_not_ready";
+  // Test checkouts show placeholder details, so a link can be tried before its account is open.
+  if (link.mode !== "test" && !(await VirtualAccountModel.exists({ branch: link.branch }))) return "account_not_ready";
   return null;
 }
 
@@ -143,6 +145,7 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
       `    email: "customer@example.com", // prefills the form (optional)`,
       `    onSuccess: (checkout) => {`,
       `      // Confirm on your server: GET ${env.apiPublicUrl}/api/public/checkouts/\${checkout.token}`,
+      `      // and check status "paid" and mode "live" (test payments move no money).`,
       `    },`,
       `    onClose: () => {},`,
       `  });`,
@@ -155,6 +158,16 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
 export const checkoutStatus = (checkout: Pick<CheckoutDocument, "status" | "expiresAt">, now = new Date()) =>
   checkout.status === "pending" && checkout.expiresAt <= now ? ("expired" as const) : checkout.status;
 
+/**
+ * The account a test checkout shows instead of the branch's real one: plainly not a bank account, so nobody
+ * sends real money to it while the business is trying the page out.
+ */
+export const testPayTo = (business: { name: string }) => ({
+  accountNumber: "0000000000",
+  accountName: `${business.name} (test)`,
+  bankName: "Test bank: don't send money",
+});
+
 /** Frees unique amounts whose hold has ended, so new checkouts can use them. */
 export async function releaseHolds(now = new Date()) {
   await CheckoutModel.updateMany({ amountReserved: true, holdUntil: { $lte: now } }, { $unset: { amountReserved: 1 } });
@@ -164,7 +177,14 @@ export async function releaseHolds(now = new Date()) {
 // Starting a checkout
 // ---------------------------------------------------------------------------------------------------------
 
-export type PayerInput = { name: string; email: string; phone?: string; fields: { label: string; value: string }[] };
+export type PayerInput = {
+  name: string;
+  email: string;
+  phone?: string;
+  fields: { label: string; value: string }[];
+  /** Donation links: hide the name on the public list, and words of support. */
+  donor?: { anonymous: boolean; message?: string };
+};
 
 /** Where the checkout came from and what the business's website attached to it (embed). */
 export type CheckoutContext = {
@@ -179,10 +199,12 @@ const isDuplicateOn = (err: any, field: string) => err?.code === 11000 && Object
 /**
  * Starts a checkout for `priceKobo`: picks a free unique amount on the branch's account (the price plus 1..99
  * kobo) and reserves it. A payer who already has an open checkout for the same price gets that one back.
+ * On a test link the checkout has no account and reserves nothing (see `testPayTo`).
  */
 export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput, priceKobo: number, context: CheckoutContext = {}) {
-  const account = await VirtualAccountModel.findOne({ branch: link.branch }).select("_id");
-  if (!account) throw new HttpError(409, "This business can't take payments yet. Please try again later.", "ACCOUNT_NOT_READY");
+  const test = link.mode === "test";
+  const account = test ? null : await VirtualAccountModel.findOne({ branch: link.branch }).select("_id");
+  if (!test && !account) throw new HttpError(409, "This business can't take payments yet. Please try again later.", "ACCOUNT_NOT_READY");
   const now = new Date();
 
   const extras = {
@@ -199,14 +221,44 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
     "payer.email": payer.email.toLowerCase(),
     priceKobo,
     clientReference: extras.clientReference ?? null,
+    // A link that has gone live never hands back a test checkout (or the other way round).
+    mode: test ? "test" : { $ne: "test" },
     status: "pending",
     expiresAt: { $gt: new Date(now.getTime() + 5 * MINUTE) },
   }).sort({ createdAt: -1 });
+  const { donor, ...person } = payer;
   if (open) {
-    open.set("payer", { ...payer, email: payer.email.toLowerCase() });
+    open.set("payer", { ...person, email: person.email.toLowerCase() });
+    if (donor) open.set("donor", donor);
     open.set({ source: extras.source, embedOrigin: extras.embedOrigin, metadata: extras.metadata });
     await open.save();
     return { checkout: open, reused: true };
+  }
+
+  const fields = {
+    business: link.business,
+    branch: link.branch,
+    link: link._id,
+    payer: person,
+    ...(donor && { donor }),
+    priceKobo,
+    ...extras,
+    expiresAt: new Date(now.getTime() + CHECKOUT_RULES.payWithinMinutes * MINUTE),
+    holdUntil: new Date(now.getTime() + CHECKOUT_RULES.amountHoldMinutes * MINUTE),
+  };
+
+  if (!account) {
+    // Test mode: no real account to tell transfers apart on, but the payer still sees an amount like a live one.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const amountKobo = priceKobo + randomInt(1, CHECKOUT_RULES.maxOffsetKobo + 1);
+        const checkout = await CheckoutModel.create({ ...fields, mode: "test", token: newCheckoutToken(), reference: newReference(), amountKobo });
+        return { checkout, reused: false };
+      } catch (err) {
+        if (attempt < 3 && (isDuplicateOn(err, "reference") || isDuplicateOn(err, "token"))) continue;
+        throw err;
+      }
+    }
   }
 
   await releaseHolds(now);
@@ -227,19 +279,13 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const checkout = await CheckoutModel.create({
-          business: link.business,
-          branch: link.branch,
+          ...fields,
+          mode: "live",
           virtualAccount: account._id,
-          link: link._id,
           token: newCheckoutToken(),
           reference: newReference(),
-          payer,
-          priceKobo,
           amountKobo: priceKobo + offset,
-          ...extras,
           amountReserved: true,
-          expiresAt: new Date(now.getTime() + CHECKOUT_RULES.payWithinMinutes * MINUTE),
-          holdUntil: new Date(now.getTime() + CHECKOUT_RULES.amountHoldMinutes * MINUTE),
         });
         return { checkout, reused: false };
       } catch (err) {
@@ -255,32 +301,41 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Settling: a transfer pays a checkout
+// Settling: a transfer (or, in test mode, a simulated payment) pays a checkout
 // ---------------------------------------------------------------------------------------------------------
 
+/** What paid a checkout: an incoming transfer (which must already point at it), or a simulated payment (no `_id`). */
+type Payment = { _id?: Types.ObjectId; amountKobo: number; occurredAt: Date };
+
 /**
- * Marks the checkout as paid by `tx` (which must already point at it), updates the link's totals, and tells
- * the team and the payer. Returns null when the checkout was no longer pending.
+ * Marks the checkout as paid by `tx`, updates the link's totals (live payments only), and tells the team and
+ * the payer. Returns null when the checkout was no longer pending.
  */
-async function settleCheckout(checkoutId: Types.ObjectId, tx: TransactionDocument, matchedBy: "amount" | "reference" | "manual", userId?: string) {
-  const current = await CheckoutModel.findById(checkoutId).select("priceKobo");
+async function settleCheckout(checkoutId: Types.ObjectId, tx: Payment, matchedBy: "amount" | "reference" | "manual" | "simulated", userId?: string) {
+  const current = await CheckoutModel.findById(checkoutId).select("priceKobo link");
   if (!current) return null;
-  const status = tx.amountKobo >= current.priceKobo ? "paid" : "underpaid";
+  const kind = (await PaymentLinkModel.findById(current.link).select("kind"))?.kind;
+  // A donation is whatever arrives: less than the donor first typed is still a donation, not a part payment.
+  const status = kind === "donation" || tx.amountKobo >= current.priceKobo ? "paid" : "underpaid";
   const checkout = await CheckoutModel.findOneAndUpdate(
     { _id: checkoutId, status: "pending" },
     {
-      $set: { status, transaction: tx._id, matchedBy, paidKobo: tx.amountKobo, paidAt: tx.occurredAt, ...(userId && { matchedByUser: userId }) },
+      $set: { status, ...(tx._id && { transaction: tx._id }), matchedBy, paidKobo: tx.amountKobo, paidAt: tx.occurredAt, ...(userId && { matchedByUser: userId }) },
       $unset: { amountReserved: 1 },
     },
     { returnDocument: "after" },
   );
   if (!checkout) return null;
 
-  const link = await PaymentLinkModel.findOneAndUpdate(
-    { _id: checkout.link },
-    { $inc: { paymentsCount: 1, collectedKobo: tx.amountKobo }, $max: { lastPaidAt: tx.occurredAt } },
-    { returnDocument: "after" },
-  );
+  // Test payments never count towards the link's totals or its payment limit.
+  const link =
+    checkout.mode === "test"
+      ? await PaymentLinkModel.findById(checkout.link)
+      : await PaymentLinkModel.findOneAndUpdate(
+          { _id: checkout.link },
+          { $inc: { paymentsCount: 1, collectedKobo: tx.amountKobo }, $max: { lastPaidAt: tx.occurredAt } },
+          { returnDocument: "after" },
+        );
   const business = await BusinessModel.findById(checkout.business);
   if (link && business) {
     await paymentLinkPaid(business, link, checkout);
@@ -295,6 +350,8 @@ async function settleCheckout(checkoutId: Types.ObjectId, tx: TransactionDocumen
           paidAt: tx.occurredAt,
           message: link.successMessage,
           clientReference: checkout.clientReference,
+          donation: link.kind === "donation",
+          test: checkout.mode === "test",
         });
         await CheckoutModel.updateOne({ _id: checkout._id }, { receiptSentAt: new Date() });
       } catch (err) {
@@ -322,6 +379,7 @@ async function findCheckoutFor(tx: TransactionDocument) {
     const byReference = await CheckoutModel.findOne({
       reference: { $in: references },
       virtualAccount: tx.virtualAccount,
+      mode: { $ne: "test" },
       status: "pending",
       createdAt: {
         $gte: new Date(occurred - CHECKOUT_RULES.referenceMatchDays * 24 * 60 * MINUTE),
@@ -334,6 +392,7 @@ async function findCheckoutFor(tx: TransactionDocument) {
   const byAmount = await CheckoutModel.find({
     virtualAccount: tx.virtualAccount,
     amountKobo: tx.amountKobo,
+    mode: { $ne: "test" },
     status: "pending",
     createdAt: { $lte: new Date(occurred + CHECKOUT_RULES.clockSlackMinutes * MINUTE) },
     holdUntil: { $gte: tx.occurredAt },
@@ -378,6 +437,7 @@ export async function matchCheckoutPayments() {
 
 /** A team member links an incoming transfer the matcher missed (e.g. a round amount with no reference). */
 export async function linkTransactionToCheckout(checkout: CheckoutDocument, transactionId: string, userId: string) {
+  if (checkout.mode === "test") throw new HttpError(409, "A test checkout can't be paid with a real payment", "CHECKOUT_IS_TEST");
   if (checkout.status !== "pending") throw new HttpError(409, "This checkout has already been paid", "CHECKOUT_NOT_PENDING");
   const tx = await TransactionModel.findOne({ _id: transactionId, business: checkout.business, direction: "credit", status: "success" });
   if (!tx) throw new HttpError(404, "Payment not found", "TRANSACTION_NOT_FOUND");
@@ -394,8 +454,26 @@ export async function linkTransactionToCheckout(checkout: CheckoutDocument, tran
   return settled;
 }
 
+/**
+ * Test mode: pays a test checkout as if the transfer had arrived, with the exact amount (`paid`) or half the
+ * price (`underpaid`, as if the payer sent too little and named the reference). Same notification and
+ * receipt as a live payment, marked as a test. A pending checkout past its time can still be paid, like a
+ * late transfer.
+ */
+export async function simulateCheckoutPayment(checkout: CheckoutDocument, outcome: "paid" | "underpaid", userId?: string) {
+  if (checkout.mode !== "test") throw new HttpError(409, "Only test checkouts can be paid with a simulated payment", "CHECKOUT_IS_LIVE");
+  const notPending = new HttpError(409, "This checkout has already been paid", "CHECKOUT_NOT_PENDING");
+  if (checkout.status !== "pending") throw notPending;
+  const amountKobo = outcome === "paid" ? checkout.amountKobo : Math.floor(checkout.priceKobo / 2);
+  const settled = await settleCheckout(checkout._id, { amountKobo, occurredAt: new Date() }, "simulated", userId);
+  if (!settled) throw notPending;
+  return settled;
+}
+
 /** Incoming payments that look like they're for this checkout: its price or amount, or the payer's name. */
 export async function suggestCheckoutPayments(checkout: CheckoutDocument) {
+  // A test checkout has no account, and real payments never pay it.
+  if (checkout.mode === "test" || !checkout.virtualAccount) return [];
   const words = checkout.payer!.name.split(/\s+/).filter((w) => w.length >= 3).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return TransactionModel.find({
     business: checkout.business,

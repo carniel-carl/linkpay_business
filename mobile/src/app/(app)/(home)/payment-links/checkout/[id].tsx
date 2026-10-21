@@ -2,7 +2,7 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
-import { CheckoutStatusTag } from "@/components/payment-links/parts";
+import { CheckoutStatusTag, TestTag } from "@/components/payment-links/parts";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FormError } from "@/components/ui/form-error";
@@ -53,7 +53,10 @@ export default function CheckoutScreen() {
     >
       <FocusStatusBar />
       <View className="gap-2 px-1">
-        <CheckoutStatusTag status={c.status} />
+        <View className="flex-row gap-1.5">
+          <CheckoutStatusTag status={c.status} />
+          <TestTag mode={c.mode} />
+        </View>
         <Figure size={34}>{formatNaira(received ? (c.paidKobo ?? 0) : c.priceKobo)}</Figure>
         <Text className="text-[15px] text-foreground">
           {c.payer.name}
@@ -64,7 +67,9 @@ export default function CheckoutScreen() {
             ? `Part paid: ${formatNaira(c.priceKobo - (c.paidKobo ?? 0))} short of ${formatNaira(c.priceKobo)}.`
             : received
               ? `Received ${c.paidAt ? formatDateTime(c.paidAt) : ""}.`
-              : c.status === "expired"
+              : c.mode === "test"
+                ? "A test payment: no money moves. Simulate the transfer below to see what happens when one arrives."
+                : c.status === "expired"
                 ? "Their time to pay ran out with nothing matched. A late transfer can still be linked below."
                 : `Waiting for their transfer until ${formatDateTime(c.expiresAt)}.`}
         </Text>
@@ -72,7 +77,10 @@ export default function CheckoutScreen() {
 
       <DetailList>
         <DetailRow label="Reference" value={c.reference} copy={c.reference} />
-        <DetailRow label="Asked to send" value={`${formatNaira(c.amountKobo)} (the price plus ${c.amountKobo - c.priceKobo} kobo)`} />
+        <DetailRow
+          label="Asked to send"
+          value={`${formatNaira(c.amountKobo)} (${c.donor ? "what they chose" : "the price"} plus ${c.amountKobo - c.priceKobo} kobo)`}
+        />
         {received && c.matchedBy && (
           <DetailRow label="How it matched" value={`${MATCHED_BY_LABELS[c.matchedBy]}${c.matchedByUser ? ` by ${c.matchedByUser.name}` : ""}`} />
         )}
@@ -83,8 +91,12 @@ export default function CheckoutScreen() {
       </DetailList>
 
       <View className="gap-2">
-        <Text className="px-1 text-[17px] font-semibold text-foreground">Customer</Text>
+        <Text className="px-1 text-[17px] font-semibold text-foreground">{c.donor ? "Donor" : "Customer"}</Text>
         <DetailList>
+          {c.donor && (
+            <DetailRow label="On the page" value={c.hiddenFromPage ? "Hidden by LinkPay" : c.donor.anonymous ? "As Anonymous" : "Under their name"} />
+          )}
+          {c.donor?.message && <DetailRow label="Message" value={`\u201C${c.donor.message}\u201D`} />}
           <DetailRow label="Email" value={c.payer.email} copy={c.payer.email} />
           {c.payer.phone && <DetailRow label="Phone" value={c.payer.phone} copy={c.payer.phone} />}
           {c.payer.fields.map((f) => (
@@ -105,7 +117,49 @@ export default function CheckoutScreen() {
       )}
 
       {c.canMatch && <LinkPayment checkout={c} />}
+      {c.canSimulate && <SimulatePayment checkout={c} />}
     </ScrollView>
+  );
+}
+
+/** Test checkouts: pay it as if the transfer had arrived, to try the notification, the receipt and the website's flow. */
+function SimulatePayment({ checkout: c }: { checkout: LinkCheckout }) {
+  const change = usePaymentLinkChange();
+  const [outcome, setOutcome] = useState<"paid" | "underpaid">();
+
+  function simulate(next: "paid" | "underpaid") {
+    setOutcome(next);
+    change.mutate(
+      { kind: "simulate", checkoutId: c._id, outcome: next },
+      {
+        onSuccess: () => {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Alert.alert(
+            next === "paid" ? "Test payment received" : "Test part payment received",
+            next === "paid" ? "We've emailed a test receipt. No money moved." : "No money moved.",
+          );
+        },
+        onError: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
+      },
+    );
+  }
+
+  return (
+    <View className="gap-3">
+      <View className="gap-1 px-1">
+        <Display size={20}>Simulate the payment</Display>
+        <Text className="text-[14px] leading-[20px] text-muted-foreground">
+          Marks this test checkout as paid, as if {c.payer.name}&apos;s transfer had arrived. A part payment sends half the price.
+        </Text>
+      </View>
+      <FormError message={change.error ? friendlyMessage(change.error) : undefined} />
+      <Button icon={{ ios: "flask", android: "science" }} loading={change.isPending && outcome === "paid"} disabled={change.isPending} onPress={() => simulate("paid")}>
+        Simulate payment
+      </Button>
+      <Button variant="outline" loading={change.isPending && outcome === "underpaid"} disabled={change.isPending} onPress={() => simulate("underpaid")}>
+        Simulate part payment
+      </Button>
+    </View>
   );
 }
 

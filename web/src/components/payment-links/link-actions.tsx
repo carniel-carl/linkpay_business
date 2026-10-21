@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Ellipsis, ExternalLink, Pencil, Power, PowerOff, Trash2 } from "lucide-react"
+import { Ellipsis, ExternalLink, FlaskConical, Pencil, Power, PowerOff, Rocket, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { deletePaymentLink, updatePaymentLink } from "@/app/(dashboard)/payment-links/actions"
 import { CopyButton } from "@/components/accounts/copy-button"
@@ -17,17 +17,101 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
-import type { PaymentLink } from "@/lib/api/types"
+import type { PaymentLink, PaymentMode } from "@/lib/api/types"
 
-/** Copy and edit up front; open, turn off or on, and delete in the menu. */
+const MODE_COPY: Record<PaymentMode, { title: string; description: string; action: string; done: string }> = {
+  live: {
+    title: "Take real payments?",
+    description:
+      "New customers see your branch's real account and their transfers are matched as usual. The link, QR code and embed code stay the same. Test payments made so far stay in the list as tests.",
+    action: "Go live",
+    done: "Your payment link is live. New payments are real.",
+  },
+  test: {
+    title: "Switch this link to test mode?",
+    description:
+      "New customers see placeholder bank details and can only simulate a payment, so no money comes in through this link until you go live again. Anyone already paying keeps their real details.",
+    action: "Switch to test mode",
+    done: "The link is in test mode. New payments are simulated.",
+  },
+}
+
+/** Asks before switching a link between live and test, then saves. */
+function useModeSwitch(link: PaymentLink) {
+  const [target, setTarget] = useState<PaymentMode | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function save() {
+    if (!target) return
+    setBusy(true)
+    const result = await updatePaymentLink(link._id, { mode: target })
+    setBusy(false)
+    if (!result.ok) return toast.error(result.error)
+    toast.success(MODE_COPY[target].done)
+    setTarget(null)
+  }
+
+  const dialog = (
+    <AlertDialog open={!!target} onOpenChange={(o) => !o && setTarget(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{target && MODE_COPY[target].title}</AlertDialogTitle>
+          <AlertDialogDescription>{target && MODE_COPY[target].description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={busy}
+            onClick={(e) => {
+              e.preventDefault()
+              save()
+            }}
+          >
+            {busy && <Spinner />}
+            {target && MODE_COPY[target].action}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+  return { ask: setTarget, dialog }
+}
+
+/** Above a test link's page: what test mode means, and (for members who manage links) "Go live". */
+export function TestModeBanner({ link }: { link: PaymentLink }) {
+  const mode = useModeSwitch(link)
+  if (link.mode !== "test") return null
+  return (
+    <Alert className="gap-x-3 rounded-2xl border-0 bg-warning-subtle/60 px-5 py-4 text-warning-foreground shadow-surface">
+      <FlaskConical aria-hidden />
+      <AlertTitle className="font-semibold">This link is in test mode</AlertTitle>
+      <AlertDescription className="text-warning-foreground">
+        Customers see placeholder bank details and can simulate the payment, so you can try the page and your website&apos;s pay button.
+        No money moves, and test payments aren&apos;t counted in the totals.
+      </AlertDescription>
+      {link.canManage && (
+        <Button size="sm" onClick={() => mode.ask("live")} className="col-start-2 mt-2.5 justify-self-start">
+          <Rocket data-icon="inline-start" aria-hidden />
+          Go live
+        </Button>
+      )}
+      {mode.dialog}
+    </Alert>
+  )
+}
+
+/** Copy and edit up front; open, live or test, turn off or on, and delete in the menu. */
 export function LinkActions({ link }: { link: PaymentLink }) {
   const router = useRouter()
   const [confirm, setConfirm] = useState<"off" | "delete" | null>(null)
   const [busy, setBusy] = useState(false)
+  const mode = useModeSwitch(link)
   const active = link.status === "active"
+  // Test payments don't stop a link being deleted (they go with it).
   const used = link.paymentsCount > 0
 
   async function setStatus(status: "active" | "inactive") {
@@ -75,16 +159,30 @@ export function LinkActions({ link }: { link: PaymentLink }) {
               Open the page
             </a>
           </DropdownMenuItem>
+          {link.mode === "test" ? (
+            <DropdownMenuItem onSelect={() => mode.ask("live")}>
+              <Rocket aria-hidden />
+              Go live
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onSelect={() => mode.ask("test")}>
+              <FlaskConical aria-hidden />
+              Switch to test mode
+            </DropdownMenuItem>
+          )}
           {active ? (
             <DropdownMenuItem onSelect={() => setConfirm("off")}>
               <PowerOff aria-hidden />
               Turn off
             </DropdownMenuItem>
           ) : (
-            <DropdownMenuItem disabled={busy} onSelect={() => setStatus("active")}>
-              <Power aria-hidden />
-              Turn on
-            </DropdownMenuItem>
+            // A link LinkPay paused can only be turned back on by LinkPay.
+            !link.takenDown && (
+              <DropdownMenuItem disabled={busy} onSelect={() => setStatus("active")}>
+                <Power aria-hidden />
+                Turn on
+              </DropdownMenuItem>
+            )
           )}
           {!used && (
             <>
@@ -125,6 +223,7 @@ export function LinkActions({ link }: { link: PaymentLink }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {mode.dialog}
     </>
   )
 }

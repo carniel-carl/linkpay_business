@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
 import { FormError } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
+import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { Segmented } from "@/components/ui/segmented";
 import { FocusStatusBar } from "@/components/ui/status-bar";
@@ -213,11 +214,10 @@ function Form({ pocket, branches, initialBranch }: { pocket?: Pocket; branches: 
         />
         {hasTarget && (
           <>
-            <TextField
+            <NairaField
               label="Target amount (₦)"
               value={targetAmount}
-              onChangeText={(v) => setTargetAmount(v.replace(/[^\d.,]/g, ""))}
-              keyboardType="decimal-pad"
+              onChangeText={setTargetAmount}
               error={shown("target")}
               hint={targetKobo && !errors.target ? formatNaira(targetKobo) : undefined}
               style={{ fontFamily: "BricolageText-SemiBold", fontSize: 20 }}
@@ -260,11 +260,10 @@ function Form({ pocket, branches, initialBranch }: { pocket?: Pocket; branches: 
           />
         )}
         {mode === "amount" && (
-          <TextField
+          <NairaField
             label="Amount from every payment in (₦)"
             value={fixed}
-            onChangeText={(v) => setFixed(v.replace(/[^\d.,]/g, ""))}
-            keyboardType="decimal-pad"
+            onChangeText={setFixed}
             error={shown("fixed")}
             hint={fixedKobo && !errors.fixed ? `${formatNaira(fixedKobo)}, or the whole payment if it's smaller` : undefined}
           />

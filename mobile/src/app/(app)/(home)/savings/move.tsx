@@ -7,6 +7,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { PocketTile } from "@/components/savings/pocket-parts";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
+import { NairaField } from "@/components/ui/naira-field";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { useAccounts } from "@/lib/api/banking";
@@ -127,11 +128,10 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
       <FormError message={change.error ? moveError(change.error, branchName) : undefined} />
 
       <View className="gap-3">
-        <TextField
+        <NairaField
           label="Amount (₦)"
           value={amount}
-          onChangeText={(v) => edit({ amount: v.replace(/[^\d.,]/g, "") })}
-          keyboardType="decimal-pad"
+          onChangeText={(amount) => edit({ amount })}
           autoFocus
           error={submitted ? amountError : undefined}
           hint={

@@ -15,8 +15,10 @@ import type {
   PaymentLink,
   PaymentLinkEmbed,
   PaymentLinkImage,
+  PaymentLinkKind,
   PaymentLinkList,
   PaymentLinkSummary,
+  PaymentMode,
   PhoneFieldMode,
   SuggestedPayment,
 } from "./types";
@@ -69,14 +71,14 @@ export function usePaymentLinkEmbed(id: string | undefined) {
   });
 }
 
-/** Checkouts for one link (or every link when `link` is undefined). */
+/** Checkouts for one link, test ones included, or every link's live ones when `link` is undefined (like the totals). */
 export function useLinkCheckouts(link: string | undefined, tab: CheckoutTab, enabled = true) {
   const business = useBusinessKey();
   return useInfiniteQuery({
     queryKey: [business, "payment-links", "checkouts", link ?? "all", tab],
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({ skip: String(pageParam), take: "30", status: tab });
-      if (link) params.set("link", link);
+      params.set(link ? "link" : "mode", link ?? "live");
       return api<LinkCheckoutList>(`/api/payment-links/checkouts?${params}`, { signal });
     },
     initialPageParam: 0,
@@ -119,27 +121,38 @@ export type PaymentLinkInput = {
   allowedOrigins: string[] | null;
   expiresAt: string | null;
   maxPayments: number | null;
+  mode: PaymentMode;
+  /** Donation links only (sending either on a payment link is an error). `null` clears. */
+  goalKobo?: number | null;
+  suggestedAmountsKobo?: number[] | null;
 };
 
 type Change =
-  | { kind: "create"; input: PaymentLinkInput & { branch: string } }
+  /** `linkKind` is the link's kind, set once at creation (sent as `kind`). */
+  | { kind: "create"; input: PaymentLinkInput & { branch: string; linkKind: PaymentLinkKind } }
   | { kind: "update"; id: string; input: Partial<PaymentLinkInput> & { status?: "active" | "inactive" } }
   | { kind: "delete"; id: string }
-  | { kind: "match"; checkoutId: string; transactionId: string };
+  | { kind: "match"; checkoutId: string; transactionId: string }
+  /** Test checkouts only: paid as if the transfer had arrived (the full amount, or half the price). */
+  | { kind: "simulate"; checkoutId: string; outcome: "paid" | "underpaid" };
 
 /** A new link has nothing to clear, so nulls are left out. */
 const withoutNulls = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== ""));
 
 function run(change: Change): Promise<PaymentLink | LinkCheckout | undefined> {
   switch (change.kind) {
-    case "create":
-      return api<PaymentLink>("/api/payment-links", { method: "POST", json: withoutNulls(change.input) });
+    case "create": {
+      const { linkKind, ...input } = change.input;
+      return api<PaymentLink>("/api/payment-links", { method: "POST", json: { ...withoutNulls(input), kind: linkKind } });
+    }
     case "update":
       return api<PaymentLink>(linkPath(change.id), { method: "PATCH", json: change.input });
     case "delete":
       return api<undefined>(linkPath(change.id), { method: "DELETE" });
     case "match":
       return api<LinkCheckout>(checkoutPath(change.checkoutId, "/match"), { method: "POST", json: { transactionId: change.transactionId } });
+    case "simulate":
+      return api<LinkCheckout>(checkoutPath(change.checkoutId, "/simulate"), { method: "POST", json: { outcome: change.outcome } });
   }
 }
 
@@ -150,11 +163,11 @@ export function usePaymentLinkChange() {
   return useMutation({
     mutationFn: run,
     onSuccess: (result, change) => {
-      if (change.kind === "match" && result) {
+      if ((change.kind === "match" || change.kind === "simulate") && result) {
         qc.setQueryData([business, "link-checkout", change.checkoutId], result);
         const linkId = (result as LinkCheckout).link?._id;
         if (linkId) void qc.invalidateQueries({ queryKey: [business, "payment-link", linkId] });
-        void qc.invalidateQueries({ queryKey: [business, "transactions"] });
+        if (change.kind === "match") void qc.invalidateQueries({ queryKey: [business, "transactions"] });
       } else if (result) {
         qc.setQueryData([business, "payment-link", (result as PaymentLink)._id], result);
       }

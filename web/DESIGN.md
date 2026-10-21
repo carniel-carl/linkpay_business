@@ -36,6 +36,7 @@ Every colour, radius and font is a CSS variable in `src/app/globals.css`. Compon
 
 - Greys are cool slate (hue about 250) in both themes.
 - Status colours are semantic only: success is green in light and lime in dark, warning is amber, destructive is red.
+- Test mode is amber everywhere (the test banner, the pay page strip, and the "Test" tag, which is dashed with a flask so it never reads as a status). Donation links have their own rose (`donation`, `donation-foreground`, `donation-subtle`) for the "Donation" tag.
 - Every text pair meets WCAG AA in both themes. The lowest pair is lime on `brand-subtle` in dark mode, at 4.8:1.
 
 ## Shape

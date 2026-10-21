@@ -28,6 +28,7 @@ export const CHECKOUT_STATUS_LABELS: Record<CheckoutStatus, string> = {
 }
 
 export const UNAVAILABLE_LABELS: Record<PaymentLinkUnavailableReason, string> = {
+  taken_down: "Paused by LinkPay",
   inactive: "Turned off",
   expired: "Ended",
   sold_out: "Limit reached",
@@ -40,6 +41,7 @@ export const MATCHED_BY_LABELS: Record<NonNullable<LinkCheckout["matchedBy"]>, s
   amount: "Matched on the exact amount",
   reference: "Matched on the reference in the narration",
   manual: "Linked by hand",
+  simulated: "Simulated payment (test mode)",
 }
 
 export const PAGE_SIZES = [10, 20, 50, 100] as const
@@ -131,10 +133,14 @@ export function linksApiParams(q: LinksQuery, branchId?: string) {
   return params
 }
 
-/** Query string for GET /api/payment-links/checkouts. */
+/**
+ * Query string for GET /api/payment-links/checkouts. Across every link only live payments show, like the
+ * totals; a link's own page shows its test payments too, tagged.
+ */
 export function checkoutsApiParams(q: { status: CheckoutTab; source?: string; q?: string; page: number; size: number }, scope: { link?: string; branch?: string }) {
   const params = new URLSearchParams({ skip: String((q.page - 1) * q.size), take: String(q.size), status: q.status })
   if (scope.link) params.set("link", scope.link)
+  else params.set("mode", "live")
   if (scope.branch) params.set("branch", scope.branch)
   if (q.source) params.set("source", q.source)
   if (q.q) params.set("q", q.q)
@@ -142,7 +148,8 @@ export function checkoutsApiParams(q: { status: CheckoutTab; source?: string; q?
 }
 
 /** "₦25,000", "Any amount", "From ₦1,000". */
-export function priceLabel(link: Pick<PaymentLink, "amountKobo" | "minAmountKobo">) {
+export function priceLabel(link: Pick<PaymentLink, "amountKobo" | "minAmountKobo"> & Partial<Pick<PaymentLink, "kind" | "donation">>) {
+  if (link.kind === "donation") return link.donation?.goalKobo ? `Goal ${formatNaira(link.donation.goalKobo)}` : "Donations"
   if (link.amountKobo) return formatNaira(link.amountKobo)
   return link.minAmountKobo ? `From ${formatNaira(link.minAmountKobo)}` : "Any amount"
 }
@@ -151,8 +158,9 @@ export function priceLabel(link: Pick<PaymentLink, "amountKobo" | "minAmountKobo
 export const linkStateLabel = (link: Pick<PaymentLink, "available" | "unavailableReason">) =>
   link.available ? "On" : UNAVAILABLE_LABELS[link.unavailableReason ?? "inactive"]
 
-/** "3 of 50 paid" for a limited link, otherwise "3 payments". */
-export function paymentsLabel(link: Pick<PaymentLink, "paymentsCount" | "maxPayments">) {
+/** "3 of 50 paid" for a limited link, otherwise "3 payments" ("3 donations" on a donation link). */
+export function paymentsLabel(link: Pick<PaymentLink, "paymentsCount" | "maxPayments"> & Partial<Pick<PaymentLink, "kind">>) {
+  if (link.kind === "donation") return link.paymentsCount === 1 ? "1 donation" : `${link.paymentsCount} donations`
   if (link.maxPayments) return `${link.paymentsCount} of ${link.maxPayments} paid`
   return link.paymentsCount === 1 ? "1 payment" : `${link.paymentsCount} payments`
 }

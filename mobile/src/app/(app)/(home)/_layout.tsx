@@ -3,9 +3,9 @@ import { stackScreenOptions } from "@/components/ui/stack-options";
 import { useTheme } from "@/theme/theme";
 
 /**
- * Home draws its own band; what it opens (an account, a payment, the business switcher, verification, savings)
- * pushes with a native header. Verification lives here because Home is where an unverified business lands;
- * Savings, because each branch card leads to the money set aside from it.
+ * Home draws its own band; what it opens (an account, a payment, the business switcher, verification, savings,
+ * payment links) pushes with a native header. Verification lives here because Home is where an unverified
+ * business lands; Savings and Payment links, because Home's shortcuts and branch cards lead to them.
  */
 export default function HomeLayout() {
   const { colors } = useTheme();
@@ -22,6 +22,11 @@ export default function HomeLayout() {
       <Stack.Screen name="savings/move" options={{ title: "Add money" }} />
       <Stack.Screen name="savings/safelock/new" options={{ title: "New Safelock" }} />
       <Stack.Screen name="savings/safelock/[id]" options={{ title: "Safelock" }} />
+      <Stack.Screen name="payment-links/index" options={{ title: "Payment links" }} />
+      <Stack.Screen name="payment-links/[id]" options={{ title: "Payment link" }} />
+      <Stack.Screen name="payment-links/edit" options={{ title: "New payment link" }} />
+      <Stack.Screen name="payment-links/checkout/[id]" options={{ title: "Payment" }} />
+      <Stack.Screen name="payment-links/qr" options={{ title: "QR code" }} />
       <Stack.Screen name="onboarding/index" options={{ title: "Verification" }} />
       <Stack.Screen name="onboarding/type" options={{ title: "Business type" }} />
       <Stack.Screen name="onboarding/details" options={{ title: "Business details" }} />

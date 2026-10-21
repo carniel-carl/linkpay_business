@@ -15,7 +15,7 @@ import type { PaymentLink, PaymentLinkList } from "@/lib/api/types"
 import { formatNaira, formatShortDate } from "@/lib/format"
 import { DEFAULT_PAGE_SIZE, LINK_TAB_LABELS, LINK_TABS, linkImageSrc, PAGE_SIZES, parseLinksQuery, paymentsLabel, priceLabel, type LinksQuery } from "@/lib/payment-links"
 import { cn } from "@/lib/utils"
-import { LinkStateBadge } from "./parts"
+import { DonationBar, KindBadge, LinkStateBadge, TestBadge } from "./parts"
 
 type Patch = Record<string, string | undefined>
 const helper = createColumnHelper<DataTableFeatures, PaymentLink>()
@@ -84,7 +84,13 @@ export function LinksView({ data, query, showBranch, newLink }: { data: PaymentL
         }),
         helper.accessor("status", {
           header: "Status",
-          cell: ({ row }) => <LinkStateBadge link={row.original} />,
+          cell: ({ row }) => (
+            <span className="flex items-center gap-1.5">
+              <LinkStateBadge link={row.original} />
+              <TestBadge mode={row.original.mode} />
+              <KindBadge link={row.original} />
+            </span>
+          ),
           meta: { label: "Status" },
         }),
         helper.accessor("collectedKobo", {
@@ -92,6 +98,7 @@ export function LinksView({ data, query, showBranch, newLink }: { data: PaymentL
           cell: ({ row }) => (
             <div className="grid justify-items-end gap-0.5 whitespace-nowrap">
               <span className="font-medium figure">{formatNaira(row.original.collectedKobo)}</span>
+              <DonationBar link={row.original} />
               <span className="text-xs text-muted-foreground">
                 {paymentsLabel(row.original)}
                 {row.original.lastPaidAt ? `, last ${formatShortDate(row.original.lastPaidAt)}` : ""}
@@ -206,7 +213,12 @@ export function LinksView({ data, query, showBranch, newLink }: { data: PaymentL
                       </span>
                       <span className="grid justify-items-end gap-1">
                         <span className="font-medium figure">{formatNaira(l.collectedKobo)}</span>
-                        <LinkStateBadge link={l} />
+                        <DonationBar link={l} />
+                        <span className="flex items-center gap-1">
+                          <KindBadge link={l} />
+                          <TestBadge mode={l.mode} />
+                          <LinkStateBadge link={l} />
+                        </span>
                       </span>
                     </Link>
                   </li>

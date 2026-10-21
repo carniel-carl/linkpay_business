@@ -10,6 +10,7 @@ import { Button, TextButton } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
 import { FormError, Notice } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
+import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { Segmented } from "@/components/ui/segmented";
 import { FocusStatusBar } from "@/components/ui/status-bar";
@@ -566,9 +567,18 @@ function Editor({
                   />
                 ))}
               </View>
-              {discountType !== "none" && (
+              {discountType === "amount" && (
+                <NairaField
+                  label="Discount (₦)"
+                  value={discountValue}
+                  editable={!locked}
+                  onChangeText={setDiscountValue}
+                  error={errors.discount}
+                />
+              )}
+              {discountType === "percent" && (
                 <TextField
-                  label={discountType === "amount" ? "Discount (₦)" : "Discount (%)"}
+                  label="Discount (%)"
                   value={discountValue}
                   editable={!locked}
                   onChangeText={(v) => setDiscountValue(v.replace(/[^\d.,%]/g, ""))}
@@ -776,12 +786,11 @@ function ItemCard({
           />
         </View>
         <View className="flex-1">
-          <TextField
+          <NairaField
             label="Price (₦)"
             value={row.price}
             editable={!disabled}
-            onChangeText={(price) => onChange({ price: price.replace(/[^\d.,]/g, "") })}
-            keyboardType="decimal-pad"
+            onChangeText={(price) => onChange({ price })}
             placeholder="0.00"
             error={errors[`items.${index}.price`]}
           />

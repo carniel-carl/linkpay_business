@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Logo } from "@/components/brand/logo";
 import { BranchDeck } from "@/components/home/branch-deck";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { HomeShortcuts } from "@/components/home/shortcuts";
 import { PaymentRow, PaymentRowSkeleton } from "@/components/payments/payment-row";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -57,7 +58,8 @@ function greeting() {
  * Home is the branch deck. A quiet fixed row carries only the LinkPay Business logo and the bell (behind the
  * status bar too). Below it the band, the web dashboard's `brand-surface` (pale in light, deep navy in
  * dark), holds a greeting and the business in view as the title (its own logo beside it when uploaded; tap
- * to switch). The deck overlaps the band's lower edge, then the money that came in today for the card in view.
+ * to switch). The deck overlaps the band's lower edge, then shortcuts to payment links, transfers and savings,
+ * then the money that came in today for the card in view.
  */
 export default function Home() {
   const insets = useSafeAreaInsets();
@@ -106,8 +108,9 @@ export default function Home() {
       </View>
       <ScrollView
         className="flex-1"
-        contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
+        // Starts below the fixed row, so iOS only adds the tab bar's height at the bottom.
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{ paddingBottom: 24 }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -150,6 +153,7 @@ export default function Home() {
                   : undefined
               }
             />
+            {card && <HomeShortcuts branch={card.branch._id} />}
             <AwaitingApproval enabled={can(gate.overview, "transfers.approve")} />
             <PushPrompt />
             {accounts.isError && (

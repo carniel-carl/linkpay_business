@@ -10,6 +10,8 @@ export const NOTIFICATION_TYPES = {
   "transfer.failed": { audience: "user", label: "Your transfer failed", push: true },
   "payment.received": { audience: "user", label: "Money came in", push: true },
   "payment_link.paid": { audience: "user", label: "Someone paid through a payment link", push: true },
+  "payment_link.taken_down": { audience: "user", label: "LinkPay took a payment link down", push: true },
+  "payment_link.restored": { audience: "user", label: "LinkPay restored a payment link", push: true },
   "invoice.viewed": { audience: "user", label: "A customer opened an invoice", push: false },
   "invoice.payment_received": { audience: "user", label: "An invoice was part paid", push: true },
   "invoice.paid": { audience: "user", label: "An invoice was paid in full", push: true },
@@ -34,6 +36,7 @@ export const NOTIFICATION_TYPES = {
   "staff.role_changed": { audience: "staff", label: "Your staff role changed", push: false },
   "compliance.flag_raised": { audience: "staff", label: "A business was flagged", push: false },
   "compliance.business_restricted": { audience: "staff", label: "A business was suspended or closed", push: false },
+  "compliance.link_reported": { audience: "staff", label: "Someone reported a payment link", push: false },
 } as const satisfies Record<string, { audience: "user" | "staff"; label: string; push: boolean }>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

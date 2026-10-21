@@ -3,12 +3,16 @@ import { rateLimit } from "express-rate-limit";
 import { getPublicInvoice, getPublicInvoiceLogo, getPublicInvoicePdf } from "../controllers/publicInvoices";
 import {
   getPublicCheckout,
+  getPublicDonations,
   getPublicPaymentLink,
   getPublicPaymentLinkImage,
   getPublicPaymentLinkLogo,
+  simulatePublicCheckout,
+  reportPublicLink,
   startPublicCheckout,
 } from "../controllers/publicPaymentLinks";
 import { env } from "../config/env";
+import { LINK_REPORT_LIMITS } from "../config/paymentLinks";
 
 // No sign-in: the customer's view of an invoice, and payment-link pages. The unguessable token or slug in
 // the link is the secret.
@@ -38,8 +42,22 @@ const checkoutLimit = rateLimit({
   message: { error: "Too many attempts. Please wait a few minutes and try again.", code: "TOO_MANY_CHECKOUTS" },
 });
 
+// Reports go to staff, so one address can't flood the queue.
+const reportLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: LINK_REPORT_LIMITS.perIpPerHour,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  skip: () => env.nodeEnv === "test",
+  message: { error: "You've sent several reports already. Please try again later.", code: "TOO_MANY_REPORTS" },
+});
+
 publicRouter.get("/pay/:slug", getPublicPaymentLink);
+publicRouter.get("/pay/:slug/donations", getPublicDonations);
+publicRouter.post("/pay/:slug/reports", reportLimit, reportPublicLink);
 publicRouter.get("/pay/:slug/logo", getPublicPaymentLinkLogo);
 publicRouter.get("/pay/:slug/images/:imageId", getPublicPaymentLinkImage);
 publicRouter.post("/pay/:slug/checkouts", checkoutLimit, startPublicCheckout);
 publicRouter.get("/checkouts/:token", getPublicCheckout);
+// Test-mode checkouts only.
+publicRouter.post("/checkouts/:token/simulate", simulatePublicCheckout);

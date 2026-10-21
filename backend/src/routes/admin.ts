@@ -34,6 +34,17 @@ import {
   suspend,
   unban,
 } from "../controllers/compliance";
+import {
+  getAdminPaymentLink,
+  getLinkReport,
+  hideDonation,
+  listAdminDonations,
+  listLinkReports,
+  resolveLinkReportHandler,
+  restorePaymentLink,
+  showDonation,
+  takeDownPaymentLink,
+} from "../controllers/linkReports";
 import { getUser, listUsers } from "../controllers/users";
 import { requireStaff, requireStaffPermission as can } from "../middleware/staff";
 import { staffNotificationsRouter } from "./notifications";
@@ -80,6 +91,17 @@ adminRouter.post("/businesses/:id/reinstate", can("compliance.manage"), reinstat
 adminRouter.post("/businesses/:id/ban", can("compliance.ban"), ban);
 adminRouter.post("/businesses/:id/unban", can("compliance.ban"), unban);
 adminRouter.get("/audit", can("compliance.view"), listAuditLog);
+
+// Reports about payment links (mostly donation links) from the public, and what staff do about them.
+adminRouter.get("/link-reports", can("compliance.view"), listLinkReports);
+adminRouter.get("/link-reports/:id", can("compliance.view"), getLinkReport);
+adminRouter.post("/link-reports/:id/resolve", can("compliance.manage"), resolveLinkReportHandler);
+adminRouter.get("/payment-links/:id", can("compliance.view"), getAdminPaymentLink);
+adminRouter.get("/payment-links/:id/donations", can("compliance.view"), listAdminDonations);
+adminRouter.post("/payment-links/:id/take-down", can("compliance.manage"), takeDownPaymentLink);
+adminRouter.post("/payment-links/:id/restore", can("compliance.manage"), restorePaymentLink);
+adminRouter.post("/donations/:id/hide", can("compliance.manage"), hideDonation);
+adminRouter.post("/donations/:id/show", can("compliance.manage"), showDonation);
 adminRouter.get("/users", can("users.view"), listUsers);
 adminRouter.get("/users/:id", can("users.view"), getUser);
 adminRouter.use("/staff", staffRouter);

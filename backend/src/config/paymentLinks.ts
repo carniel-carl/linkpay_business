@@ -50,3 +50,35 @@ export const EMBED_LIMITS = {
   maxMetadataKeys: 10,
   maxMetadataValueLength: 500,
 } as const;
+
+// Donation links (fundraisers, like GoFundMe; contract: docs/briefs/donations.md). A donation link is a payment
+// link where the donor chooses the amount, with an optional goal, a public list of donors and a report button.
+export const DONATION_LIMITS = {
+  /** A goal of ₦1,000 to ₦10bn. */
+  minGoalKobo: 1_000_00,
+  maxGoalKobo: 10_000_000_000_00,
+  /** Quick-pick amounts on the page ("₦5,000", "₦10,000", ...). */
+  maxSuggestedAmounts: 4,
+  /** The donor's words of support, shown on the page. */
+  maxMessageLength: 280,
+  /** Donors per page of the public list. */
+  maxDonorsPage: 50,
+} as const;
+
+/** Why someone reports a link to LinkPay. The labels are what the report form shows. */
+export const LINK_REPORT_REASONS = {
+  fraud: "It's a scam or the money won't go where it says",
+  misleading: "The story or the goal is misleading",
+  impersonation: "It pretends to be someone else",
+  prohibited: "It's raising money for something illegal",
+  offensive: "Offensive words or pictures, or an offensive donation message",
+  other: "Something else",
+} as const;
+export type LinkReportReason = keyof typeof LINK_REPORT_REASONS;
+export const LINK_REPORT_REASON_KEYS = Object.keys(LINK_REPORT_REASONS) as [LinkReportReason, ...LinkReportReason[]];
+
+export const LINK_REPORT_LIMITS = {
+  maxDetailsLength: 2000,
+  /** Reports per IP address, so the queue can't be flooded. */
+  perIpPerHour: 5,
+} as const;

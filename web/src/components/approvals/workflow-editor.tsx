@@ -7,10 +7,10 @@ import { Check, Plus, Trash2, TriangleAlert, UserPlus, X } from "lucide-react"
 import { toast } from "sonner"
 import { updateApprovalRule } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
-import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
 import type { Approver, TransferSettings } from "@/lib/api/types"
@@ -130,20 +130,13 @@ export function WorkflowEditor({ settings, approvers }: { settings: TransferSett
               <div className="flex flex-wrap items-end justify-between gap-4">
                 <Field data-invalid={!!errors[tier.key]} className="w-full sm:w-72">
                   <FieldLabel htmlFor={`${tier.key}-amount`}>Transfers from</FieldLabel>
-                  <InputGroup>
-                    <InputGroupAddon>
-                      <InputGroupText>₦</InputGroupText>
-                    </InputGroupAddon>
-                    <InputGroupInput
-                      id={`${tier.key}-amount`}
-                      inputMode="decimal"
-                      placeholder="100,000"
-                      className="figure"
-                      value={tier.amount}
-                      aria-invalid={!!errors[tier.key]}
-                      onChange={(e) => updateTier(tier.key, (t) => ({ ...t, amount: e.target.value }))}
-                    />
-                  </InputGroup>
+                  <NairaInput
+                    id={`${tier.key}-amount`}
+                    placeholder="100,000"
+                    value={tier.amount}
+                    invalid={!!errors[tier.key]}
+                    onChange={(amount) => updateTier(tier.key, (t) => ({ ...t, amount }))}
+                  />
                   {errors[tier.key] ? (
                     <FieldError>{errors[tier.key]}</FieldError>
                   ) : (

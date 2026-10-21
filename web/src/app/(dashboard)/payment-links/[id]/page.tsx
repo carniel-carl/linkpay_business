@@ -2,9 +2,12 @@ import type { Metadata } from "next"
 import { notFound, redirect } from "next/navigation"
 import { PageHeader } from "@/components/common/page-header"
 import { CheckoutsView } from "@/components/payment-links/checkouts-view"
+import { DonorsPanel } from "@/components/payment-links/donors-panel"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { EmbedCard, ShareCard } from "@/components/payment-links/embed-card"
-import { LinkActions } from "@/components/payment-links/link-actions"
-import { LinkStateBadge, OriginsList, PaymentLinksLocked } from "@/components/payment-links/parts"
+import { LinkActions, TestModeBanner } from "@/components/payment-links/link-actions"
+import { KindBadge, LinkStateBadge, OriginsList, PaymentLinksLocked, TestBadge } from "@/components/payment-links/parts"
+import { ShieldAlert } from "lucide-react"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import type { PaymentLink } from "@/lib/api/types"
 import { brandingLogoSrc } from "@/components/invoices/parts"
@@ -33,6 +36,8 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
     getBranding(),
   ])
   if (!link) notFound()
+  // A fundraiser's donors, first page (the panel loads more as it scrolls).
+  const donors = link.kind === "donation" ? await getLinkCheckouts(new URLSearchParams({ link: id, status: "received", take: "50" })) : null
   // For the QR code: the business as its payers see it.
   const brand = {
     name: overview.business.name,
@@ -49,6 +54,8 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {link.title}
             <LinkStateBadge link={link} className="font-sans tracking-normal" />
+            <TestBadge mode={link.mode} className="font-sans tracking-normal" />
+            <KindBadge link={link} className="font-sans tracking-normal" />
           </span>
         }
         description={
@@ -61,7 +68,10 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
       />
       <div className="grid min-w-0 grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="grid min-w-0 gap-6">
+          {link.takenDown && <TakenDownBanner link={link} />}
+          <TestModeBanner link={link} />
           <Totals link={link} />
+          {donors?.ok && <DonorsPanel key={`${link._id}-${link.paymentsCount}`} linkId={link._id} initial={donors.data} />}
           {checkouts.ok ? (
             <CheckoutsView
               data={checkouts.data}
@@ -85,7 +95,58 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
   )
 }
 
+/** LinkPay staff paused the link (usually after a report). The reason stays with them. */
+function TakenDownBanner({ link }: { link: PaymentLink }) {
+  return (
+    <Alert variant="destructive">
+      <ShieldAlert aria-hidden />
+      <AlertTitle>Paused by LinkPay</AlertTitle>
+      <AlertDescription>
+        Since {formatDateTime(link.takenDown!.at)}, the page hasn&apos;t taken {link.kind === "donation" ? "donations" : "payments"} while we review
+        it. Only LinkPay can turn it back on. Contact support to find out more.
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 function Totals({ link }: { link: PaymentLink }) {
+  const d = link.donation
+  if (d) {
+    const pct = d.goalKobo ? Math.min(100, (d.raisedKobo / d.goalKobo) * 100) : 0
+    return (
+      <section aria-label="Raised" className="surface grid gap-5 p-6 sm:p-8">
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+          <div className="grid gap-1.5">
+            <p className="text-sm text-muted-foreground">Raised</p>
+            <p className="type-display text-[2.5rem] break-all sm:text-5xl figure">{formatNaira(d.raisedKobo)}</p>
+          </div>
+          {d.goalKobo && (
+            <p className="text-sm text-muted-foreground sm:text-right">
+              <span className="figure font-medium text-foreground">{d.percent}%</span> of the <span className="figure">{formatNaira(d.goalKobo)}</span> goal
+            </p>
+          )}
+        </div>
+        {d.goalKobo && (
+          <div
+            role="progressbar"
+            aria-label="Raised towards the goal"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(pct)}
+            className="h-2.5 overflow-hidden rounded-full bg-muted"
+          >
+            <div className="h-full rounded-full bg-primary transition-[width] duration-700" style={{ width: `${pct}%` }} />
+          </div>
+        )}
+        <p className="text-sm text-muted-foreground">
+          {paymentsLabel(link)}
+          {link.lastPaidAt ? `, the latest ${formatDateTime(link.lastPaidAt)}` : ""}
+          {link.mode === "test" ? ". Live donations only." : ""}
+          {!link.available && link.unavailableReason && link.unavailableReason !== "taken_down" ? `. ${UNAVAILABLE_LABELS[link.unavailableReason]}.` : ""}
+        </p>
+      </section>
+    )
+  }
   return (
     <section aria-label="Totals" className="surface grid gap-6 p-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-8">
       <div className="grid gap-1.5">
@@ -94,6 +155,7 @@ function Totals({ link }: { link: PaymentLink }) {
         <p className="text-sm text-muted-foreground">
           {paymentsLabel(link)}
           {link.lastPaidAt ? `, the latest ${formatDateTime(link.lastPaidAt)}` : ""}
+          {link.mode === "test" ? ". Live payments only." : ""}
         </p>
       </div>
       {!link.available && link.unavailableReason && (
@@ -114,7 +176,20 @@ function Totals({ link }: { link: PaymentLink }) {
 /** What the page asks for and its limits, as saved. */
 function Settings({ link }: { link: PaymentLink }) {
   const rows: [string, React.ReactNode][] = [
-    ["Amount", <span key="a" className="figure">{link.amountKobo ? formatNaira(link.amountKobo) : priceLabel(link)}</span>],
+    ...(link.donation
+      ? ([
+          ["Goal", link.donation.goalKobo ? <span key="g" className="figure">{formatNaira(link.donation.goalKobo)}</span> : <span key="g" className="text-muted-foreground">No goal</span>],
+          [
+            "Quick picks",
+            link.donation.suggestedAmountsKobo.length ? (
+              <span key="p" className="figure">{link.donation.suggestedAmountsKobo.map(formatNaira).join(", ")}</span>
+            ) : (
+              <span key="p" className="text-muted-foreground">None</span>
+            ),
+          ],
+          ["Smallest", link.minAmountKobo ? <span key="m" className="figure">{formatNaira(link.minAmountKobo)}</span> : <span key="m" className="text-muted-foreground">₦100</span>],
+        ] as [string, React.ReactNode][])
+      : ([["Amount", <span key="a" className="figure">{link.amountKobo ? formatNaira(link.amountKobo) : priceLabel(link)}</span>]] as [string, React.ReactNode][])),
     ["Phone number", PHONE_LABELS[link.phone]],
     [
       "Questions",
@@ -138,6 +213,7 @@ function Settings({ link }: { link: PaymentLink }) {
     ["Thank-you message", link.successMessage ?? <span key="m" className="text-muted-foreground">None</span>],
     ["Then sends them to", link.redirectUrl ? <span key="r" className="break-all">{link.redirectUrl}</span> : <span key="r" className="text-muted-foreground">Nowhere</span>],
     ["Websites", <OriginsList key="w" origins={link.allowedOrigins} />],
+    ["Mode", link.mode === "test" ? "Test: placeholder bank details, simulated payments" : "Live"],
   ]
   return (
     <section aria-labelledby="settings-title" className="surface grid min-w-0 gap-4 p-6 [&>*]:min-w-0">

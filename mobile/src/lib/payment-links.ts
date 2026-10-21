@@ -26,6 +26,7 @@ export const CHECKOUT_STATUS_LABELS: Record<CheckoutStatus, string> = {
 };
 
 export const UNAVAILABLE_LABELS: Record<PaymentLinkUnavailableReason, string> = {
+  taken_down: "Paused by LinkPay",
   inactive: "Turned off",
   expired: "Ended",
   sold_out: "Limit reached",
@@ -38,13 +39,26 @@ export const MATCHED_BY_LABELS: Record<NonNullable<LinkCheckout["matchedBy"]>, s
   amount: "Matched on the exact amount",
   reference: "Matched on the reference in the narration",
   manual: "Linked by hand",
+  simulated: "Simulated payment (test mode)",
 };
 
-/** The same limits as backend/src/config/paymentLinks.ts. */
-export const LIMITS = { minAmountKobo: 100_00, maxAmountKobo: 100_000_000_00, maxCustomFields: 5, maxAllowedOrigins: 10 } as const;
+/** The same limits as backend/src/config/paymentLinks.ts (DONATION_LIMITS for the goal and quick picks). */
+export const LIMITS = {
+  minAmountKobo: 100_00,
+  maxAmountKobo: 100_000_000_00,
+  maxCustomFields: 5,
+  maxAllowedOrigins: 10,
+  minGoalKobo: 1_000_00,
+  maxGoalKobo: 10_000_000_000_00,
+  maxSuggestedAmounts: 4,
+} as const;
 
-/** "₦25,000", "Any amount", "From ₦1,000". */
-export function priceLabel(link: Pick<PaymentLink, "amountKobo" | "minAmountKobo">) {
+/** A new fundraiser's quick picks, which the business can change (as on the web). */
+export const DEFAULT_PICKS_KOBO = [2_000_00, 5_000_00, 10_000_00, 25_000_00];
+
+/** "₦25,000", "Any amount", "From ₦1,000"; "Goal ₦15m" or "Donations" on a donation link. */
+export function priceLabel(link: Pick<PaymentLink, "amountKobo" | "minAmountKobo"> & Partial<Pick<PaymentLink, "kind" | "donation">>) {
+  if (link.kind === "donation") return link.donation?.goalKobo ? `Goal ${formatNairaShort(link.donation.goalKobo)}` : "Donations";
   if (link.amountKobo) return formatNairaShort(link.amountKobo);
   return link.minAmountKobo ? `From ${formatNairaShort(link.minAmountKobo)}` : "Any amount";
 }
@@ -52,8 +66,9 @@ export function priceLabel(link: Pick<PaymentLink, "amountKobo" | "minAmountKobo
 export const linkStateLabel = (link: Pick<PaymentLink, "available" | "unavailableReason">) =>
   link.available ? "On" : UNAVAILABLE_LABELS[link.unavailableReason ?? "inactive"];
 
-/** "3 of 50 paid" for a limited link, otherwise "3 payments". */
-export function paymentsLabel(link: Pick<PaymentLink, "paymentsCount" | "maxPayments">) {
+/** "3 of 50 paid" for a limited link, otherwise "3 payments" ("3 donations" on a donation link). */
+export function paymentsLabel(link: Pick<PaymentLink, "paymentsCount" | "maxPayments"> & Partial<Pick<PaymentLink, "kind">>) {
+  if (link.kind === "donation") return link.paymentsCount === 1 ? "1 donation" : `${link.paymentsCount} donations`;
   if (link.maxPayments) return `${link.paymentsCount} of ${link.maxPayments} paid`;
   return link.paymentsCount === 1 ? "1 payment" : `${link.paymentsCount} payments`;
 }

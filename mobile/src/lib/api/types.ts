@@ -600,8 +600,22 @@ export type PocketActivity = { items: PocketMovement[]; nextBefore: string | nul
 // ---- Payment links (contract: docs/briefs/payment-links.md) ----
 
 export type PhoneFieldMode = "off" | "optional" | "required";
-export type PaymentLinkUnavailableReason = "inactive" | "expired" | "sold_out" | "account_not_ready";
+export type PaymentLinkUnavailableReason = "taken_down" | "inactive" | "expired" | "sold_out" | "account_not_ready";
+/** "donation": a fundraiser (donor chooses, optional goal, public donor list). Contract: docs/briefs/donations.md. */
+export type PaymentLinkKind = "payment" | "donation";
+
+/** A fundraiser's figures. Raised includes the few kobo that tell transfers apart; test payments never count. */
+export type DonationProgress = {
+  goalKobo: number | null;
+  raisedKobo: number;
+  donationsCount: number;
+  /** Floor of raised / goal, can pass 100; null without a goal. */
+  percent: number | null;
+  lastDonationAt: string | null;
+};
 export type CheckoutStatus = "pending" | "expired" | "paid" | "underpaid";
+/** "test": placeholder bank details and simulated payments, never counted in totals (brief §6). */
+export type PaymentMode = "live" | "test";
 
 /** A picture on a payment link. `url` is an API path (signed in on the dashboard routes). */
 export type PaymentLinkImage = { _id: string; url: string; width: number; height: number };
@@ -614,9 +628,14 @@ export type PaymentLink = {
   /** WEB_URL/pay/<slug> */
   url: string;
   branch: BranchRef | null;
-  /** null = the payer chooses (at least `minAmountKobo`, if set). */
+  kind: PaymentLinkKind;
+  /** null = the payer chooses (at least `minAmountKobo`, if set). Always null on donation links. */
   amountKobo: number | null;
   minAmountKobo: number | null;
+  /** Donation links only: progress (raised = collectedKobo) and the quick picks. */
+  donation: (DonationProgress & { suggestedAmountsKobo: number[] }) | null;
+  /** LinkPay staff paused the link; only they can turn it back on. */
+  takenDown: { at: string } | null;
   phone: PhoneFieldMode;
   customFields: { _id: string; label: string; required: boolean }[];
   /** In order; the first is the cover. */
@@ -624,10 +643,12 @@ export type PaymentLink = {
   successMessage: string | null;
   redirectUrl: string | null;
   status: "active" | "inactive";
+  mode: PaymentMode;
   /** Websites that may embed it; [] = any site. */
   allowedOrigins: string[];
   expiresAt: string | null;
   maxPayments: number | null;
+  /** Live payments only. */
   paymentsCount: number;
   collectedKobo: number;
   lastPaidAt: string | null;
@@ -656,6 +677,7 @@ export type PaymentLinkEmbed = {
   javascript: string;
   allowedOrigins: string[];
   verifyUrl: string;
+  mode: PaymentMode;
 };
 
 /** One payer's checkout, as the team sees it. */
@@ -663,9 +685,15 @@ export type LinkCheckout = {
   _id: string;
   reference: string;
   status: CheckoutStatus;
+  /** The link's mode when the checkout started. */
+  mode: PaymentMode;
   link: { _id: string; title: string; slug: string } | null;
   branch: BranchRef | null;
   payer: { name: string; email: string; phone: string | null; fields: { label: string; value: string }[] };
+  /** Donation links: whether the name is hidden on the public page, and their words of support. */
+  donor: { anonymous: boolean; message: string | null } | null;
+  /** LinkPay staff took this donation off the public list (it still counts). */
+  hiddenFromPage: boolean;
   priceKobo: number;
   /** What the payer was asked to send: the price plus 1 to 99 kobo. */
   amountKobo: number;
@@ -675,11 +703,14 @@ export type LinkCheckout = {
   embedOrigin: string | null;
   clientReference: string | null;
   metadata: Record<string, string>;
-  matchedBy: "amount" | "reference" | "manual" | null;
+  matchedBy: "amount" | "reference" | "manual" | "simulated" | null;
   matchedByUser: { _id: string; name: string } | null;
   expiresAt: string;
   createdAt: string;
+  /** Never on test checkouts. */
   canMatch: boolean;
+  /** A pending test checkout, for members who manage links. */
+  canSimulate: boolean;
 };
 
 export type LinkCheckoutList = { items: LinkCheckout[]; total: number; skip: number; take: number };

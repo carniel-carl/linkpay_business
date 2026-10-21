@@ -23,7 +23,12 @@ export function hrefFor({ type, data }: NotificationTarget): Href {
   }
   if (type === "payment_link.paid") {
     const id = str(data.checkoutId);
-    return id ? { pathname: "/more/payment-links/checkout/[id]", params: { id } } : "/more/payment-links";
+    return id ? { pathname: "/payment-links/checkout/[id]", params: { id } } : "/payment-links";
+  }
+  // LinkPay staff paused a link, or turned it back on.
+  if (type === "payment_link.taken_down" || type === "payment_link.restored") {
+    const id = str(data.paymentLinkId);
+    return id ? { pathname: "/payment-links/[id]", params: { id } } : "/payment-links";
   }
   if (family === "invoice") {
     const id = str(data.invoiceId);

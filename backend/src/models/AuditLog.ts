@@ -14,6 +14,12 @@ export const AUDIT_ACTIONS = [
   "business.reinstated",
   "business.banned",
   "business.unbanned",
+  // Payment links and donations (reports from the public)
+  "link_report.resolved",
+  "payment_link.taken_down",
+  "payment_link.restored",
+  "donation.hidden",
+  "donation.shown",
   // Staff management
   "staff.invited",
   "staff.invite_revoked",
@@ -40,7 +46,7 @@ const auditLogSchema = new Schema(
     action: { type: String, enum: AUDIT_ACTIONS, required: true },
     business: { type: Types.ObjectId, ref: "Business" },
     target: {
-      kind: { type: String, enum: ["business", "flag", "staff", "staff_invite", "branch"] },
+      kind: { type: String, enum: ["business", "flag", "staff", "staff_invite", "branch", "payment_link", "checkout", "link_report"] },
       id: { type: Types.ObjectId },
     },
     // One readable line, e.g. "Suspended: Suspicious transactions".

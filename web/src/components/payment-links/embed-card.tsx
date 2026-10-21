@@ -134,8 +134,13 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
             <CopyButton value={embed.verifyUrl} message="Address copied" label="Copy address" size="icon-xs" />
           </div>
           <p>
-            Fulfil the order only when <span className="font-mono">status</span> is <span className="font-mono">paid</span> and{" "}
-            <span className="font-mono">clientReference</span> is your order number.
+            Fulfil the order only when <span className="font-mono">status</span> is <span className="font-mono">paid</span>,{" "}
+            <span className="font-mono">mode</span> is <span className="font-mono">live</span> and <span className="font-mono">clientReference</span> is your
+            order number.
+          </p>
+          <p>
+            In test mode the code works the same, but payments are simulated and come back with <span className="font-mono">mode: &quot;test&quot;</span>.
+            Going live keeps the code, so you don&apos;t have to change your website.
           </p>
         </div>
       </details>

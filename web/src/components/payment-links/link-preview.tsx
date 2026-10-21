@@ -1,5 +1,6 @@
 "use client"
 
+import { FundraiserProgress, QuickPicks } from "@/components/pay/donation-parts"
 import { brandVars, LinkSummary, Secured, StepTrack, type SummaryImage } from "@/components/pay/pay-parts"
 import type { BrandPalette, PhoneFieldMode } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
@@ -16,13 +17,15 @@ export type PreviewProps = {
   minAmountKobo: number | null
   phone: PhoneFieldMode
   questions: { label: string; required: boolean }[]
+  /** A donation link: its goal and quick picks, shown as the fundraiser page draws them (nothing raised yet). */
+  donation?: { goalKobo: number | null; suggestedAmountsKobo: number[] } | null
 }
 
 /**
  * The link's page as a customer sees it on a phone, drawn from the form as it's filled in. The top is the
  * pay page's own `LinkSummary` (components/pay/pay-parts.tsx), so it matches; the sheet below is a sketch.
  */
-export function LinkPreview({ business, title, description, images, fixed, amountKobo, minAmountKobo, phone, questions }: PreviewProps) {
+export function LinkPreview({ business, title, description, images, fixed, amountKobo, minAmountKobo, phone, questions, donation }: PreviewProps) {
   const price = fixed ? (amountKobo ?? 0) : null
   return (
     <div style={brandVars(business.palette)} className="pay-brand overflow-hidden rounded-[18px] bg-background shadow-surface">
@@ -36,12 +39,20 @@ export function LinkPreview({ business, title, description, images, fixed, amoun
           minAmountKobo={fixed ? null : minAmountKobo}
           images={images}
           variant="panel"
+          price={
+            donation && (
+              <FundraiserProgress
+                progress={{ goalKobo: donation.goalKobo, raisedKobo: 0, donationsCount: 0, percent: donation.goalKobo ? 0 : null, lastDonationAt: null }}
+              />
+            )
+          }
         />
       </div>
       <div className="relative z-10 -mt-16 grid gap-4 px-4 pb-6 sm:px-6" aria-hidden>
         <div className="surface grid gap-5 p-6">
           <StepTrack step={0} />
           <div className="grid gap-4">
+            {donation && donation.suggestedAmountsKobo.length > 0 && <QuickPicks amounts={donation.suggestedAmountsKobo} selectedKobo={null} onPick={() => {}} />}
             {!fixed && <FakeField label="Amount" hint={minAmountKobo ? `At least ${formatNaira(minAmountKobo)}` : undefined} value="₦" />}
             <FakeField label="Your name" />
             <FakeField label="Email" />
@@ -53,7 +64,7 @@ export function LinkPreview({ business, title, description, images, fixed, amoun
               ))}
           </div>
           <span className="grid h-11 place-items-center rounded-full bg-(--biz) text-sm font-medium text-(--on-biz)">
-            {fixed ? `Pay ${formatNaira(price ?? 0)}` : "Continue to pay"}
+            {donation ? "Donate by bank transfer" : fixed ? `Pay ${formatNaira(price ?? 0)}` : "Continue to pay"}
           </span>
         </div>
         <Secured businessName={business.name} className="text-center text-muted-foreground" />

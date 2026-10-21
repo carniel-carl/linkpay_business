@@ -116,7 +116,7 @@ export const FAQ: FaqTopic[] = [
     questions: [
       {
         q: "What is a savings pocket?",
-        a: "A named pot inside a branch's account, for things like VAT, payroll or rent. The money stays in the branch's account but is set aside, so transfers can't spend it. Each branch can have up to 20 open pockets. Find them under More, Savings.",
+        a: "A named pot inside a branch's account, for things like VAT, payroll or rent. The money stays in the branch's account but is set aside, so transfers can't spend it. Each branch can have up to 20 open pockets. Find them under Savings on Home.",
       },
       {
         q: "Can I take money out of a pocket?",

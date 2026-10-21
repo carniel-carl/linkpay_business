@@ -5,6 +5,7 @@ import { Check } from "lucide-react"
 import { toast } from "sonner"
 import { createPocket, updatePocket } from "@/app/(dashboard)/savings/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -401,39 +402,6 @@ function ChoiceButton({
     >
       {children}
     </button>
-  )
-}
-
-export function NairaInput({
-  id,
-  value,
-  invalid,
-  onChange,
-  autoFocus,
-}: {
-  id: string
-  value: string
-  invalid?: boolean
-  onChange: (value: string) => void
-  autoFocus?: boolean
-}) {
-  return (
-    <InputGroup>
-      <InputGroupAddon>
-        <InputGroupText>₦</InputGroupText>
-      </InputGroupAddon>
-      <InputGroupInput
-        id={id}
-        inputMode="decimal"
-        autoComplete="off"
-        placeholder="0.00"
-        className="figure"
-        value={value}
-        autoFocus={autoFocus}
-        aria-invalid={invalid}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </InputGroup>
   )
 }
 

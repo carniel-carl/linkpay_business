@@ -5,6 +5,7 @@ import { Plus, Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 import { recordPayment, removePayment, setReminders, suggestedPayments } from "@/app/(dashboard)/invoices/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,7 +22,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
 import type { Invoice, InvoicePayment, PaymentMethod, SuggestedPayment } from "@/lib/api/types"
@@ -350,20 +350,7 @@ function RecordPaymentDialog({ invoice, open, onOpenChange }: { invoice: Invoice
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field data-invalid={!!amountError}>
                   <FieldLabel htmlFor="payment-amount">Amount</FieldLabel>
-                  <InputGroup>
-                    <InputGroupAddon>
-                      <InputGroupText>₦</InputGroupText>
-                    </InputGroupAddon>
-                    <InputGroupInput
-                      id="payment-amount"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      className="figure"
-                      value={amount}
-                      aria-invalid={!!amountError}
-                      onChange={(e) => setAmount(e.target.value)}
-                    />
-                  </InputGroup>
+                  <NairaInput id="payment-amount" placeholder="" value={amount} invalid={!!amountError} onChange={setAmount} />
                   {amountError && <FieldError>{amountError}</FieldError>}
                 </Field>
                 <Field>

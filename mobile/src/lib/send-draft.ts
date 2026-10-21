@@ -35,3 +35,16 @@ export function parseNaira(text: string) {
   if (!m) return undefined;
   return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
 }
+
+/**
+ * What a naira field shows while typing: "2000000.5" -> "2,000,000.5". Keeps digits and the first
+ * point, at most 9 naira digits and 2 kobo digits, so the result always parses with parseNaira.
+ */
+export function formatNairaInput(text: string) {
+  const clean = text.replace(/[^\d.]/g, "");
+  const dot = clean.indexOf(".");
+  const whole = (dot < 0 ? clean : clean.slice(0, dot)).replace(/^0+(?=\d)/, "").slice(0, 9);
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (dot < 0) return grouped;
+  return `${grouped || "0"}.${clean.slice(dot + 1).replace(/\./g, "").slice(0, 2)}`;
+}

@@ -5,6 +5,7 @@ const names = [
   "pop", "pop-foreground", "pop-subtle", "brand-subtle", "brand-surface", "brand-surface-foreground", "brand-surface-muted", "band", "band-foreground", "band-muted", "band-raised", "band-danger",
   "secondary", "muted", "muted-foreground", "border", "input", "ring",
   "success", "success-foreground", "success-subtle", "warning", "warning-foreground", "warning-subtle",
+  "donation", "donation-foreground", "donation-subtle",
   "destructive", "destructive-foreground", "destructive-subtle",
   "paper", "paper-ink", "paper-muted", "paper-rule", "paper-tint",
 ];

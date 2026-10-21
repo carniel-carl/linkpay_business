@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
-import type { LinkCheckout, PaymentLink, PaymentLinkImage, SuggestedPayment } from "@/lib/api/types"
+import type { LinkCheckout, LinkCheckoutList, PaymentLink, PaymentLinkImage, SuggestedPayment } from "@/lib/api/types"
 
 const id = z.string().regex(/^[a-f\d]{24}$/i)
 const kobo = z.number().int().min(100_00).max(100_000_000_00)
@@ -15,6 +15,9 @@ const linkFields = {
   description: text(500).nullable().optional(),
   amountKobo: kobo.nullable().optional(),
   minAmountKobo: kobo.nullable().optional(),
+  /** Donation links: the goal and up to 4 quick-pick amounts (docs/briefs/donations.md). */
+  goalKobo: z.number().int().min(1_000_00).max(10_000_000_000_00).nullable().optional(),
+  suggestedAmountsKobo: z.array(kobo).max(4).nullable().optional(),
   phone: z.enum(["off", "optional", "required"]).optional(),
   customFields: z
     .array(z.object({ _id: id.optional(), label: text(60).min(1), required: z.boolean() }))
@@ -27,9 +30,10 @@ const linkFields = {
   allowedOrigins: z.array(text(200)).max(10).nullable().optional(),
   expiresAt: z.iso.datetime().nullable().optional(),
   maxPayments: z.number().int().min(1).max(1_000_000).nullable().optional(),
+  mode: z.enum(["live", "test"]).optional(),
 }
 
-const createInput = z.object({ branch: id, ...linkFields })
+const createInput = z.object({ branch: id, kind: z.enum(["payment", "donation"]).optional(), ...linkFields })
 const updateInput = z.object({ ...linkFields, title: linkFields.title.optional(), status: z.enum(["active", "inactive"]).optional() })
 export type PaymentLinkCreate = z.input<typeof createInput>
 export type PaymentLinkUpdate = z.input<typeof updateInput>
@@ -77,6 +81,12 @@ export async function deletePaymentLink(linkId: string) {
   return result
 }
 
+/** A donation link's donors, newest first, a page at a time (the detail page's virtualized list). */
+export async function loadLinkDonors(linkId: string, skip: number) {
+  const params = new URLSearchParams({ link: id.parse(linkId), status: "received", skip: String(Math.max(0, Math.floor(skip))), take: "50" })
+  return runAction(() => api<LinkCheckoutList>(`/api/payment-links/checkouts?${params}`))
+}
+
 /** Incoming transfers that look like they're for this checkout, to link one by hand. */
 export async function checkoutSuggestions(checkoutId: string) {
   return runAction(async () => (await api<{ items: SuggestedPayment[] }>(checkoutPath(checkoutId, "/suggested-payments"))).items)
@@ -91,5 +101,12 @@ export async function matchCheckout(checkoutId: string, transactionId: string, l
     refresh(linkId ?? result.data.link?._id)
     revalidatePath("/transactions")
   }
+  return result
+}
+
+/** Test mode: pays a test checkout with a simulated transfer (the full amount, or half the price). No money moves. */
+export async function simulateCheckout(checkoutId: string, outcome: "paid" | "underpaid", linkId?: string) {
+  const result = await runAction(() => api<LinkCheckout>(checkoutPath(checkoutId, "/simulate"), { method: "POST", json: { outcome } }))
+  if (result.ok) refresh(linkId ?? result.data.link?._id)
   return result
 }

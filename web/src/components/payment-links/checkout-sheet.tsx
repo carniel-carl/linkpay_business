@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { Link2 } from "lucide-react"
+import { FlaskConical, Link2 } from "lucide-react"
 import { toast } from "sonner"
-import { checkoutSuggestions, matchCheckout } from "@/app/(dashboard)/payment-links/actions"
+import { checkoutSuggestions, matchCheckout, simulateCheckout } from "@/app/(dashboard)/payment-links/actions"
 import { CopyButton } from "@/components/accounts/copy-button"
 import { FormError } from "@/components/common/form-error"
 import { Badge } from "@/components/ui/badge"
@@ -16,7 +16,7 @@ import type { LinkCheckout, SuggestedPayment } from "@/lib/api/types"
 import { formatDateTime, formatNaira, formatShortDate } from "@/lib/format"
 import { MATCHED_BY_LABELS, originLabel, uniqueKobo } from "@/lib/payment-links"
 import { cn } from "@/lib/utils"
-import { CheckoutStatusBadge } from "./parts"
+import { CheckoutStatusBadge, TestBadge } from "./parts"
 
 /** One payer's checkout: what they were asked to send, what came in and how it was matched. */
 export function CheckoutSheet({ checkout, onClose }: { checkout: LinkCheckout | null; onClose: () => void }) {
@@ -36,7 +36,10 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
   return (
     <>
       <SheetHeader className="gap-4 border-b bg-muted/50 p-6 pr-14">
-        <CheckoutStatusBadge status={c.status} />
+        <span className="flex items-center gap-1.5">
+          <CheckoutStatusBadge status={c.status} />
+          <TestBadge mode={c.mode} />
+        </span>
         <div className="grid gap-1.5">
           <SheetDescription className="text-foreground">
             <span className="font-display text-lg font-semibold tracking-[-0.02em]">{c.payer.name}</span>
@@ -51,9 +54,11 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
               ? `Part paid: ${formatNaira(c.priceKobo - (c.paidKobo ?? 0))} short of ${formatNaira(c.priceKobo)}.`
               : received
                 ? `Received ${formatDateTime(c.paidAt ?? undefined)}.`
-                : c.status === "expired"
-                  ? "Their time to pay ran out with nothing matched. A late transfer can still be linked below."
-                  : `Waiting for their transfer until ${formatDateTime(c.expiresAt)}.`}
+                : c.mode === "test"
+                  ? "A test payment: no money moves. Simulate the transfer below to see what happens when one arrives."
+                  : c.status === "expired"
+                    ? "Their time to pay ran out with nothing matched. A late transfer can still be linked below."
+                    : `Waiting for their transfer until ${formatDateTime(c.expiresAt)}.`}
           </p>
         </div>
       </SheetHeader>
@@ -98,7 +103,7 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
 
       <section aria-labelledby="payer-title" className="grid gap-3 border-b p-6 text-sm">
         <h3 id="payer-title" className="font-medium">
-          Customer
+          {c.donor ? "Donor" : "Customer"}
         </h3>
         <dl className="grid gap-3">
           <Row label="Email">
@@ -118,6 +123,18 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
               <span className="whitespace-pre-line">{f.value}</span>
             </Row>
           ))}
+          {c.donor && (
+            <>
+              <Row label="On the page">
+                {c.hiddenFromPage ? "Hidden by LinkPay" : c.donor.anonymous ? "As Anonymous" : `Under their name`}
+              </Row>
+              {c.donor.message && (
+                <Row label="Message">
+                  <span className="whitespace-pre-line">&ldquo;{c.donor.message}&rdquo;</span>
+                </Row>
+              )}
+            </>
+          )}
         </dl>
       </section>
 
@@ -137,6 +154,7 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
       )}
 
       {c.canMatch && <LinkPayment checkout={c} />}
+      {c.canSimulate && <SimulatePayment checkout={c} />}
     </>
   )
 }
@@ -147,6 +165,45 @@ function Row({ label, children }: { label: React.ReactNode; children: React.Reac
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="min-w-0">{children}</dd>
     </div>
+  )
+}
+
+/** Test checkouts: pay it as if the transfer had arrived, to try the notification, receipt and the website's flow. */
+function SimulatePayment({ checkout }: { checkout: LinkCheckout }) {
+  const [busy, setBusy] = useState<"paid" | "underpaid" | null>(null)
+  const [error, setError] = useState<string>()
+
+  async function simulate(outcome: "paid" | "underpaid") {
+    setBusy(outcome)
+    setError(undefined)
+    const result = await simulateCheckout(checkout._id, outcome, checkout.link?._id)
+    setBusy(null)
+    if (!result.ok) return setError(result.error)
+    toast.success(outcome === "paid" ? "Test payment received. We've emailed a test receipt." : "Test part payment received.")
+  }
+
+  return (
+    <section aria-labelledby="simulate-title" className="grid gap-4 p-6">
+      <div className="grid gap-1">
+        <h3 id="simulate-title" className="text-sm font-medium">
+          Simulate the payment
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Marks this test checkout as paid, as if {checkout.payer.name}&apos;s transfer had arrived. A part payment sends half the price.
+        </p>
+      </div>
+      <FormError message={error} />
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => simulate("paid")} disabled={!!busy}>
+          {busy === "paid" ? <Spinner /> : <FlaskConical data-icon="inline-start" aria-hidden />}
+          Simulate payment
+        </Button>
+        <Button variant="outline" onClick={() => simulate("underpaid")} disabled={!!busy}>
+          {busy === "underpaid" && <Spinner />}
+          Simulate part payment
+        </Button>
+      </div>
+    </section>
   )
 }
 

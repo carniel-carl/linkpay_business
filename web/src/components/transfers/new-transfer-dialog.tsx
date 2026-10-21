@@ -5,6 +5,7 @@ import { Check, ChevronsUpDown, Send } from "lucide-react"
 import { toast } from "sonner"
 import { createTransfer, listBanks, quoteFee, resolveAccount } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import {
@@ -18,7 +19,6 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
@@ -282,21 +282,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
 
             <Field data-invalid={!!errors.amount}>
               <FieldLabel htmlFor="transfer-amount">Amount</FieldLabel>
-              <InputGroup>
-                <InputGroupAddon>
-                  <InputGroupText>₦</InputGroupText>
-                </InputGroupAddon>
-                <InputGroupInput
-                  id="transfer-amount"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  placeholder="0.00"
-                  className="figure"
-                  value={amount}
-                  aria-invalid={!!errors.amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-              </InputGroup>
+              <NairaInput id="transfer-amount" value={amount} invalid={!!errors.amount} onChange={setAmount} />
               {errors.amount ? (
                 <FieldError>{errors.amount}</FieldError>
               ) : (

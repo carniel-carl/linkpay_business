@@ -5,6 +5,7 @@ import { ArrowDownLeft, ArrowUpRight, Archive, Pencil, Plus, Zap } from "lucide-
 import { toast } from "sonner"
 import { closePocket, getPocketActivity, movePocketMoney } from "@/app/(dashboard)/savings/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +28,7 @@ import { formatDate, formatDateTime, formatNaira } from "@/lib/format"
 import { describeAutoSave, formatDay, MOVEMENT_LABELS } from "@/lib/savings"
 import { koboToInput, parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
-import { NairaInput, PocketFormDialog, type PocketBranch } from "./pocket-form-dialog"
+import { PocketFormDialog, type PocketBranch } from "./pocket-form-dialog"
 import { PocketProgress, PocketTags, PocketTile, TargetLine } from "./parts"
 
 type Props = {

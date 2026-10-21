@@ -752,9 +752,30 @@ export type SafelockLimits = {
 
 export type PhoneFieldMode = "off" | "optional" | "required"
 export type PaymentLinkStatus = "active" | "inactive"
-export type PaymentLinkUnavailableReason = "inactive" | "expired" | "sold_out" | "account_not_ready"
+export type PaymentLinkUnavailableReason = "taken_down" | "inactive" | "expired" | "sold_out" | "account_not_ready"
+/** "donation": a fundraiser (donor chooses, optional goal, public donor list). Contract: docs/briefs/donations.md. */
+export type PaymentLinkKind = "payment" | "donation"
+
+/** A fundraiser's figures. Raised includes the few kobo that tell transfers apart; test payments never count. */
+export type DonationProgress = {
+  goalKobo: number | null
+  raisedKobo: number
+  donationsCount: number
+  /** Floor of raised / goal, can pass 100; null without a goal. */
+  percent: number | null
+  lastDonationAt: string | null
+}
+
+/** One donation as anyone can see it: no email, and no name when the donor chose to stay anonymous. */
+export type PublicDonation = { _id: string; name: string | null; anonymous: boolean; amountKobo: number; message: string | null; paidAt: string | null }
+export type PublicDonationPage = { items: PublicDonation[]; nextBefore: string | null }
+export type DonationSort = "recent" | "top"
+/** GET /api/public/pay/:slug/donations */
+export type PublicDonationFeed = PublicDonationPage & { progress: DonationProgress }
 export type CheckoutStatus = "pending" | "expired" | "paid" | "underpaid"
 export type CheckoutSource = "page" | "embed"
+/** "test": placeholder bank details and simulated payments, never counted in totals (brief §6). */
+export type PaymentMode = "live" | "test"
 
 export type PaymentLinkField = { _id: string; label: string; required: boolean }
 
@@ -773,9 +794,14 @@ export type PaymentLink = {
   /** WEB_URL/pay/<slug> */
   url: string
   branch: BranchRef | null
+  kind: PaymentLinkKind
   /** null = the payer chooses (at least `minAmountKobo`, if set). */
   amountKobo: number | null
   minAmountKobo: number | null
+  /** Donation links only. */
+  donation: (DonationProgress & { suggestedAmountsKobo: number[] }) | null
+  /** LinkPay staff paused it; the business can't turn it back on. */
+  takenDown: { at: string } | null
   currency: "NGN"
   phone: PhoneFieldMode
   customFields: PaymentLinkField[]
@@ -784,10 +810,12 @@ export type PaymentLink = {
   successMessage: string | null
   redirectUrl: string | null
   status: PaymentLinkStatus
+  mode: PaymentMode
   /** Websites that may embed it; [] = any site. */
   allowedOrigins: string[]
   expiresAt: string | null
   maxPayments: number | null
+  /** Live payments only. */
   paymentsCount: number
   collectedKobo: number
   lastPaidAt: string | null
@@ -819,6 +847,8 @@ export type PaymentLinkEmbed = {
   allowedOrigins: string[]
   /** API_URL/api/public/checkouts/{token} */
   verifyUrl: string
+  /** The link's mode now; the verify call returns each checkout's own. */
+  mode: PaymentMode
 }
 
 /** A payer's checkout as the team sees it (GET /api/payment-links/checkouts). */
@@ -826,9 +856,15 @@ export type LinkCheckout = {
   _id: string
   reference: string
   status: CheckoutStatus
+  /** The link's mode when the checkout started. */
+  mode: PaymentMode
   link: { _id: string; title: string; slug: string } | null
   branch: BranchRef | null
   payer: { name: string; email: string; phone: string | null; fields: { label: string; value: string }[] }
+  /** Donation links: hidden name on the public list, and their message. */
+  donor: { anonymous: boolean; message: string | null } | null
+  /** LinkPay staff took this donation off the public list. */
+  hiddenFromPage: boolean
   priceKobo: number
   /** What the payer was asked to send: the price plus 1 to 99 kobo. */
   amountKobo: number
@@ -840,12 +876,15 @@ export type LinkCheckout = {
   /** The business's own order id, from its website. */
   clientReference: string | null
   metadata: Record<string, string>
-  matchedBy: "amount" | "reference" | "manual" | null
+  matchedBy: "amount" | "reference" | "manual" | "simulated" | null
   matchedByUser: { _id: string; name: string } | null
   transaction: string | null
   expiresAt: string
   createdAt: string
+  /** Never on test checkouts. */
   canMatch: boolean
+  /** A pending test checkout, for members who manage links. */
+  canSimulate: boolean
 }
 
 export type LinkCheckoutList = { items: LinkCheckout[]; total: number; skip: number; take: number }
@@ -855,6 +894,7 @@ export type PublicPaymentLink = {
   business: { name: string; logo: { url: string; width: number; height: number } | null; palette: BrandPalette }
   link: {
     slug: string
+    kind: PaymentLinkKind
     title: string
     description: string | null
     amountKobo: number | null
@@ -867,6 +907,9 @@ export type PublicPaymentLink = {
     images: PaymentLinkImage[]
   }
   embed: { allowedOrigins: string[] }
+  mode: PaymentMode
+  /** Donation links: progress, quick picks and the first page of donors (newest first). */
+  donation: (DonationProgress & { suggestedAmountsKobo: number[]; recent: PublicDonationPage }) | null
   available: boolean
   unavailableReason: PaymentLinkUnavailableReason | null
 }
@@ -876,6 +919,8 @@ export type PublicCheckout = {
   token: string
   reference: string
   status: CheckoutStatus
+  /** "test": `payTo` is a placeholder and the page offers to simulate the payment. */
+  mode: PaymentMode
   priceKobo: number
   /** Send exactly this. */
   amountKobo: number
@@ -889,7 +934,9 @@ export type PublicCheckout = {
   clientReference: string | null
   metadata: Record<string, string>
   /** `image` is the link's cover picture. */
-  link: { slug: string; title: string; image: PaymentLinkImage | null }
+  link: { slug: string; title: string; kind: PaymentLinkKind; image: PaymentLinkImage | null }
+  /** Donation links: how the donation shows on the page. */
+  donor: { anonymous: boolean; message: string | null } | null
   business: PublicPaymentLink["business"]
   successMessage: string | null
   redirectUrl: string | null

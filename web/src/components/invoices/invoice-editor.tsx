@@ -7,6 +7,7 @@ import { Check, ChevronsUpDown, Plus, Trash2, UserPlus } from "lucide-react"
 import { toast } from "sonner"
 import { saveInvoice, type InvoiceInput, type InvoicePatch } from "@/app/(dashboard)/invoices/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command"
@@ -405,22 +406,13 @@ export function InvoiceEditor({ branches, customers, branding, defaults, busines
                       <FieldLabel htmlFor={`item-${r.key}-price`} className={cn(i > 0 && "sm:sr-only")}>
                         Unit price
                       </FieldLabel>
-                      <InputGroup>
-                        <InputGroupAddon>
-                          <InputGroupText>₦</InputGroupText>
-                        </InputGroupAddon>
-                        <InputGroupInput
-                          id={`item-${r.key}-price`}
-                          inputMode="decimal"
-                          autoComplete="off"
-                          placeholder="0.00"
-                          className="figure"
-                          disabled={locked}
-                          value={r.price}
-                          aria-invalid={!!errors[`items.${i}.price`]}
-                          onChange={(e) => updateRow(r.key, { price: e.target.value })}
-                        />
-                      </InputGroup>
+                      <NairaInput
+                        id={`item-${r.key}-price`}
+                        disabled={locked}
+                        value={r.price}
+                        invalid={!!errors[`items.${i}.price`]}
+                        onChange={(price) => updateRow(r.key, { price })}
+                      />
                     </Field>
                     <div className="flex items-center justify-between gap-3 text-sm sm:col-span-3 sm:-mt-1">
                       <span className="text-muted-foreground">
@@ -466,13 +458,23 @@ export function InvoiceEditor({ branches, customers, branding, defaults, busines
                     <option value="amount">Amount</option>
                     <option value="percent">Percent</option>
                   </NativeSelect>
-                  {discountType !== "none" && (
+                  {discountType === "amount" && (
+                    <NairaInput
+                      aria-label="Discount amount"
+                      placeholder=""
+                      disabled={locked}
+                      value={discountValue}
+                      invalid={!!errors.discount}
+                      onChange={setDiscountValue}
+                    />
+                  )}
+                  {discountType === "percent" && (
                     <InputGroup>
-                      <InputGroupAddon align={discountType === "percent" ? "inline-end" : undefined}>
-                        <InputGroupText>{discountType === "percent" ? "%" : "₦"}</InputGroupText>
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupText>%</InputGroupText>
                       </InputGroupAddon>
                       <InputGroupInput
-                        aria-label={discountType === "percent" ? "Discount percentage" : "Discount amount"}
+                        aria-label="Discount percentage"
                         inputMode="decimal"
                         autoComplete="off"
                         className="figure"

@@ -50,6 +50,9 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning-subtle: var(--warning-subtle);
+  --color-donation: var(--donation);
+  --color-donation-foreground: var(--donation-foreground);
+  --color-donation-subtle: var(--donation-subtle);
   --color-destructive-subtle: var(--destructive-subtle);
   --color-brand-subtle: var(--brand-subtle);
   --color-pop: var(--pop);
@@ -130,6 +133,10 @@
   --warning: oklch(0.74 0.14 70);
   --warning-foreground: oklch(0.45 0.1 60);
   --warning-subtle: oklch(0.96 0.045 85);
+  /* Donation links: a rose of their own, so fundraisers are recognisable in lists. */
+  --donation: oklch(0.6 0.16 350);
+  --donation-foreground: oklch(0.47 0.14 350);
+  --donation-subtle: oklch(0.95 0.035 350);
   --destructive: oklch(0.54 0.19 27);
   --destructive-subtle: oklch(0.96 0.022 25);
 
@@ -171,6 +178,24 @@
   --pocket-amber-subtle: oklch(0.94 0.06 80);
   --pocket-slate: oklch(0.55 0.03 250);
   --pocket-slate-subtle: oklch(0.94 0.03 250);
+
+  /*
+   * Fundraisers: a warm paper ground, and the donor tickets. A ticket is printed paper, so its fill and ink
+   * are the same in both themes. Each donation's colour is picked from the donor's name.
+   */
+  --fund-ground: oklch(0.945 0.013 75);
+  --donor-amber: oklch(0.85 0.12 80);
+  --donor-amber-ink: oklch(0.33 0.07 65);
+  --donor-sky: oklch(0.83 0.07 245);
+  --donor-sky-ink: oklch(0.3 0.07 250);
+  --donor-coral: oklch(0.79 0.1 35);
+  --donor-coral-ink: oklch(0.3 0.08 35);
+  --donor-green: oklch(0.83 0.08 160);
+  --donor-green-ink: oklch(0.31 0.06 160);
+  --donor-violet: oklch(0.8 0.08 295);
+  --donor-violet-ink: oklch(0.29 0.1 295);
+  --donor-rose: oklch(0.81 0.09 355);
+  --donor-rose-ink: oklch(0.3 0.09 360);
 }
 
 .dark {
@@ -208,6 +233,9 @@
   --warning: oklch(0.85 0.13 80);
   --warning-foreground: oklch(0.9 0.1 85);
   --warning-subtle: oklch(0.44 0.06 70);
+  --donation: oklch(0.8 0.12 350);
+  --donation-foreground: oklch(0.9 0.07 350);
+  --donation-subtle: oklch(0.42 0.08 350);
   --destructive: oklch(0.83 0.12 25);
   --destructive-subtle: oklch(0.37 0.06 25);
 
@@ -249,6 +277,9 @@
   --pocket-amber-subtle: oklch(0.44 0.07 80);
   --pocket-slate: oklch(0.78 0.04 250);
   --pocket-slate-subtle: oklch(0.44 0.03 250);
+
+  /* Fundraisers: the ground goes dark with the page; the tickets keep their print colours. */
+  --fund-ground: oklch(0.3 0.04 252);
 }
 
 @layer base {
@@ -432,6 +463,47 @@
   from {
     opacity: 0;
     transform: scale(0.6) rotate(-8deg);
+  }
+}
+
+/* A new donation slides into the top of the list, its row tinted in the business colour, then settles. */
+@utility donation-in {
+  animation: donation-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  background-color: var(--biz-soft);
+  transition: background-color 2400ms ease 3000ms;
+}
+
+@keyframes donation-in {
+  from {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.98);
+  }
+}
+
+/* A new donation's ticket prints onto the top of the roll: it feeds down out of the spool. */
+@utility ticket-print {
+  animation: ticket-print 1100ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes ticket-print {
+  from {
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(-28px);
+  }
+}
+
+/* A light sweep along the fundraiser's progress bar when a donation lands. */
+@utility donation-sheen {
+  background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--biz) 45%, transparent), transparent);
+  animation: donation-sheen 1400ms cubic-bezier(0.45, 0, 0.2, 1) 500ms both;
+}
+
+@keyframes donation-sheen {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(400%);
   }
 }
 

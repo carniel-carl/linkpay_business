@@ -4,9 +4,9 @@ import { Alert, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
+import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { FocusStatusBar } from "@/components/ui/status-bar";
-import { TextField } from "@/components/ui/text-field";
 import { friendlyMessage } from "@/lib/api/errors";
 import { describeApprovalRule, useApprovalRule, useSaveApprovalRule } from "@/lib/api/transfers";
 import type { ApprovalRule } from "@/lib/api/types";
@@ -96,11 +96,10 @@ function RuleForm({ rule }: { rule: ApprovalRule }) {
         ))}
       </OptionList>
       {mode === "above_threshold" && (
-        <TextField
+        <NairaField
           label="Needs approval from (₦)"
           value={threshold}
-          onChangeText={(v) => setThreshold(v.replace(/[^\d.,]/g, ""))}
-          keyboardType="decimal-pad"
+          onChangeText={setThreshold}
           placeholder="500,000"
           error={submitted ? thresholdError : undefined}
           hint={kobo && !thresholdError ? formatNaira(kobo) : undefined}

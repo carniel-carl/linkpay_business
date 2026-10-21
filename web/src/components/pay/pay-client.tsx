@@ -2,19 +2,50 @@
 
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { ArrowLeft, ArrowRight, CalendarX2, Check, CircleAlert, CircleSlash, Clock, Landmark, X } from "lucide-react"
+import { ArrowLeft, ArrowRight, CalendarX2, Check, CircleAlert, CircleSlash, Clock, FlaskConical, Landmark, X } from "lucide-react"
 import { CopyButton } from "@/components/accounts/copy-button"
-import { NairaInput } from "@/components/savings/pocket-form-dialog"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
-import type { PublicCheckout, PublicPaymentLink } from "@/lib/api/types"
+import type { PublicCheckout, PublicDonation, PublicPaymentLink } from "@/lib/api/types"
 import { formatDateTime, formatNaira } from "@/lib/format"
 import { countdown, publicLinkImageSrc } from "@/lib/payment-links"
 import { koboToInput, parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
-import { AccountNumber, brandVars, LinkSummary, Money, Perforation, Secured, StepTrack, StepTimeline, type PayStep } from "./pay-parts"
+import {
+  DonateBar,
+  DonorOptions,
+  FundraiserGallery,
+  FundraiserProgress,
+  GiftSteps,
+  MAX_MESSAGE,
+  naira,
+  RaisedSummary,
+  QuickPicks,
+  ReportDialog,
+  ReportLink,
+  ShareButton,
+  Ticket,
+  TicketRoll,
+  TicketStub,
+  useDonationFeed,
+  type GiftStep,
+} from "./donation-parts"
+import {
+  AccountNumber,
+  BIZ_BUTTON,
+  brandVars,
+  BusinessMark,
+  LinkSummary,
+  Money,
+  Perforation,
+  Secured,
+  StepTrack,
+  StepTimeline,
+  type PayStep,
+} from "./pay-parts"
 
 export type EmbedMode = "popup" | "inline" | null
 
@@ -45,6 +76,8 @@ const summary = (c: PublicCheckout) => ({
   token: c.token,
   reference: c.reference,
   status: c.status,
+  // "test": simulated, no money moved. The website's server should only fulfil "live" (and confirm it itself).
+  mode: c.mode,
   priceKobo: c.priceKobo,
   amountKobo: c.amountKobo,
   paidKobo: c.paidKobo,
@@ -72,9 +105,6 @@ const SLOW_POLL_MS = 15_000
 const PAY_WINDOW_MS = 30 * 60_000
 /** The backend keeps matching a checkout's amount for 2 hours from the start (30 minutes to pay + 90). */
 const WATCH_AFTER_EXPIRY_MS = 90 * 60_000
-
-/** The main button, in the business's colour. */
-const BIZ_BUTTON = "h-12 w-full bg-(--biz) text-[15px] text-(--on-biz) hover:bg-[color-mix(in_oklch,var(--biz),var(--on-biz)_14%)]"
 
 export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, prefill }: Props) {
   const router = useRouter()
@@ -139,22 +169,38 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
     showSheetTop()
   }
 
+  // Donation links: the live progress and donor list, and the report form (about the page or one donation).
+  const feed = useDonationFeed(data.link.slug, data.donation)
+  const [report, setReport] = useState<{ donation: PublicDonation | null } | null>(null)
+  const refreshFeed = feed?.refresh
+
   const updated = useCallback(
     (c: PublicCheckout) => {
       if (lastStatus.current && lastStatus.current !== c.status) {
         post("update", { checkout: summary(c) })
         if (c.status === "paid") post("paid", { checkout: summary(c), redirectUrl: c.redirectUrl })
+        // The payer's own donation landed: show it in the list and the total now.
+        if (c.status === "paid") refreshFeed?.()
       }
       lastStatus.current = c.status
       setCheckout(c)
     },
-    [post],
+    [post, refreshFeed],
   )
+
+  // Fundraisers ask for the amount first, then the donor's details. The website may have set the amount already.
+  const amountSet = !!(embed && prefill.amountKobo)
+  const [onDetails, setOnDetails] = useState(amountSet)
+  const formStage = (stage: "amount" | "details") => {
+    setOnDetails(stage === "details")
+    showSheetTop()
+  }
 
   function startAgain() {
     lastStatus.current = undefined
     setCheckout(null)
     setUrlCheckout(null)
+    setOnDetails(amountSet)
     showSheetTop()
   }
 
@@ -173,12 +219,15 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
   const vars = brandVars(business.palette)
   const images = (link.images ?? []).map((img) => ({ src: publicLinkImageSrc(link.slug, img), width: img.width, height: img.height }))
   const step: PayStep = !checkout ? (data.available ? 0 : -1) : checkout.status === "paid" ? 2 : 1
+  const giftStep: GiftStep = step === 2 ? 3 : step === 1 ? 2 : onDetails ? 1 : 0
+  // A checkout keeps the mode it started in, even if the link has switched since.
+  const testMode = (checkout?.mode ?? data.mode) === "test"
 
   // Keyed by step so each step makes its own entrance.
   const body = checkout ? (
     <CheckoutPanel key={`c-${checkout.status === "paid" ? "paid" : "open"}`} checkout={checkout} embed={embed} onUpdate={updated} onBack={startAgain} />
   ) : data.available ? (
-    <PayForm key="form" data={data} embed={embed} prefill={prefill} onStarted={started} />
+    <PayForm key="form" data={data} embed={embed} prefill={prefill} onStarted={started} onStage={formStage} />
   ) : (
     <Unavailable data={data} />
   )
@@ -193,6 +242,16 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
     images,
     titleId: "pay-title",
   }
+  const reportDialog = feed && report && (
+    <ReportDialog
+      key={report.donation?._id ?? "page"}
+      slug={link.slug}
+      businessName={business.name}
+      donation={report.donation}
+      open
+      onOpenChange={(open) => !open && setReport(null)}
+    />
+  )
 
   if (embed) {
     const card = (
@@ -201,6 +260,7 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
           <LinkSummary
             {...summaryProps}
             variant="compact"
+            price={feed && <FundraiserProgress progress={feed.progress} latest={feed.latest} variant="compact" />}
             action={
               embed === "popup" && (
                 <button
@@ -215,7 +275,12 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
             }
           />
         </header>
-        <StepTrack step={step} className="px-6 pt-6 sm:px-8" />
+        {testMode && <TestModeStrip />}
+        {feed ? (
+          step >= 0 && <GiftSteps step={giftStep} className="px-6 pt-6 sm:px-8" />
+        ) : (
+          <StepTrack step={step} className="px-6 pt-6 sm:px-8" />
+        )}
         {body}
       </article>
     )
@@ -242,6 +307,37 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
     )
   }
 
+  if (feed) {
+    return (
+      <FundraiserPage
+        vars={vars}
+        slug={link.slug}
+        businessName={business.name}
+        logoSrc={logoSrc}
+        title={link.title}
+        story={link.description}
+        images={images}
+        feed={feed}
+        sheetRef={sheet}
+        sheet={
+          <>
+            {testMode && <TestModeStrip />}
+            {step >= 0 && (
+              <>
+                <TicketStub number={feed.progress.donationsCount + 1} />
+                <GiftSteps step={giftStep} className="px-6 pt-5 sm:px-7" />
+              </>
+            )}
+            {body}
+          </>
+        }
+        canGive={!checkout && data.available}
+        onReport={(donation) => setReport({ donation })}
+        reportDialog={reportDialog}
+      />
+    )
+  }
+
   // Its own page: the business's colour owns the left of the screen (the top on a phone), and the
   // sheet where the payer works sits on LinkPay's paper, overlapping the band on a phone.
   return (
@@ -261,6 +357,7 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
       <div className="relative z-10 -mt-16 px-4 pb-10 sm:px-6 lg:mt-0 lg:flex lg:min-h-dvh lg:flex-col lg:items-center lg:justify-center lg:px-12 lg:py-10 short:py-4">
         <div className="mx-auto grid w-full max-w-120 gap-5">
           <section ref={sheet} aria-label="Payment" className="surface scroll-mt-4 overflow-hidden">
+            {testMode && <TestModeStrip />}
             <StepTrack step={step} className="px-6 pt-6 sm:px-8 lg:hidden" />
             {body}
           </section>
@@ -271,11 +368,145 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
   )
 }
 
+/**
+ * A fundraiser on its own page, as a ticket roll: what the money is for (title, pictures, total, story) on warm
+ * paper, the roll of everyone who's given hanging from a spool in the business's colour, and the giving card.
+ * Wide screens set the three side by side, with the roll and the card sticky; on a laptop the roll follows the
+ * story; on a phone the card comes straight after the total, and a Donate bar waits while it's off screen.
+ */
+function FundraiserPage({
+  vars,
+  slug,
+  businessName,
+  logoSrc,
+  title,
+  story,
+  images,
+  feed,
+  sheetRef,
+  sheet,
+  canGive,
+  onReport,
+  reportDialog,
+}: {
+  vars: React.CSSProperties
+  slug: string
+  businessName: string
+  logoSrc: string | null
+  title: string
+  story: string | null
+  images: { src: string; width: number; height: number }[]
+  feed: NonNullable<ReturnType<typeof useDonationFeed>>
+  sheetRef: React.RefObject<HTMLElement | null>
+  sheet: React.ReactNode
+  /** The form is showing (no checkout yet, and the link is taking donations). */
+  canGive: boolean
+  onReport: (donation: PublicDonation | null) => void
+  reportDialog: React.ReactNode
+}) {
+  // The phone's Donate bar shows while the giving card is off screen.
+  const [cardInView, setCardInView] = useState(true)
+  useEffect(() => {
+    const el = sheetRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(([entry]) => setCardInView(entry.isIntersecting), { threshold: 0.15 })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [sheetRef])
+
+  function goGive() {
+    sheetRef.current?.scrollIntoView({ block: "start", behavior: "smooth" })
+    // Focus without a second jump, once the scroll has started.
+    setTimeout(() => sheetRef.current?.querySelector<HTMLElement>("[aria-pressed], #pay-amount, input")?.focus({ preventScroll: true }), 350)
+  }
+
+  const hasPictures = images.length > 0
+  // The left column's rows, so the roll and the card span exactly them (the roll joins the column below xl).
+  const rows = 4 + (hasPictures ? 1 : 0) + (story ? 1 : 0)
+  return (
+    <main style={vars} className="pay-brand min-h-dvh bg-(--fund-ground)">
+      <div
+        style={{ "--rows-lg": rows, "--rows-xl": rows - 1 } as React.CSSProperties}
+        className="mx-auto grid w-full max-w-360 gap-x-10 gap-y-8 px-4 pt-6 pb-28 sm:px-6 sm:pt-10 lg:grid-cols-[minmax(0,1fr)_24rem] lg:px-10 lg:pb-16 xl:grid-cols-[minmax(0,1fr)_20rem_24rem] xl:gap-x-12 xl:pt-0 2xl:grid-cols-[minmax(0,1fr)_22rem_25rem]"
+      >
+        <header className="page-enter grid gap-6 lg:col-start-1 xl:pt-10">
+          <div className="flex items-center gap-3">
+            <BusinessMark name={businessName} logoSrc={logoSrc} className="bg-(--biz) text-(--on-biz)" />
+            <p className="grid min-w-0 flex-1 leading-snug">
+              <span className="truncate text-[15px] font-medium">{businessName}</span>
+              <span className="text-sm text-muted-foreground">is raising money</span>
+            </p>
+            <ShareButton title={title} className="rounded-full bg-transparent" />
+          </div>
+          <h1 id="pay-title" className="type-display text-[2.75rem] text-balance sm:text-6xl 2xl:text-[4rem]">
+            {title}
+          </h1>
+        </header>
+
+        {hasPictures && <FundraiserGallery images={images} title={title} className="lg:col-start-1" />}
+
+        <RaisedSummary progress={feed.progress} latest={feed.items[0] ?? null} className="lg:col-start-1" />
+
+        <aside className="lg:sticky lg:top-6 lg:col-start-2 lg:max-h-[calc(100dvh-3rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:rounded-2xl lg:[grid-row:1/span_var(--rows-lg)] xl:top-10 xl:col-start-3 xl:mt-10 xl:max-h-[calc(100dvh-5rem)] xl:[grid-row:1/span_var(--rows-xl)]">
+          <section ref={sheetRef} aria-label="Donate" className="surface scroll-mt-4 overflow-hidden">
+            {sheet}
+          </section>
+          <Secured businessName={businessName} className="mt-4 px-2 text-center text-muted-foreground" />
+        </aside>
+
+        {story && (
+          <section aria-labelledby="story-title" className="grid gap-3 lg:col-start-1">
+            <h2 id="story-title" className="type-display text-2xl">
+              About this fundraiser
+            </h2>
+            <p className="max-w-[65ch] text-[17px] leading-relaxed text-pretty whitespace-pre-line">{story}</p>
+          </section>
+        )}
+
+        {/* On wide screens the roll hangs the full height of the window beside the story, and stays as the page scrolls. */}
+        <div className="lg:col-start-1 xl:col-start-2 xl:[contain:size] xl:[grid-row:1/span_var(--rows-xl)]">
+          <TicketRoll slug={slug} feed={feed} onReport={onReport} className="max-h-[min(46rem,82dvh)] xl:sticky xl:top-0 xl:h-dvh xl:max-h-none" />
+        </div>
+
+        <ReportLink onClick={() => onReport(null)} className="justify-self-start lg:col-start-1" />
+      </div>
+      <DonateBar progress={feed.progress} visible={canGive && !cardInView} onDonate={goGive} />
+      {reportDialog}
+    </main>
+  )
+}
+
+/** Test mode (the business is trying the page out): says so on every step. */
+function TestModeStrip() {
+  return (
+    <p className="flex items-start gap-2.5 border-b border-dashed border-warning/50 bg-warning-subtle px-6 py-3 text-sm text-warning-foreground sm:px-8">
+      <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+      <span>
+        <span className="font-semibold">Test mode.</span> No real money moves. The bank details are placeholders, and you can
+        simulate the payment.
+      </span>
+    </p>
+  )
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // The form
 // ---------------------------------------------------------------------------------------------------------
 
-function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink; embed: EmbedMode; prefill: Prefill; onStarted: (c: PublicCheckout) => void }) {
+function PayForm({
+  data,
+  embed,
+  prefill,
+  onStarted,
+  onStage,
+}: {
+  data: PublicPaymentLink
+  embed: EmbedMode
+  prefill: Prefill
+  onStarted: (c: PublicCheckout) => void
+  /** Fundraisers: the form moved between the amount and the donor's details. */
+  onStage?: (stage: "amount" | "details") => void
+}) {
   const { link } = data
   const open = !link.amountKobo
   // The website set the amount (its cart total): shown, not editable.
@@ -288,9 +519,31 @@ function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink;
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
+  // Donation links: the donor's choices for the public list.
+  const donation = link.kind === "donation"
+  const [anonymous, setAnonymous] = useState(false)
+  const [message, setMessage] = useState("")
+  const picks = data.donation?.suggestedAmountsKobo ?? []
 
   const min = link.minAmountKobo ?? 100_00
   const max = link.maxAmountKobo ?? 100_000_000_00
+  // A fundraiser asks for the amount on its own first, so the donor decides before typing anything else.
+  const [stage, setStage] = useState<"amount" | "details">(donation && !lockedAmount ? "amount" : "details")
+  const go = (to: "amount" | "details") => {
+    setStage(to)
+    onStage?.(to)
+  }
+  const amountKobo = open ? (lockedAmount ?? parseNairaToKobo(amount) ?? undefined) : undefined
+  const amountOk = !!amountKobo && amountKobo >= min && amountKobo <= max
+  const amountError = `Enter an amount from ${formatNaira(min)} to ${formatNaira(max)}.`
+
+  function toDetails(e: React.FormEvent) {
+    e.preventDefault()
+    if (!amountOk) return setErrors({ amountKobo: amountError })
+    setErrors({})
+    setError(undefined)
+    go("details")
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -299,12 +552,9 @@ function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) next.email = "Enter a valid email address, for your receipt."
     if (link.phone === "required" && !phone.trim()) next.phone = "Enter your phone number."
     if (phone.trim() && !/^\+?[0-9 ()-]{7,20}$/.test(phone.trim())) next.phone = "Enter a valid phone number."
-    let amountKobo: number | undefined
-    if (open) {
-      amountKobo = lockedAmount ?? parseNairaToKobo(amount) ?? undefined
-      if (!amountKobo || amountKobo < min || amountKobo > max) next.amountKobo = `Enter an amount from ${formatNaira(min)} to ${formatNaira(max)}.`
-    }
+    if (open && !amountOk) next.amountKobo = amountError
     for (const f of link.customFields) if (f.required && !fields[f._id]?.trim()) next[`fields.${f._id}`] = `Fill in "${f.label}".`
+    if (message.length > MAX_MESSAGE) next.message = `Keep your message under ${MAX_MESSAGE} characters.`
     setErrors(next)
     if (Object.keys(next).length) return
 
@@ -316,6 +566,7 @@ function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink;
       ...(link.phone !== "off" && phone.trim() && { phone: phone.trim() }),
       ...(amountKobo && { amountKobo }),
       fields: Object.fromEntries(Object.entries(fields).filter(([, v]) => v.trim())),
+      ...(donation && { anonymous, ...(message.trim() && { message: message.trim() }) }),
       ...(embed && {
         source: "embed",
         embedOrigin: parentOrigin(prefill.origin),
@@ -345,7 +596,10 @@ function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink;
       setErrors({
         [field === "phone" ? "phone" : `fields.${field}`]: json.error,
       })
-    if (json?.code === "INVALID_AMOUNT") setErrors({ amountKobo: json.error })
+    if (json?.code === "INVALID_AMOUNT") {
+      setErrors({ amountKobo: json.error })
+      if (donation && !lockedAmount) go("amount")
+    }
     if (Array.isArray(json?.details)) {
       const fe: Record<string, string> = {}
       for (const issue of json.details as {
@@ -357,19 +611,80 @@ function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink;
     }
   }
 
+  const errorNote = error && (
+    <p role="alert" className="flex gap-2 rounded-xl bg-destructive-subtle px-3.5 py-3 text-sm text-destructive">
+      <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+      {error}
+    </p>
+  )
+
+  if (donation && stage === "amount") {
+    return (
+      <form onSubmit={toDetails} noValidate className="page-enter grid gap-5 px-6 pt-5 pb-7 sm:px-7 sm:pb-8">
+        <div className="grid gap-1">
+          <h2 className="type-display text-[1.75rem]">Add your gift</h2>
+          <p className="text-sm text-muted-foreground">Paid by bank transfer, straight to {data.business.name}.</p>
+        </div>
+        {errorNote}
+        {picks.length > 0 && (
+          <div className="grid gap-2.5">
+            <p id="gift-picks" className="text-sm font-medium">
+              Choose an amount
+            </p>
+            <QuickPicks
+              amounts={picks}
+              labelledBy="gift-picks"
+              selectedKobo={parseNairaToKobo(amount)}
+              onPick={(kobo) => {
+                setAmount(koboToInput(kobo).replace(/\.00$/, ""))
+                setErrors({})
+              }}
+            />
+          </div>
+        )}
+        <Field data-invalid={!!errors.amountKobo}>
+          <FieldLabel htmlFor="pay-amount">{picks.length ? "Or enter your own" : "How much would you like to give?"}</FieldLabel>
+          <NairaInput id="pay-amount" value={amount} invalid={!!errors.amountKobo} onChange={setAmount} />
+          {errors.amountKobo ? (
+            <FieldError>{errors.amountKobo}</FieldError>
+          ) : (
+            link.minAmountKobo &&
+            link.minAmountKobo > 100_00 && <FieldDescription>At least {formatNaira(link.minAmountKobo)}.</FieldDescription>
+          )}
+        </Field>
+        <Button type="submit" size="lg" className={cn(BIZ_BUTTON, "mt-1")}>
+          {amountOk ? `Donate ${giftAmount(amountKobo!)}` : "Continue"}
+          <ArrowRight data-icon="inline-end" aria-hidden />
+        </Button>
+      </form>
+    )
+  }
+
   return (
     <form onSubmit={submit} noValidate className="page-enter grid gap-5 px-6 pt-6 pb-7 sm:px-8 sm:pt-8 sm:pb-8 short:gap-3.5 short:pt-6 short:pb-6">
-      <div className="grid gap-1">
-        <h2 className="type-display text-2xl">Your details</h2>
-        <p className="text-sm text-muted-foreground">Next, we show you the account to send the money to.</p>
-      </div>
-      {error && (
-        <p role="alert" className="flex gap-2 rounded-xl bg-destructive-subtle px-3.5 py-3 text-sm text-destructive">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-          {error}
-        </p>
+      {donation ? (
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-(--biz-soft) py-3 pr-2 pl-4">
+          <div className="grid">
+            <span className="text-xs text-muted-foreground">Your gift</span>
+            <span className="type-display text-[1.75rem] leading-tight">
+              <Money kobo={amountKobo ?? 0} />
+            </span>
+          </div>
+          {!lockedAmount && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => go("amount")}>
+              Change
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="grid gap-1">
+          <h2 className="type-display text-2xl">Your details</h2>
+          <p className="text-sm text-muted-foreground">Next, we show you the account to send the money to.</p>
+        </div>
       )}
+      {errorNote}
       {open &&
+        !donation &&
         (lockedAmount ? (
           <div className="grid gap-0.5 rounded-xl bg-(--biz-soft) px-4 py-3">
             <span className="text-xs text-muted-foreground">Amount</span>
@@ -456,13 +771,33 @@ function PayForm({ data, embed, prefill, onStarted }: { data: PublicPaymentLink;
           </Field>
         )
       })}
+      {donation && (
+        <>
+          <DonorOptions anonymous={anonymous} message={message} onAnonymous={setAnonymous} onMessage={setMessage} error={errors.message} />
+          <div className="grid gap-2">
+            <p className="text-sm text-muted-foreground">Your ticket on the roll</p>
+            <Ticket
+              label="Your ticket"
+              name={anonymous ? null : name.trim() || "Your name"}
+              toneKey={(data.donation?.donationsCount ?? 0) + 1}
+              amountKobo={amountKobo ?? null}
+              message={message.trim() || null}
+              when="Prints once your transfer lands"
+              className="rounded-[6px] transition-colors duration-300"
+            />
+          </div>
+        </>
+      )}
       <Button type="submit" size="lg" disabled={busy} className={cn(BIZ_BUTTON, "mt-2")}>
         {busy ? <Spinner /> : <Landmark data-icon="inline-start" aria-hidden />}
-        Pay by bank transfer
+        {donation ? `Donate ${amountKobo ? giftAmount(amountKobo) : ""} by bank transfer` : "Pay by bank transfer"}
       </Button>
     </form>
   )
 }
+
+/** "₦5,000" for whole amounts, "₦5,000.50" otherwise: the donor's own figure on the button. */
+const giftAmount = (kobo: number) => (kobo % 100 ? formatNaira(kobo) : naira(kobo))
 
 /** Copy for the payer, who has no LinkPay account: never mentions roles or the dashboard. */
 function payErrorMessage(code?: string, fallback?: string) {
@@ -489,14 +824,18 @@ function payErrorMessage(code?: string, fallback?: string) {
 
 function Unavailable({ data }: { data: PublicPaymentLink }) {
   const reason = data.unavailableReason
+  const donation = data.link.kind === "donation"
+  const what = donation ? "donations" : "payments"
   const text =
-    reason === "expired"
-      ? "This link has ended and isn't taking payments any more."
-      : reason === "sold_out"
-        ? "This link has reached its limit and isn't taking more payments."
-        : reason === "account_not_ready"
-          ? "This business can't take payments yet. Try again later."
-          : "This link isn't taking payments right now."
+    reason === "taken_down"
+      ? `This ${donation ? "fundraiser" : "link"} has been paused while LinkPay reviews it.`
+      : reason === "expired"
+        ? `This ${donation ? "fundraiser" : "link"} has ended and isn't taking ${what} any more.`
+        : reason === "sold_out"
+          ? `This link has reached its limit and isn't taking more ${what}.`
+          : reason === "account_not_ready"
+            ? `This business can't take ${what} yet. Try again later.`
+            : `This ${donation ? "fundraiser" : "link"} isn't taking ${what} right now.`
   const Icon = reason === "expired" ? CalendarX2 : reason === "account_not_ready" ? Clock : CircleSlash
   return (
     <div className="page-enter grid gap-5 px-6 py-8 sm:px-8 sm:py-10">
@@ -504,9 +843,9 @@ function Unavailable({ data }: { data: PublicPaymentLink }) {
         <Icon className="size-6" aria-hidden />
       </span>
       <div className="grid gap-1.5">
-        <h2 className="type-display text-2xl">Not taking payments</h2>
+        <h2 className="type-display text-2xl">Not taking {what}</h2>
         <p className="text-[15px] leading-relaxed text-muted-foreground">
-          {text} Contact {data.business.name} if you need to pay them.
+          {text} {reason === "taken_down" ? "" : `Contact ${data.business.name} if you need to pay them.`}
         </p>
       </div>
     </div>
@@ -622,6 +961,8 @@ function CheckoutPanel({
         <p className="mx-6 mb-6 rounded-xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground sm:mx-8">This business can&apos;t take payments right now.</p>
       )}
 
+      {c.mode === "test" && c.payTo && <SimulateTransfer checkout={c} onUpdate={onUpdate} />}
+
       <div className="grid gap-3 border-t px-6 py-5 sm:px-8 short:gap-2 short:py-4">
         <div className="flex items-center gap-3">
           {watching ? (
@@ -679,6 +1020,55 @@ function CheckoutPanel({
   )
 }
 
+/** Test checkouts: pay as if the transfer had arrived, so the business sees the paid screen, receipt and its website's callbacks. */
+function SimulateTransfer({ checkout: c, onUpdate }: { checkout: PublicCheckout; onUpdate: (c: PublicCheckout) => void }) {
+  const [busy, setBusy] = useState<"paid" | "underpaid" | null>(null)
+  const [error, setError] = useState<string>()
+
+  async function simulate(outcome: "paid" | "underpaid") {
+    setBusy(outcome)
+    setError(undefined)
+    try {
+      const res = await fetch(`/api/pay/checkouts/${encodeURIComponent(c.token)}/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outcome }),
+      })
+      const json = await res.json().catch(() => null)
+      if (res.ok && json) return onUpdate(json as PublicCheckout)
+      setError(json?.code === "CHECKOUT_NOT_PENDING" ? "This test payment has already been made." : (json?.error ?? "That didn't work. Try again."))
+    } catch {
+      setError("We couldn't reach LinkPay. Check your connection and try again.")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="grid gap-3 border-t border-dashed px-6 py-5 sm:px-8 short:py-4">
+      <p className="text-sm leading-relaxed text-pretty text-muted-foreground">
+        Don&apos;t send money to these details. Simulate the transfer to see what your customers see once theirs lands.
+      </p>
+      {error && (
+        <p role="alert" className="flex gap-2 rounded-xl bg-destructive-subtle px-3.5 py-3 text-sm text-destructive">
+          <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+          {error}
+        </p>
+      )}
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <Button type="button" size="lg" disabled={!!busy} onClick={() => simulate("paid")} className={BIZ_BUTTON}>
+          {busy === "paid" ? <Spinner /> : <FlaskConical data-icon="inline-start" aria-hidden />}
+          Simulate payment
+        </Button>
+        <Button type="button" size="lg" variant="outline" disabled={!!busy} onClick={() => simulate("underpaid")} className="h-12 text-[15px]">
+          {busy === "underpaid" && <Spinner />}
+          Simulate part payment
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 /** Hairline rows of facts, as on a receipt. */
 function Receipt({ rows }: { rows: [string, React.ReactNode][] }) {
   return (
@@ -702,7 +1092,9 @@ function Underpaid({ checkout: c }: { checkout: PublicCheckout }) {
       <div className="grid gap-2">
         <h2 className="type-display text-[2rem]">Part payment received</h2>
         <p className="text-[15px] leading-relaxed text-muted-foreground">
-          {c.business.name} received part of the price. Contact them about the rest, quoting the reference below.
+          {c.mode === "test"
+            ? "A simulated part payment of half the price. This is what a customer sees if they send too little."
+            : `${c.business.name} received part of the price. Contact them about the rest, quoting the reference below.`}
         </p>
       </div>
       <Receipt
@@ -739,9 +1131,10 @@ function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMo
     return () => clearTimeout(id)
   }, [embed, c.redirectUrl])
 
+  const donation = c.link.kind === "donation"
   const rows: [string, React.ReactNode][] = [
     [
-      "Amount paid",
+      donation ? "You gave" : "Amount paid",
       <span key="a" className="figure">
         {formatNaira(c.paidKobo ?? c.amountKobo)}
       </span>,
@@ -768,11 +1161,39 @@ function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMo
         <Check className="size-7" strokeWidth={2.5} aria-hidden />
       </span>
       <div className="grid gap-2">
-        <h2 className="type-display text-[2rem]">Payment received</h2>
+        <h2 className="type-display text-[2rem]">
+          {c.mode === "test" ? (donation ? "Test donation received" : "Test payment received") : donation ? "Thank you for giving" : "Payment received"}
+        </h2>
         <p className="text-[15px] leading-relaxed text-muted-foreground">
-          {c.business.name} has your payment. We&apos;ve emailed a receipt to <span className="text-foreground">{c.payer.email}</span>.
+          {c.mode === "test" ? (
+            <>
+              No money was sent. We&apos;ve emailed a test receipt to <span className="text-foreground">{c.payer.email}</span>.
+            </>
+          ) : donation ? (
+            <>
+              {c.business.name} has your donation. It shows on this page{" "}
+              {c.donor?.anonymous ? "as Anonymous" : <>under your name, {c.payer.name}</>}. We&apos;ve emailed a receipt to{" "}
+              <span className="text-foreground">{c.payer.email}</span>.
+            </>
+          ) : (
+            <>
+              {c.business.name} has your payment. We&apos;ve emailed a receipt to <span className="text-foreground">{c.payer.email}</span>.
+            </>
+          )}
         </p>
       </div>
+      {donation && c.mode === "live" && (
+        <Ticket
+          label="Your ticket"
+          flag="On the roll"
+          name={c.donor?.anonymous ? null : c.payer.name}
+          toneKey={c.donor?.anonymous ? "anonymous" : c.payer.name}
+          amountKobo={c.paidKobo ?? c.amountKobo}
+          message={c.donor?.message ?? null}
+          when="Just now"
+          className="ticket-print rounded-[6px]"
+        />
+      )}
       {c.successMessage && (
         <figure className="grid gap-1 rounded-xl bg-(--biz-soft) px-4 py-3.5">
           <figcaption className="text-xs text-muted-foreground">From {c.business.name}</figcaption>
@@ -780,6 +1201,12 @@ function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMo
         </figure>
       )}
       <Receipt rows={rows} />
+      {donation && !c.redirectUrl && (
+        <div className="grid gap-2">
+          <p className="text-sm text-muted-foreground">Share it with people who&apos;d want to help.</p>
+          <ShareButton title={c.link.title} size="lg" className="h-12 w-full text-[15px]" />
+        </div>
+      )}
       {c.redirectUrl && (
         <div className="grid gap-2">
           <Button asChild size="lg" className={BIZ_BUTTON}>

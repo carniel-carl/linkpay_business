@@ -5,6 +5,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
@@ -186,11 +187,10 @@ export default function Send() {
         </OptionList>
       )}
 
-      <TextField
+      <NairaField
         label="Amount (₦)"
         value={draft.amount}
-        onChangeText={(v) => update({ amount: v.replace(/[^\d.,]/g, "") })}
-        keyboardType="decimal-pad"
+        onChangeText={(amount) => update({ amount })}
         placeholder="0.00"
         error={show(errors.amount)}
         hint={kobo && !errors.amount ? formatNaira(kobo) : limit !== undefined ? `${formatNaira(limit)} available` : undefined}

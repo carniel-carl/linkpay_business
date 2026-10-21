@@ -7,7 +7,7 @@ import { Plus, X } from "lucide-react"
 import { toast } from "sonner"
 import { createPaymentLink, updatePaymentLink, type PaymentLinkCreate } from "@/app/(dashboard)/payment-links/actions"
 import { FormError } from "@/components/common/form-error"
-import { NairaInput } from "@/components/savings/pocket-form-dialog"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import type { BrandPalette, PaymentLink, PhoneFieldMode } from "@/lib/api/types"
+import type { BrandPalette, PaymentLink, PaymentLinkKind, PaymentMode, PhoneFieldMode } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { endOfLagosDay, lagosDate, LIMITS, normalizeOrigin, originLabel, PHONE_LABELS } from "@/lib/payment-links"
 import { koboToInput, parseNairaToKobo } from "@/lib/transfers"
@@ -30,12 +30,16 @@ export type LinkBranch = { _id: string; name: string }
 type Question = { key: string; _id?: string; label: string; required: boolean }
 
 type Values = {
+  kind: PaymentLinkKind
   title: string
   description: string
   branch: string
   pricing: "fixed" | "open"
   amount: string
   minimum: string
+  /** Donation links: the goal and four quick-pick slots (empty ones are skipped). */
+  goal: string
+  picks: string[]
   phone: PhoneFieldMode
   questions: Question[]
   successMessage: string
@@ -43,20 +47,29 @@ type Values = {
   endDate: string
   maxPayments: string
   websites: string
+  mode: PaymentMode
 }
 
 const naira = (kobo: number | null) => (kobo ? koboToInput(kobo).replace(/\.00$/, "") : "")
 let questionSeq = 0
 const newKey = () => `q${++questionSeq}`
 
+/** A new fundraiser's quick picks, which the business can change. */
+const DEFAULT_PICKS = [2_000_00, 5_000_00, 10_000_00, 25_000_00]
+const MAX_PICKS = 4
+
 function defaults(link: PaymentLink | undefined, branchId: string): Values {
+  const picks = link?.donation?.suggestedAmountsKobo ?? (link ? [] : DEFAULT_PICKS)
   return {
+    kind: link?.kind ?? "payment",
     title: link?.title ?? "",
     description: link?.description ?? "",
     branch: link?.branch?._id ?? branchId,
     pricing: link && !link.amountKobo ? "open" : "fixed",
     amount: naira(link?.amountKobo ?? null),
     minimum: naira(link?.minAmountKobo ?? null),
+    goal: naira(link?.donation?.goalKobo ?? null),
+    picks: Array.from({ length: MAX_PICKS }, (_, i) => naira(picks[i] ?? null)),
     phone: link?.phone ?? "optional",
     questions: (link?.customFields ?? []).map((f) => ({ key: newKey(), _id: f._id, label: f.label, required: f.required })),
     successMessage: link?.successMessage ?? "",
@@ -64,6 +77,7 @@ function defaults(link: PaymentLink | undefined, branchId: string): Values {
     endDate: link?.expiresAt ? lagosDate(link.expiresAt) : "",
     maxPayments: link?.maxPayments ? String(link.maxPayments) : "",
     websites: (link?.allowedOrigins ?? []).map(originLabel).join("\n"),
+    mode: link?.mode ?? "live",
   }
 }
 
@@ -103,8 +117,16 @@ export function LinkEditor({
   const uploading = pictures.some((p) => p.state === "uploading")
 
   // The preview shows what's typed so far; a bad amount just shows no price.
-  const previewAmount = v.pricing === "fixed" ? parseNairaToKobo(v.amount) : null
-  const previewMinimum = v.pricing === "open" && v.minimum.trim() ? parseNairaToKobo(v.minimum) : null
+  const donation = v.kind === "donation"
+  const pricing = donation ? "open" : v.pricing
+  const previewAmount = pricing === "fixed" ? parseNairaToKobo(v.amount) : null
+  const previewMinimum = pricing === "open" && v.minimum.trim() ? parseNairaToKobo(v.minimum) : null
+  const pickKobo = (raw: string) => {
+    const kobo = raw.trim() ? parseNairaToKobo(raw) : null
+    return kobo && kobo >= LIMITS.minAmountKobo && kobo <= LIMITS.maxAmountKobo ? kobo : null
+  }
+  const previewPicks = [...new Set(v.picks.map(pickKobo).filter((k): k is number => k !== null))].sort((a, b) => a - b)
+  const previewGoal = donation && v.goal.trim() ? parseNairaToKobo(v.goal) : null
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -117,12 +139,26 @@ export function LinkEditor({
 
     let amountKobo: number | null = null
     let minAmountKobo: number | null = null
-    if (v.pricing === "fixed") {
+    if (pricing === "fixed") {
       amountKobo = parseNairaToKobo(v.amount)
       if (amountKobo === null || amountKobo < LIMITS.minAmountKobo || amountKobo > LIMITS.maxAmountKobo) next.amountKobo = amountError
     } else if (v.minimum.trim()) {
       minAmountKobo = parseNairaToKobo(v.minimum)
       if (minAmountKobo === null || minAmountKobo < LIMITS.minAmountKobo || minAmountKobo > LIMITS.maxAmountKobo) next.minAmountKobo = amountError
+    }
+
+    let goalKobo: number | null = null
+    if (donation && v.goal.trim()) {
+      goalKobo = parseNairaToKobo(v.goal)
+      if (goalKobo === null || goalKobo < 1_000_00 || goalKobo > 10_000_000_000_00) next.goalKobo = "Enter a goal from ₦1,000 to ₦10,000,000,000."
+    }
+    if (donation) {
+      v.picks.forEach((raw, i) => {
+        if (raw.trim() && pickKobo(raw) === null) next[`suggestedAmountsKobo.${i}`] = amountError
+      })
+      const firstBad = Object.keys(next).find((k) => k.startsWith("suggestedAmountsKobo."))
+      if (firstBad) next.suggestedAmountsKobo = next[firstBad]!
+      else if (minAmountKobo && previewPicks.some((k) => k < minAmountKobo!)) next.suggestedAmountsKobo = "Quick picks can't be below the smallest amount."
     }
 
     v.questions.forEach((q, i) => {
@@ -163,6 +199,7 @@ export function LinkEditor({
       images: pictures.map((p) => p.id!),
       amountKobo,
       minAmountKobo,
+      ...(donation && { goalKobo, suggestedAmountsKobo: previewPicks.length ? previewPicks : null }),
       phone: v.phone,
       customFields: v.questions.map((q) => ({ ...(q._id && { _id: q._id }), label: q.label.trim(), required: q.required })),
       successMessage: v.successMessage.trim() || null,
@@ -170,11 +207,12 @@ export function LinkEditor({
       expiresAt: v.endDate ? (keptEnd ? link.expiresAt : endOfLagosDay(v.endDate)) : null,
       maxPayments,
       allowedOrigins: origins.length ? origins.map((o) => o.origin!) : null,
+      mode: v.mode,
     }
 
     setBusy(true)
     setError(undefined)
-    const result = editing ? await updatePaymentLink(link._id, body) : await createPaymentLink({ ...body, branch: v.branch } as PaymentLinkCreate)
+    const result = editing ? await updatePaymentLink(link._id, body) : await createPaymentLink({ ...body, branch: v.branch, kind: v.kind } as PaymentLinkCreate)
     if (!result.ok) {
       setBusy(false)
       const fieldErrors = { ...result.fieldErrors }
@@ -187,11 +225,14 @@ export function LinkEditor({
       setView("edit")
       return
     }
-    if (editing) {
+    if (editing && link.mode !== v.mode) {
+      toast.success(v.mode === "live" ? "Your payment link is live. New payments are real." : "Your payment link is in test mode. New payments are simulated.")
+      router.push(`/payment-links/${link._id}`)
+    } else if (editing) {
       toast.success("Payment link updated. Changes apply to new payments.")
       router.push(`/payment-links/${link._id}`)
     } else {
-      toast.success("Your payment link is ready to share.")
+      toast.success(donation ? "Your fundraiser is ready to share." : "Your payment link is ready to share.")
       router.push(`/payment-links/${result.data._id}`)
     }
   }
@@ -220,7 +261,33 @@ export function LinkEditor({
         <form onSubmit={submit} noValidate className={cn("grid min-w-0 gap-6", view === "preview" && "hidden xl:grid")}>
           <FormError message={error} />
 
-          <Section title="What they're paying for" description="The title, words and pictures customers see at the top of the page.">
+          {editing ? (
+            donation && (
+              <p className="rounded-lg bg-muted/70 px-3 py-2.5 text-sm text-muted-foreground">
+                A <span className="font-medium text-foreground">donation link</span>. Donors choose how much to give and the page shows what&apos;s been
+                raised.
+              </p>
+            )
+          ) : (
+            <Section title="What kind of link" description="This can't be changed later.">
+              <Segmented
+                label="Kind of link"
+                value={v.kind}
+                onChange={(x) => set("kind", x)}
+                options={[
+                  ["payment", "Payment"],
+                  ["donation", "Donation"],
+                ]}
+              />
+              <p className="text-sm text-muted-foreground">
+                {donation
+                  ? "A fundraiser page: donors choose the amount, can give anonymously and leave a message. The page shows a goal, what's been raised and who gave."
+                  : "A page to sell something or collect what customers owe, at a fixed price or an amount they choose."}
+              </p>
+            </Section>
+          )}
+
+          <Section title={donation ? "What you're raising for" : "What they're paying for"} description="The title, words and pictures customers see at the top of the page.">
             <Field data-invalid={!!errors.title}>
               <FieldLabel htmlFor="pl-title">Title</FieldLabel>
               <Input
@@ -252,32 +319,75 @@ export function LinkEditor({
             </div>
           </Section>
 
-          <Section title="Price">
-            <Segmented
-              label="Price"
-              value={v.pricing}
-              onChange={(x) => set("pricing", x)}
-              options={[
-                ["fixed", "Fixed amount"],
-                ["open", "Customer chooses"],
-              ]}
-            />
-            {v.pricing === "fixed" ? (
-              <Field data-invalid={!!errors.amountKobo} className="max-w-72">
-                <FieldLabel htmlFor="pl-amount">Amount</FieldLabel>
-                <NairaInput id="pl-amount" value={v.amount} invalid={!!errors.amountKobo} onChange={(x) => set("amount", x)} />
-                {errors.amountKobo && <FieldError>{errors.amountKobo}</FieldError>}
-              </Field>
+          <Section title={donation ? "Goal and amounts" : "Price"}>
+            {donation ? (
+              <div className="grid gap-5">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field data-invalid={!!errors.goalKobo}>
+                    <FieldLabel htmlFor="pl-goal">Goal (optional)</FieldLabel>
+                    <NairaInput id="pl-goal" value={v.goal} invalid={!!errors.goalKobo} onChange={(x) => set("goal", x)} />
+                    {errors.goalKobo ? (
+                      <FieldError>{errors.goalKobo}</FieldError>
+                    ) : (
+                      <FieldDescription>Shown with a progress bar. Donations keep coming after it&apos;s reached.</FieldDescription>
+                    )}
+                  </Field>
+                  <Field data-invalid={!!errors.minAmountKobo}>
+                    <FieldLabel htmlFor="pl-minimum">Smallest donation (optional)</FieldLabel>
+                    <NairaInput id="pl-minimum" value={v.minimum} invalid={!!errors.minAmountKobo} onChange={(x) => set("minimum", x)} />
+                    {errors.minAmountKobo && <FieldError>{errors.minAmountKobo}</FieldError>}
+                  </Field>
+                </div>
+                <Field data-invalid={!!errors.suggestedAmountsKobo}>
+                  <FieldLabel id="pl-picks">Quick picks (optional)</FieldLabel>
+                  <div role="group" aria-labelledby="pl-picks" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {v.picks.map((pick, i) => (
+                      <NairaInput
+                        key={i}
+                        id={`pl-pick-${i}`}
+                        aria-label={`Quick pick ${i + 1}`}
+                        value={pick}
+                        invalid={!!errors[`suggestedAmountsKobo.${i}`]}
+                        onChange={(x) => set("picks", v.picks.map((p, j) => (j === i ? x : p)))}
+                      />
+                    ))}
+                  </div>
+                  {errors.suggestedAmountsKobo ? (
+                    <FieldError>{errors.suggestedAmountsKobo}</FieldError>
+                  ) : (
+                    <FieldDescription>Buttons donors can tap instead of typing. Leave a box empty to show fewer.</FieldDescription>
+                  )}
+                </Field>
+              </div>
             ) : (
-              <Field data-invalid={!!errors.minAmountKobo} className="max-w-72">
-                <FieldLabel htmlFor="pl-minimum">Smallest amount (optional)</FieldLabel>
-                <NairaInput id="pl-minimum" value={v.minimum} invalid={!!errors.minAmountKobo} onChange={(x) => set("minimum", x)} />
-                {errors.minAmountKobo ? (
-                  <FieldError>{errors.minAmountKobo}</FieldError>
+              <>
+                <Segmented
+                  label="Price"
+                  value={v.pricing}
+                  onChange={(x) => set("pricing", x)}
+                  options={[
+                    ["fixed", "Fixed amount"],
+                    ["open", "Customer chooses"],
+                  ]}
+                />
+                {v.pricing === "fixed" ? (
+                  <Field data-invalid={!!errors.amountKobo} className="max-w-72">
+                    <FieldLabel htmlFor="pl-amount">Amount</FieldLabel>
+                    <NairaInput id="pl-amount" value={v.amount} invalid={!!errors.amountKobo} onChange={(x) => set("amount", x)} />
+                    {errors.amountKobo && <FieldError>{errors.amountKobo}</FieldError>}
+                  </Field>
                 ) : (
-                  <FieldDescription>Good for donations, deposits and pay-what-you-owe.</FieldDescription>
+                  <Field data-invalid={!!errors.minAmountKobo} className="max-w-72">
+                    <FieldLabel htmlFor="pl-minimum">Smallest amount (optional)</FieldLabel>
+                    <NairaInput id="pl-minimum" value={v.minimum} invalid={!!errors.minAmountKobo} onChange={(x) => set("minimum", x)} />
+                    {errors.minAmountKobo ? (
+                      <FieldError>{errors.minAmountKobo}</FieldError>
+                    ) : (
+                      <FieldDescription>Good for deposits and pay-what-you-owe. For a fundraiser, make a donation link.</FieldDescription>
+                    )}
+                  </Field>
                 )}
-              </Field>
+              </>
             )}
             {editing ? (
               link.branch && (
@@ -365,7 +475,7 @@ export function LinkEditor({
                 id="pl-message"
                 maxLength={300}
                 rows={2}
-                placeholder="Thank you. We'll call you to arrange delivery."
+                placeholder={donation ? "Thank you for your support. We'll share updates here." : "Thank you. We'll call you to arrange delivery."}
                 value={v.successMessage}
                 onChange={(e) => set("successMessage", e.target.value)}
               />
@@ -447,6 +557,26 @@ export function LinkEditor({
             </Field>
           </Section>
 
+          <Section
+            title="Live or test"
+            description="Test mode lets you try the page and your website's pay button without moving money. Switch to live when you're ready; the link and embed code stay the same."
+          >
+            <Segmented
+              label="Mode"
+              value={v.mode}
+              onChange={(x) => set("mode", x)}
+              options={[
+                ["live", "Live"],
+                ["test", "Test"],
+              ]}
+            />
+            {v.mode === "test" && (
+              <p className="rounded-lg bg-muted/70 px-3 py-2.5 text-sm text-muted-foreground">
+                Customers see placeholder bank details and a button to simulate the payment. Test payments aren&apos;t counted in your totals.
+              </p>
+            )}
+          </Section>
+
           <div className="flex flex-wrap items-center justify-end gap-2">
             {uploading && <span className="mr-auto text-sm text-muted-foreground">Waiting for pictures to finish uploading</span>}
             <Button type="button" variant="ghost" asChild>
@@ -467,11 +597,12 @@ export function LinkEditor({
             images={pictures
               .filter((p) => p.state !== "failed")
               .map((p) => ({ src: p.src, width: p.width ?? 4, height: p.height ?? 3 }))}
-            fixed={v.pricing === "fixed"}
+            fixed={pricing === "fixed"}
             amountKobo={previewAmount && previewAmount >= LIMITS.minAmountKobo ? previewAmount : null}
             minAmountKobo={previewMinimum}
             phone={v.phone}
             questions={v.questions}
+            donation={donation ? { goalKobo: previewGoal && previewGoal >= 1_000_00 ? previewGoal : null, suggestedAmountsKobo: previewPicks } : null}
           />
           <p className="text-center text-xs text-muted-foreground">
             Roughly how customers see it. <Link href="/settings/branding" className="underline underline-offset-2">Change your logo and colour</Link>

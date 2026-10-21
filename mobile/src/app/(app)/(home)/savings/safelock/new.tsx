@@ -12,6 +12,7 @@ import { DateField } from "@/components/ui/date-field";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FormError } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
+import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
@@ -264,14 +265,13 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
         </OptionList>
       )}
 
-      <TextField
+      <NairaField
         label="Amount to lock (₦)"
         value={amount}
         onChangeText={(v) => {
-          setAmount(v.replace(/[^\d.,]/g, ""));
+          setAmount(v);
           setServerField((f) => ({ ...f, amount: undefined }));
         }}
-        keyboardType="decimal-pad"
         error={shown("amount")}
         hint={`${available !== undefined && picked ? `${formatNaira(available)} available in ${picked.name}. ` : ""}At least ${formatNaira(limits.minAmountKobo)}.`}
         style={{ fontFamily: "BricolageText-SemiBold", fontSize: 20 }}

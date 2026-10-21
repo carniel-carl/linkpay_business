@@ -16,6 +16,9 @@ export function brandVars(p: BrandPalette) {
   } as CSSProperties
 }
 
+/** The main button, in the business's colour. */
+export const BIZ_BUTTON = "h-12 w-full bg-(--biz) text-[15px] text-(--on-biz) hover:bg-[color-mix(in_oklch,var(--biz),var(--on-biz)_14%)]"
+
 /** Where the payer is: 0 details, 1 transfer, 2 confirmed. -1 when the link isn't taking payments. */
 export type PayStep = -1 | 0 | 1 | 2
 
@@ -93,6 +96,7 @@ export function LinkSummary({
   variant = "panel",
   titleId,
   action,
+  price,
   fitScreen = false,
 }: {
   businessName: string
@@ -107,6 +111,8 @@ export function LinkSummary({
   titleId?: string
   /** Shown at the end of the business row (the embed's close button). */
   action?: ReactNode
+  /** In place of the price (a fundraiser's progress). */
+  price?: ReactNode
   /**
    * The pay page on a desktop: the panel is exactly one screen tall, so the picture takes whatever height is
    * left and the type steps down on short screens (`short:`). Leave off anywhere else.
@@ -147,7 +153,7 @@ export function LinkSummary({
             {description && <p className="text-sm leading-relaxed text-pretty text-(--biz-muted)">{description}</p>}
           </div>
         </div>
-        <Price amountKobo={amountKobo} minAmountKobo={minAmountKobo} size="md" />
+        {price ?? <Price amountKobo={amountKobo} minAmountKobo={minAmountKobo} size="md" />}
       </div>
     )
   }
@@ -176,7 +182,9 @@ export function LinkSummary({
               <p className={cn("max-w-[46ch] text-[15px] leading-relaxed text-pretty text-(--biz-muted)", fitScreen && "short:line-clamp-2")}>{description}</p>
             )}
           </div>
-          <Price amountKobo={amountKobo} minAmountKobo={minAmountKobo} size={dense ? "dense" : "lg"} className={fitScreen ? "short:text-5xl" : undefined} />
+          {price ?? (
+            <Price amountKobo={amountKobo} minAmountKobo={minAmountKobo} size={dense ? "dense" : "lg"} className={fitScreen ? "short:text-5xl" : undefined} />
+          )}
         </div>
       </div>
     </div>

@@ -21,11 +21,6 @@ export default function MoreLayout() {
       <Stack.Screen name="security" options={{ title: "Two-step verification" }} />
       <Stack.Screen name="totp" options={{ title: "Authenticator app" }} />
       <Stack.Screen name="help" options={{ title: "Help" }} />
-      <Stack.Screen name="payment-links/index" options={{ title: "Payment links" }} />
-      <Stack.Screen name="payment-links/[id]" options={{ title: "Payment link" }} />
-      <Stack.Screen name="payment-links/edit" options={{ title: "New payment link" }} />
-      <Stack.Screen name="payment-links/checkout/[id]" options={{ title: "Payment" }} />
-      <Stack.Screen name="payment-links/qr" options={{ title: "QR code" }} />
       <Stack.Screen
         name="change-passcode"
         options={{

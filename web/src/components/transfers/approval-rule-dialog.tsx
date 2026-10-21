@@ -6,6 +6,7 @@ import { ArrowRight, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 import { updateApprovalRule } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
+import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -18,7 +19,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldSet, FieldTitle } from "@/components/ui/field"
-import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Spinner } from "@/components/ui/spinner"
 import type { ApprovalMode, TransferSettings } from "@/lib/api/types"
@@ -107,20 +107,7 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
         {mode === "above_threshold" && (
           <Field data-invalid={!!thresholdError}>
             <FieldLabel htmlFor="approval-threshold">Needs approval from</FieldLabel>
-            <InputGroup>
-              <InputGroupAddon>
-                <InputGroupText>₦</InputGroupText>
-              </InputGroupAddon>
-              <InputGroupInput
-                id="approval-threshold"
-                inputMode="decimal"
-                placeholder="500,000"
-                className="figure"
-                value={threshold}
-                aria-invalid={!!thresholdError}
-                onChange={(e) => setThreshold(e.target.value)}
-              />
-            </InputGroup>
+            <NairaInput id="approval-threshold" placeholder="500,000" value={threshold} invalid={!!thresholdError} onChange={setThreshold} />
             {thresholdError && <FieldError>{thresholdError}</FieldError>}
           </Field>
         )}

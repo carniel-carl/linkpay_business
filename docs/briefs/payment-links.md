@@ -2,6 +2,8 @@
 
 Backend: `backend/src/{models/PaymentLink.ts, services/paymentLinks.ts, controllers/paymentLinks.ts, controllers/publicPaymentLinks.ts, config/paymentLinks.ts}`. Tests: `backend/tests/paymentLinks.test.ts`.
 
+Donation links (fundraisers with a goal, a public donor list and reports to LinkPay) are payment links with `kind: "donation"`: see `docs/briefs/donations.md`.
+
 Payment links work like Paystack's, but **bank transfer only** for now. Liquifia only collects by transfer into a branch's one fixed account, and gives no payer reference we can rely on. So each checkout asks the payer to send a **unique amount** (the price plus 1 to 99 kobo) and shows a **reference** (`LP-7K2Q9M`) to put in the narration. Either one ties the transfer to the checkout.
 
 Money is always integer kobo. Errors are `{ error, code?, details? }`.
@@ -41,7 +43,8 @@ Limits are in `config/paymentLinks.ts`: ₦100 to ₦100m per payment, 5 questio
 | `GET /checkouts?link=&branch=&status=pending\|expired\|paid\|underpaid\|received\|all&source=page\|embed&q=&skip=&take=` | `{ items: Checkout[], total, skip, take }`. `received` = paid and underpaid. `q` searches the payer's name or email, our reference, or the business's order reference |
 | `GET /checkouts/:id` | `Checkout` |
 | `GET /checkouts/:id/suggested-payments` | `payments.manage`. `{ items: [{ _id, amountKobo, counterparty: { name, bankName }, narration, reference, occurredAt, exactAmount }] }`, unlinked incoming payments on the same account that look like this checkout's (the price, the exact amount, or the payer's name). The same shape as the invoice suggestions |
-| `POST /checkouts/:id/match` | `payments.manage`. `{ transactionId }` → `Checkout` (paid or underpaid; the receipt is sent) |
+| `POST /checkouts/:id/match` | `payments.manage`. `{ transactionId }` → `Checkout` (paid or underpaid; the receipt is sent). `409 CHECKOUT_IS_TEST` on a test checkout |
+| `POST /checkouts/:id/simulate` | `payments.manage`, test checkouts only (§6). `{ outcome?: "paid" \| "underpaid" }` → `Checkout`. `409 CHECKOUT_IS_LIVE`, `409 CHECKOUT_NOT_PENDING` |
 
 **PaymentLink:**
 
@@ -54,6 +57,7 @@ Limits are in `config/paymentLinks.ts`: ₦100 to ₦100m per payment, 5 questio
   images: [{ _id, url /* "/api/payment-links/images/<id>", no host, signed in */, width, height }] /* in order; the first is the cover */,
   successMessage: string | null, redirectUrl: string | null,
   status: "active" | "inactive",
+  mode: "live" | "test" /* §6 */,
   allowedOrigins: string[] /* [] = any website may embed it */,
   expiresAt: string | null, maxPayments: number | null,
   paymentsCount, collectedKobo, lastPaidAt: string | null,
@@ -66,15 +70,16 @@ Limits are in `config/paymentLinks.ts`: ₦100 to ₦100m per payment, 5 questio
 
 ```ts
 {
-  _id, reference /* "LP-7K2Q9M" */, status: "pending" | "expired" | "paid" | "underpaid",
+  _id, reference /* "LP-7K2Q9M" */, status: "pending" | "expired" | "paid" | "underpaid", mode: "live" | "test",
   link: { _id, title, slug } | null, branch: { _id, name, isHeadOffice } | null,
   payer: { name, email, phone: string | null, fields: [{ label, value }] },
   priceKobo, amountKobo /* what they were asked to send */, currency: "NGN",
   paidKobo: number | null, paidAt: string | null,
   source: "page" | "embed", embedOrigin: string | null /* "https://shop.example.ng" */,
   clientReference: string | null /* the business's own order id */, metadata: Record<string, string>,
-  matchedBy: "amount" | "reference" | "manual" | null, matchedByUser: { _id, name } | null,
-  transaction: string | null, expiresAt, createdAt, canMatch: boolean
+  matchedBy: "amount" | "reference" | "manual" | "simulated" | null, matchedByUser: { _id, name } | null,
+  transaction: string | null, expiresAt, createdAt,
+  canMatch: boolean /* never on test checkouts */, canSimulate: boolean /* test checkouts, pending, payments.manage */
 }
 ```
 
@@ -86,11 +91,12 @@ Limits are in `config/paymentLinks.ts`: ₦100 to ₦100m per payment, 5 questio
 
 | Route | Notes |
 | --- | --- |
-| `GET pay/:slug` | `{ business: { name, logo: { url, width, height } \| null, palette }, link: { slug, title, description, amountKobo, minAmountKobo, maxAmountKobo, currency, phone, customFields, images: [{ _id, url, width, height }] }, embed: { allowedOrigins }, available, unavailableReason }`. 404 `PAYMENT_LINK_NOT_FOUND` for unknown slugs and for suspended or banned businesses. With a fixed price, `minAmountKobo` and `maxAmountKobo` are null |
+| `GET pay/:slug` | `{ business: { name, logo: { url, width, height } \| null, palette }, link: { slug, title, description, amountKobo, minAmountKobo, maxAmountKobo, currency, phone, customFields, images: [{ _id, url, width, height }] }, embed: { allowedOrigins }, mode, available, unavailableReason }`. 404 `PAYMENT_LINK_NOT_FOUND` for unknown slugs and for suspended or banned businesses. With a fixed price, `minAmountKobo` and `maxAmountKobo` are null |
 | `GET pay/:slug/images/:imageId` | One of the link's pictures (WebP, cached for a week, `immutable`: URLs carry `?v=`). Only pictures attached to that link. The web proxies it at `/pay/<slug>/images/<id>` |
 | `GET pay/:slug/logo` | The business's logo image. The web proxies it at `/pay/<slug>/logo` |
 | `POST pay/:slug/checkouts` | Limited to 20 per 10 minutes per IP (`429 TOO_MANY_CHECKOUTS`). Body below. 201 with a new `PublicCheckout`; 200 when the payer's open checkout is reused |
-| `GET checkouts/:token` | `PublicCheckout`. While pending, each call pulls new transfers from Liquifia (at most every 30 s, waiting up to 2 s), so polling every 4 to 5 s is enough. **The business's server confirms a payment here** before fulfilling an order |
+| `GET checkouts/:token` | `PublicCheckout`. While pending, each call pulls new transfers from Liquifia (at most every 30 s, waiting up to 2 s), so polling every 4 to 5 s is enough. **The business's server confirms a payment here** before fulfilling an order, and must check `mode === "live"` |
+| `POST checkouts/:token/simulate` | Test checkouts only (§6). `{ outcome?: "paid" \| "underpaid" }` → `PublicCheckout`. `409 CHECKOUT_IS_LIVE`, `409 CHECKOUT_NOT_PENDING` |
 
 Starting a checkout:
 
@@ -117,7 +123,7 @@ Errors when starting:
 
 ```ts
 {
-  token, reference, status: "pending" | "expired" | "paid" | "underpaid",
+  token, reference, status: "pending" | "expired" | "paid" | "underpaid", mode: "live" | "test",
   priceKobo, amountKobo /* send exactly this */, currency: "NGN",
   payTo: { accountNumber, accountName, bankName } | null /* only while pending */,
   expiresAt, paidKobo, paidAt,
@@ -141,7 +147,8 @@ Errors when starting:
   inline: string,           // <iframe src=".../pay/<slug>?embed=inline" ...> (works without the script)
   javascript: string,       // LinkPay.open({ link, clientReference, email, onSuccess, onClose })
   allowedOrigins: string[], // [] = any site
-  verifyUrl: string         // API_URL/api/public/checkouts/{token}
+  verifyUrl: string,        // API_URL/api/public/checkouts/{token}
+  mode: "live" | "test"     // the link's mode now
 }
 ```
 
@@ -173,13 +180,42 @@ The iframe and the script talk over `postMessage`. Messages from the iframe are 
 
 Inside the iframe, the pay page sends `source: "embed"` with `embedOrigin`, taken first from `location.ancestorOrigins[0]`, then the `origin` query parameter the script adds, then `document.referrer`.
 
-**Confirm on the server.** A browser callback can be faked. Before fulfilling an order, the business's server should call `GET API_URL/api/public/checkouts/<token>` and check `status === "paid"`, `paidKobo` and `clientReference`. Webhooks to the business's server aren't built yet (open question 18).
+**Confirm on the server.** A browser callback can be faked. Before fulfilling an order, the business's server should call `GET API_URL/api/public/checkouts/<token>` and check `status === "paid"`, `mode === "live"`, `paidKobo` and `clientReference`. Webhooks to the business's server aren't built yet (open question 18).
 
 **Web files:** `web/public/embed.js` (the script), `web/src/app/pay/[slug]/` (the page), `web/src/components/pay/pay-client.tsx` (form, checkout, messages), `web/src/app/api/pay/` (start and poll, forwarding the payer's address), and `web/src/proxy.ts` (`frame-ancestors`).
 
 **Rate limits behind the web:** the web calls the public routes for payers and passes their address in `X-Forwarded-For`. The backend believes it only from `TRUST_PROXY` (default `loopback`), so each payer has their own limit. Set `TRUST_PROXY` to the web server's and load balancer's addresses in production.
 
-## 6. Pictures
+## 6. Test mode
+
+Liquifia has no test keys (open question 2), so test mode is ours. Every link has `mode: "live" | "test"` (`live` by default and for links from before test mode). It lets a business try the page, the embed on its website and its server's confirmation call without anyone sending money.
+
+- **Test checkouts** keep the mode the link had when they started (`checkout.mode`). They:
+  - show placeholder details, never the branch's account: `payTo: { accountNumber: "0000000000", accountName: "<business> (test)", bankName: "Test bank: don't send money" }`;
+  - have no account (`virtualAccount`) and reserve no unique amount (`amountKobo` is still the price plus 1 to 99 kobo, so the screen looks real);
+  - are never matched to a real transfer, aren't offered suggestions, and can't be linked by hand (`CHECKOUT_IS_TEST`);
+  - are paid only by a **simulated payment**: `POST /api/public/checkouts/<token>/simulate` (the pay page's buttons) or `POST /api/payment-links/checkouts/<id>/simulate` (`payments.manage`). `outcome: "paid"` pays the exact amount; `"underpaid"` pays half the price. `matchedBy` is `"simulated"` and `transaction` is null. A pending checkout past its time can still be simulated, like a late transfer;
+  - still send the `payment_link.paid` notification, titled "... (test)" with `data.mode: "test"`, and the payer's receipt, with the subject starting "[Test] " and a line saying no money was sent;
+  - never count towards the link's `paymentsCount` / `collectedKobo`, its `maxPayments` limit, the summary, or donation totals and donor lists.
+- **Polling** a test checkout doesn't pull transfers from Liquifia.
+- **The redirect** of a paid test checkout also carries `mode=test`.
+- **A test link needs no open account**, so `account_not_ready` never applies to it.
+- **Switching** is `PATCH { mode }` either way, at any time. The slug and the embed code stay the same, so a website wired up in test mode works once the link goes live. A payer's open test checkout is never handed back on a live link (or the other way round).
+- **Deleting:** test checkouts don't stop a link being deleted (they're deleted with it). Any live checkout still does (`PAYMENT_LINK_IN_USE`).
+- **Filters:** `GET /api/payment-links?mode=live|test|all` and `GET /api/payment-links/checkouts?mode=live|test|all` (default `all`).
+- **Seed:** `dev:mock --seed` adds "Website checkout (testing)" in test mode, with one simulated payment and one waiting.
+- **Tests:** `backend/tests/paymentLinksTestMode.test.ts`.
+
+**Clients** (web and mobile):
+- The link form has a Live / Test choice (mobile: a "Test mode" switch).
+- Test links and test checkouts carry a dashed "Test" tag.
+- A test link's page has a test-mode banner with "Go live". Its menu (mobile: the actions list) offers "Go live" or "Switch to test mode", each with a confirmation.
+- A pending test checkout shows "Simulate payment" and "Simulate part payment" where a live one shows "Link a payment".
+- The all-links payments view asks for `mode=live`, like the totals. A link's own page lists its test payments too, tagged.
+- The pay page shows a "Test mode" strip on every step, the placeholder details, and the two simulate buttons under them. The paid screen says "Test payment received".
+- The embed panel and `embed.js` say to fulfil only `mode: "live"`. The checkout object passed to `embed.js` callbacks includes `mode`.
+
+## 7. Pictures
 
 A link can show up to 4 pictures, for example a product photo or an e-book's cover. The first is the cover.
 
@@ -201,7 +237,7 @@ A link can show up to 4 pictures, for example a product photo or an e-book's cov
 - **Public:** `link.images` on `GET pay/:slug`, and `link.image` (the cover) on checkouts, both with URLs relative to the API: `/api/public/pay/<slug>/images/<id>?v=<n>`.
 - **Seed:** `dev:mock --seed` gives the Ankara bundle link two pictures.
 
-## 7. Where clients link
+## 8. Where clients link
 
 - **Web:**
   - `/payment-links` has two views: links (cards or table) and payments (`?view=payments`).

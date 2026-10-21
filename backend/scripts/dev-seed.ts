@@ -13,8 +13,8 @@ import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { provisionBusinessAccount } from "../src/services/accounts";
 import { addDays, addPayment, createInvoice, sendInvoice, todayInLagos } from "../src/services/invoices";
 import { closePocket, movePocketMoney } from "../src/services/pockets";
-import { CheckoutModel, PaymentLinkModel, type PaymentLinkDocument } from "../src/models/PaymentLink";
-import { newSlug, startCheckout } from "../src/services/paymentLinks";
+import { CheckoutModel, LinkReportModel, PaymentLinkModel, type PaymentLinkDocument } from "../src/models/PaymentLink";
+import { newSlug, simulateCheckoutPayment, startCheckout } from "../src/services/paymentLinks";
 import { setLinkImages, uploadLinkImage } from "../src/services/paymentLinkImages";
 import sharp from "sharp";
 import { startOfLagosDay } from "../src/services/safelocks";
@@ -127,8 +127,9 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   const safelocks = await seedSafelocks(business, owner.id, accounts);
   const payees = await seedBeneficiaries(business, owner.id, accounts, liquifia);
   const links = await seedPaymentLinks(business, owner.id, accounts, liquifia);
+  const fundraiser = await seedDonations(business, owner.id, accounts, liquifia);
   const risky = await seedCompliance(liquifia, apiUrl);
-  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}, ${links}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}, ${links}, ${fundraiser}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
   console.log(`Compliance demo: ${risky}`);
 }
 
@@ -164,6 +165,13 @@ async function seedPaymentLinks(
     allowedOrigins: ["https://fabricfair.ng", "https://*.fabricfair.ng"],
   });
   await make(head, { title: "Eid sale deposit", amountKobo: 10_000_00, status: "inactive" });
+  // In test mode while the shop's website is wired up: a simulated payment and one waiting.
+  const trial = await make(head, {
+    title: "Website checkout (testing)",
+    amountKobo: 8_500_00,
+    mode: "test",
+    allowedOrigins: ["https://adaezefabrics.ng", "http://localhost"],
+  });
   // Two made-up product pictures (stripes in Ankara-like colours) on the bundle, the first as its cover.
   const stripes = (colours: string[]) =>
     sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900">${colours.map((c, i) => `<rect x="${i * (1200 / colours.length)}" width="${1200 / colours.length + 1}" height="900" fill="${c}"/>`).join("")}</svg>`)).png().toBuffer();
@@ -209,8 +217,12 @@ async function seedPaymentLinks(
   // Another from the bundle's page on the shop's website, still waiting.
   await start(bundle, payer("Kelechi Udo", address), undefined, { source: "embed", embedOrigin: "https://adaezefabrics.ng", clientReference: "ORD-1042" });
 
+  const trialPaid = await start(trial, payer("Ada Obi"), undefined, { source: "embed", embedOrigin: "http://localhost", clientReference: "TEST-001" });
+  await simulateCheckoutPayment(trialPaid, "paid", userId);
+  await start(trial, payer("Kelechi Udo"));
+
   await syncInboundTransfers();
-  return `4 payment links (${[bundle, open, tickets].map((l) => `/pay/${l.slug}`).join(", ")})`;
+  return `5 payment links (${[bundle, open, tickets, trial].map((l) => `/pay/${l.slug}`).join(", ")}; the last in test mode)`;
 }
 
 /** Invoices in every state: paid by hand, part-paid by a matched transfer, overdue, open, draft and void. */
@@ -432,4 +444,64 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   await suspendBusiness(actor, quick.business, { reason: "fraud_report", note: "Pending delivery proof for the reported payment" });
 
   return `${swift.business.name} (${raised} automatic flags), ${quick.business.name} (flagged and suspended). Owners: swift@linkpay.test, quickcash@linkpay.test / ${DEMO_PASSWORD}.`;
+}
+
+/**
+ * A fundraiser (donation link) with a goal, 120 donations over the past three weeks (some anonymous, some
+ * with a message) and one open report about a donation's message, for admin/'s queue.
+ */
+async function seedDonations(
+  business: BusinessDocument,
+  userId: string,
+  accounts: { branch?: Types.ObjectId | null; providerAccountId: string }[],
+  liquifia: MockLiquifia,
+) {
+  const head = accounts[0]!;
+  const link = await PaymentLinkModel.create({
+    business: business._id,
+    branch: head.branch!,
+    slug: newSlug(),
+    createdBy: userId,
+    kind: "donation",
+    title: "New roof for St. Mary's school, Ikorodu",
+    description:
+      "The rains took half the roof of St. Mary's primary school in March. 340 pupils are learning in two classrooms. Every naira goes to roofing sheets, timber and labour; we'll post receipts here.",
+    goalKobo: 15_000_000_00,
+    suggestedAmountsKobo: [2_000_00, 5_000_00, 10_000_00, 25_000_00],
+    phone: "off",
+    successMessage: "Thank you for helping the pupils of St. Mary's get back under a roof.",
+  });
+  const first = ["Chinedu", "Amaka", "Tunde", "Bisi", "Musa", "Ngozi", "Femi", "Halima", "Kunle", "Ifeoma", "Yusuf", "Toyin", "Emeka", "Zainab", "Seun", "Chioma"];
+  const last = ["Okafor", "Adeyemi", "Bello", "Eze", "Balogun", "Nwosu", "Ibrahim", "Ojo", "Lawal", "Obi"];
+  const messages = ["God bless you all", "For the children of Ikorodu", "Proud old pupil, class of 2004", "Keep going!", "Small but from the heart", "Education first", "Sending love from Abuja"];
+  const amounts = [1_000_00, 2_000_00, 2_500_00, 5_000_00, 5_000_00, 10_000_00, 10_000_00, 20_000_00, 25_000_00, 50_000_00, 100_000_00, 250_000_00];
+  const checkouts = [];
+  for (let n = 0; n < 120; n++) {
+    const name = `${first[n % first.length]} ${last[(n * 7) % last.length]}`;
+    const donor = { anonymous: n % 5 === 2, message: n % 3 === 0 ? messages[n % messages.length] : undefined };
+    const { checkout } = await startCheckout(link, { name, email: `donor${n}@example.com`, fields: [], donor }, amounts[(n * 5) % amounts.length]!);
+    checkouts.push(checkout);
+    // Spread over three weeks, oldest first; each names its reference, so amounts can repeat.
+    const at = new Date(Date.now() - (120 - n) * 4 * 3_600_000);
+    liquifia.inboundTransfers.unshift(
+      inboundTransfer(head.providerAccountId, checkout.amountKobo, { payer_name: name, narration: `Donation ${checkout.reference}`, created_at: at.toISOString() }),
+    );
+  }
+  // The checkouts were started "now"; date them just before their transfers so the reference matches.
+  // (Through the collection: Mongoose won't change `createdAt`.)
+  await Promise.all(
+    checkouts.map((c, n) => CheckoutModel.collection.updateOne({ _id: c._id }, { $set: { createdAt: new Date(Date.now() - (120 - n) * 4 * 3_600_000 - 60_000) } })),
+  );
+  await syncInboundTransfers();
+  const rude = checkouts[9]!;
+  await CheckoutModel.updateOne({ _id: rude._id }, { "donor.message": "This school is a scam, don't give them money" });
+  await LinkReportModel.create({
+    business: business._id,
+    link: link._id,
+    checkout: rude._id,
+    reason: "offensive",
+    details: "This donation's message is accusing the school with no proof.",
+    reporter: { name: "Bola Ade", email: "bola@example.com" },
+  });
+  return `1 fundraiser (/pay/${link.slug}, 120 donations, 1 open report)`;
 }

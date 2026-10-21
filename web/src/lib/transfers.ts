@@ -116,5 +116,18 @@ export function parseNairaToKobo(input: string): number | null {
   return Number.isSafeInteger(kobo) ? kobo : null
 }
 
+/**
+ * What a naira input shows while typing: "2000000.5" -> "2,000,000.5". Keeps digits and the first
+ * point, at most 12 naira digits and 2 kobo digits, so the result always parses with parseNairaToKobo.
+ */
+export function formatNairaInput(input: string): string {
+  const text = input.replace(/[^\d.]/g, "")
+  const dot = text.indexOf(".")
+  const whole = (dot < 0 ? text : text.slice(0, dot)).replace(/^0+(?=\d)/, "").slice(0, 12)
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  if (dot < 0) return grouped
+  return `${grouped || "0"}.${text.slice(dot + 1).replace(/\./g, "").slice(0, 2)}`
+}
+
 /** 123456 -> "1234.56", for putting a kobo amount back into an input. */
 export const koboToInput = (kobo: number) => `${Math.trunc(kobo / 100)}.${String(kobo % 100).padStart(2, "0")}`

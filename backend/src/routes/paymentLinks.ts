@@ -11,6 +11,7 @@ import {
   listCheckouts,
   listPaymentLinks,
   matchCheckout,
+  simulateCheckout,
   updatePaymentLink,
   uploadPaymentLinkImage,
 } from "../controllers/paymentLinks";
@@ -31,6 +32,7 @@ paymentLinksRouter.get("/checkouts", view, listCheckouts);
 paymentLinksRouter.get("/checkouts/:id", view, getCheckout);
 paymentLinksRouter.get("/checkouts/:id/suggested-payments", manage, getCheckoutSuggestions);
 paymentLinksRouter.post("/checkouts/:id/match", manage, matchCheckout);
+paymentLinksRouter.post("/checkouts/:id/simulate", manage, simulateCheckout);
 
 paymentLinksRouter.post("/images", manage, uploadSingle("file"), uploadPaymentLinkImage);
 paymentLinksRouter.get("/images/:id", view, getPaymentLinkImage);
