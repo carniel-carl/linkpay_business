@@ -15,6 +15,8 @@ declare global {
   }
 }
 
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 const requestedBusinessId = (header: string | string[] | undefined) =>
   (Array.isArray(header) ? header[0] : header)?.trim() || undefined;
 
@@ -34,6 +36,15 @@ export const requireApprovedBusiness: RequestHandler = async (req, _res, next) =
   );
   if (business.status !== "approved") {
     throw new HttpError(403, "Your business is not yet approved", "BUSINESS_NOT_APPROVED");
+  }
+  // Compliance restrictions (services/compliance.ts): a closed business gets nothing; a suspended one is
+  // read-only, so its team can still see balances and payments but can't send money or change anything.
+  const restriction = business.compliance?.status ?? "active";
+  if (restriction === "banned") {
+    throw new HttpError(403, "This business has been closed. Contact support.", "BUSINESS_BANNED");
+  }
+  if (restriction === "suspended" && !READ_METHODS.has(req.method)) {
+    throw new HttpError(403, "This business is suspended. You can view your account but can't make changes or send money. Contact support.", "BUSINESS_SUSPENDED");
   }
   req.business = business;
   req.membership = membership;

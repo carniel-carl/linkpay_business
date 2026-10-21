@@ -32,6 +32,7 @@ Every colour, radius and font is a CSS variable in `src/app/globals.css`. Compon
 | `card` | `oklch(0.997 0.002 250)` | slate `oklch(0.392 0.036 244.3)` |
 | `sidebar` (frame) | pale slate `oklch(0.955 0.009 250)`, navy text | deepest navy `oklch(0.255 0.038 252)`, light text |
 | `brand-surface` (band, header) | soft navy tint `oklch(0.93 0.02 250)`, navy text | `oklch(0.29 0.04 252)`, light text |
+| `ink` (auth band) | navy `oklch(0.338 0.042 251.7)`, light text, `ink-muted` secondary | deepest navy `oklch(0.255 0.038 252)` |
 
 - Greys are cool slate (hue about 250) in both themes.
 - Status colours are semantic only: success is green in light and lime in dark, warning is amber, destructive is red.
@@ -52,7 +53,7 @@ Every colour, radius and font is a CSS variable in `src/app/globals.css`. Compon
 
 - `surface` is a card fill with one soft navy-tinted shadow and no border.
 - `surface-ink` is the navy panel.
-- `grain` is a static noise pseudo-element, used only on navy panels (auth side panel, onboarding band).
+- `grain` is a static noise pseudo-element, used only on navy surfaces (auth band, onboarding band).
 
 ## Layout
 
@@ -62,7 +63,7 @@ Every colour, radius and font is a CSS variable in `src/app/globals.css`. Compon
   - Overscroll is off (`overscroll-behavior: none`). On sidebar pages the page background is the frame colour, so nothing different shows behind the app.
   - Below the header come the status banner (until verified), the band with the page title, then the overlapping content.
 - **Onboarding:** a sticky navy header, a band showing the business name and a "done / total" figure with a lime progress bar, then one paper sheet holding the step rail and the form.
-- **Auth:** the form sits on paper on the left; a navy panel with grain on the right shows the headline and what verification needs.
+- **Auth (band and ledger, `AuthFrame`):** a solid navy `ink` band with grain runs edge to edge across the top (about half the viewport on desktop, a steady minimum height on every screen). It holds the lockup, a theme switch (light, dark, system), the page title in display type and one line. The form sits on one white `surface` sheet on the right that starts just under the header and drops through the band's lower edge (on phones it overlaps the band by 4rem). Under the band, on paper, a ledger of hairline rows states the screen's facts and marks the row you're on with a 6px "You're here" tag: ways to sign in (sign in, code, 2FA), the five numbered steps of opening an account (sign up, verify email), or how team access works (invites). Dead ends have no sheet: title, one sentence and one lime action in the band. No photography and no icon tiles on auth.
 - **Admin (staff console):** the same framed sheet as the dashboard, with its own sidebar (review and directory groups with counts) and the band. Lists use the shared data table (`src/components/data-table/`): the status tabs, a search box and a Columns menu sit in the card; its state lives in the URL. On the detail page each section is its own `AdminSection` surface (never nested), with documents in a sticky panel on the right from `xl`.
 
 ## Branch and business switchers

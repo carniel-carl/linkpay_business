@@ -29,6 +29,9 @@ export function LogoTile({ size = 40 }: { size?: number }) {
   );
 }
 
+/** "Business" next to "linkPay", as a share of its size. Matches the web and admin logos (0.62em). */
+export const PRODUCT_SCALE = 0.62;
+
 const TONES = {
   page: { name: "text-foreground", product: "text-muted-foreground" },
   /** The entrance's navy band. */
@@ -68,9 +71,9 @@ export function Logo({
       >
         linkPay
         {showProduct && (
-          <Text style={{ fontFamily: "BricolageDisplay-Medium" }} className={t.product}>
-            {" "}
-            Business
+          // Much smaller on the same baseline: LinkPay's business product, not a separate brand.
+          <Text style={{ fontFamily: "BricolageDisplay-Medium", fontSize: Math.round(fontSize * PRODUCT_SCALE), letterSpacing: 0 }} className={t.product}>
+            {"  "}Business
           </Text>
         )}
       </Text>

@@ -69,7 +69,7 @@ export function SignInForm({ next, email }: { next?: string; email?: string }) {
           Sign in
         </Button>
       </form>
-      <FieldSeparator>or</FieldSeparator>
+      <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">or</FieldSeparator>
       <Button variant="outline" size="lg" asChild>
         <Link href={codeHref}>
           <Mail aria-hidden />

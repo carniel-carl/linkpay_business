@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../config/env";
 import { BiometricKeyModel, type BiometricRevokeReason } from "../models/BiometricKey";
 import { DEVICE_PLATFORMS, SessionModel, type SessionDocument } from "../models/Session";
-import type { UserDocument } from "../models/User";
+import { UserModel, type UserDocument } from "../models/User";
 import { HttpError } from "../utils/HttpError";
 import { newDeviceSignIn } from "./notificationEvents";
 import { signAccessToken } from "./tokens";
@@ -70,6 +70,10 @@ async function tokensFor(session: SessionDocument, refreshToken: string) {
  * a device session is created and the response also carries `refreshToken` and `sessionId`.
  */
 export async function signInResponse(req: Request, user: UserDocument, device: DeviceInfo) {
+  // For staff looking at who is active on a business. A failure here mustn't block the sign-in.
+  await UserModel.updateOne({ _id: user._id }, { lastSignInAt: new Date(), lastSignInIp: req.ip }).catch((err) =>
+    console.error("Couldn't record the sign-in time:", err),
+  );
   if (!device) return { accessToken: await signAccessToken(user.id), user };
 
   const now = Date.now();

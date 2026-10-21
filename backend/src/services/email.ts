@@ -86,6 +86,35 @@ export const sendBusinessRejectedEmail = (to: string, businessName: string, reas
     text: `We were unable to approve ${businessName}.\n\nReason: ${reason}\n\nReply to this email if you have questions.`,
   });
 
+// Restriction emails say what the business can and can't do, never why: details of an investigation
+// aren't shared with the business.
+export const sendBusinessSuspendedEmail = (to: string, businessName: string) =>
+  sendEmail({
+    to,
+    subject: `${businessName}'s ${env.appName} account is suspended`,
+    text:
+      `We've temporarily suspended ${businessName} while we review its account.\n\n` +
+      `While it's suspended you can sign in and see your balances and payments, but you can't send money, ` +
+      `create invoices or change settings. Payments into your account still arrive.\n\n` +
+      `Reply to this email or contact support to find out more.`,
+  });
+
+export const sendBusinessReinstatedEmail = (to: string, businessName: string) =>
+  sendEmail({
+    to,
+    subject: `${businessName} has full access again`,
+    text: `We've finished our review and lifted the suspension on ${businessName}. You have full access to your ${env.appName} dashboard again.`,
+  });
+
+export const sendBusinessBannedEmail = (to: string, businessName: string) =>
+  sendEmail({
+    to,
+    subject: `${businessName}'s ${env.appName} account is closed`,
+    text:
+      `We've closed ${businessName}'s ${env.appName} account. You can no longer use it to send or receive money.\n\n` +
+      `Contact support about any money left in the account.`,
+  });
+
 export const sendTeamInviteEmail = (
   to: string,
   { businessName, inviterName, roleLabel, link }: { businessName: string; inviterName: string; roleLabel: string; link: string },

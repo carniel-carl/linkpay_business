@@ -1,7 +1,8 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { redirect } from "next/navigation"
-import { AuthHeader } from "@/components/auth/auth-header"
+import { AuthFrame } from "@/components/auth/auth-frame"
+import { signInLedger } from "@/components/auth/ledgers"
 import { getChallenge } from "@/lib/session"
 import { TwoFactorForm } from "./two-factor-form"
 
@@ -14,27 +15,29 @@ export default async function TwoFactorPage({ searchParams }: PageProps<"/sign-i
 
   const totp = challenge.method === "totp"
   return (
-    <>
-      <AuthHeader
-        title="Two-step verification"
-        description={
-          totp ? (
-            "Open your authenticator app and enter the 6-digit code for LinkPay."
-          ) : (
-            <>
-              We sent a 6-digit code to <span className="font-medium text-foreground">{challenge.email}</span>.
-            </>
-          )
-        }
-      />
+    <AuthFrame
+      title="One more step"
+      description={
+        totp ? (
+          "Open your authenticator app and enter the 6-digit code for LinkPay."
+        ) : (
+          <>
+            We sent a 6-digit code to <strong>{challenge.email}</strong>.
+          </>
+        )
+      }
+      sheetTitle="Two-step verification"
+      ledger={signInLedger("two-factor")}
+    >
       <TwoFactorForm method={challenge.method} next={typeof next === "string" ? next : undefined} />
-      <p className="mt-8 text-sm text-muted-foreground">
+      <p className="mt-6 text-sm text-muted-foreground">
         <Link
           href={typeof next === "string" ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in"}
-          className="font-medium text-primary underline-offset-4 hover:underline">
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
           Back to sign in
         </Link>
       </p>
-    </>
+    </AuthFrame>
   )
 }

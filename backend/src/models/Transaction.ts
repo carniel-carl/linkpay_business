@@ -53,6 +53,8 @@ const transactionSchema = new Schema(
 );
 
 transactionSchema.index({ business: 1, occurredAt: -1 });
+// Platform-wide feed and risk checks (recent activity across every business).
+transactionSchema.index({ occurredAt: -1 });
 transactionSchema.index({ branch: 1, occurredAt: -1 });
 transactionSchema.index({ direction: 1, status: 1, invoiceCheckedAt: 1 });
 transactionSchema.index({ virtualAccount: 1, autoSaveCheckedAt: 1, occurredAt: 1 });

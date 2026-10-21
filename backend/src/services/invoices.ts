@@ -337,7 +337,8 @@ export async function sendScheduledReminders(today = todayInLagos()) {
     const key = String(invoice.business);
     if (!businesses.has(key)) businesses.set(key, await BusinessModel.findById(invoice.business));
     const business = businesses.get(key);
-    if (!business) continue;
+    // No reminders from a suspended or closed business (its invoice links are down too).
+    if (!business || (business.compliance?.status ?? "active") !== "active") continue;
     try {
       invoice.reminders!.sent.push(step.kind);
       await sendReminder(business, invoice, step.tone);

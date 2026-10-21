@@ -6,6 +6,9 @@ const userSchema = new Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true, select: false },
     emailVerified: { type: Boolean, default: false },
+    // Set on every sign-in (web and mobile), so staff can see who is active on a business.
+    lastSignInAt: { type: Date },
+    lastSignInIp: { type: String },
     twoFactor: {
       enabled: { type: Boolean, default: false },
       method: { type: String, enum: ["totp", "email", null], default: null },

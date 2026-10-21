@@ -343,3 +343,53 @@ export async function staffRoleChanged(staffId: Id, role: string, byName: string
     link: "/",
   });
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Compliance. Businesses are told that they're restricted, never why (no flags, notes or rule names).
+// ---------------------------------------------------------------------------------------------------------
+
+export async function businessRestrictionChanged(business: BusinessLike, change: "suspended" | "reinstated" | "banned") {
+  const content = {
+    suspended: {
+      type: "business.suspended" as const,
+      title: "Business suspended",
+      body: `We've temporarily suspended ${business.name} while we review its account. You can still sign in and see your account, but you can't send money or make changes. Contact support to find out more.`,
+    },
+    reinstated: {
+      type: "business.reinstated" as const,
+      title: "Business reinstated",
+      body: `${business.name} has full access again.`,
+    },
+    banned: {
+      type: "business.banned" as const,
+      title: "Business closed",
+      body: `${business.name}'s account has been closed. Contact support about any money left in the account.`,
+    },
+  }[change];
+  // Every member (every team role can see the accounts).
+  await notifyUsers(await membersWith(business, "accounts.view"), { ...content, link: "/dashboard", data: { businessId: String(business._id) } }, business);
+}
+
+export async function complianceFlagRaised(
+  business: BizRef,
+  flag: { _id: Id; summary: string; severity: string; source: string },
+  { except }: { except?: Id | null } = {},
+) {
+  await notifyStaff(await staffWith("compliance.manage", { except }), {
+    type: "compliance.flag_raised",
+    title: flag.source === "rule" ? `Risk flag: ${business.name}` : `${business.name} was flagged`,
+    body: `${flag.summary} (${flag.severity} severity).`,
+    link: `/businesses/${business._id}/compliance?flag=${flag._id}`,
+    data: { businessId: String(business._id), flagId: String(flag._id) },
+  });
+}
+
+export async function businessRestrictedForStaff(business: BizRef, change: "suspended" | "banned", byName: string, byId: Id) {
+  await notifyStaff(await staffWith("compliance.view", { except: byId }), {
+    type: "compliance.business_restricted",
+    title: change === "suspended" ? "Business suspended" : "Business closed",
+    body: `${byName} ${change === "suspended" ? "suspended" : "closed (banned)"} ${business.name}.`,
+    link: `/businesses/${business._id}/compliance`,
+    data: { businessId: String(business._id) },
+  });
+}

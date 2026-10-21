@@ -1,7 +1,8 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { ArrowRight, CalendarX2, CircleCheck, Info, Link2Off, MailX } from "lucide-react"
-import { AuthHeader } from "@/components/auth/auth-header"
+import { ArrowRight, Info } from "lucide-react"
+import { AuthFrame } from "@/components/auth/auth-frame"
+import { teamLedger } from "@/components/auth/ledgers"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api/client"
@@ -40,7 +41,6 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   if (preview === "unavailable") {
     return (
       <DeadEnd
-        icon={Info}
         title="We can't load this invite right now"
         body="Check your connection and refresh the page. The link itself is fine."
         action={{ href: here, label: "Try again" }}
@@ -50,7 +50,6 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   if (preview === "not_found") {
     return (
       <DeadEnd
-        icon={Link2Off}
         title="This invite link isn't valid"
         body="It may be incomplete, or a newer invite may have replaced it. Ask the person who invited you to send it again."
         action={user ? { href: "/dashboard", label: "Go to your dashboard" } : { href: "/", label: "Go to LinkPay" }}
@@ -65,17 +64,14 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
     const signIn = `/sign-in?email=${encodeURIComponent(preview.email)}`
     const copy = {
       expired: {
-        icon: CalendarX2,
         title: "This invite has expired",
         body: `Invites last 7 days. Ask ${preview.invitedBy ?? "the person who invited you"} at ${business} to send a new one.`,
       },
       revoked: {
-        icon: MailX,
         title: "This invite was cancelled",
         body: `${business} cancelled this invite. If you still need access, ask them for a new one.`,
       },
       accepted: {
-        icon: CircleCheck,
         title: "This invite has already been used",
         body: `${preview.email} has already joined ${business}. Sign in with that email to get started.`,
       },
@@ -98,22 +94,22 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   const signedInAs = user?.email.toLowerCase()
 
   return (
-    <>
-      <AuthHeader
-        title={`Join ${business}`}
-        description={
-          <>
-            {inviter} invited you to join <span className="font-medium text-foreground">{business}</span> as{" "}
-            <span className="font-medium text-foreground">{preview.roleLabel}</span>
-            {preview.branches && preview.branches.length > 0 && (
-              <>
-                {" "}for <span className="font-medium text-foreground">{preview.branches.map((b) => b.name).join(", ")}</span>
-              </>
-            )}
-            .
-          </>
-        }
-      />
+    <AuthFrame
+      title={`Join ${business}`}
+      description={
+        <>
+          {inviter} invited you to join <strong>{business}</strong> as <strong>{preview.roleLabel}</strong>
+          {preview.branches && preview.branches.length > 0 && (
+            <>
+              {" "}for <strong>{preview.branches.map((b) => b.name).join(", ")}</strong>
+            </>
+          )}
+          .
+        </>
+      }
+      sheetTitle="Accept the invite"
+      ledger={teamLedger}
+    >
 
       {signedInAs === invitedEmail ? (
         <div className="grid gap-6">
@@ -158,7 +154,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
           <p className="text-xs text-muted-foreground">This invite expires on {formatDate(preview.expiresAt)}.</p>
         </div>
       )}
-    </>
+    </AuthFrame>
   )
 }
 
@@ -174,29 +170,21 @@ function InvitedEmail({ email, expiresAt, note }: { email: string; expiresAt: st
   )
 }
 
-function DeadEnd({
-  icon: Icon,
-  title,
-  body,
-  action,
-}: {
-  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>
-  title: string
-  body: string
-  action: { href: string; label: string }
-}) {
+/** A dead end has no form: the title, one sentence and one next step sit in the band. */
+function DeadEnd({ title, body, action }: { title: string; body: string; action: { href: string; label: string } }) {
   return (
-    <div className="grid gap-8">
-      <span className="grid size-12 place-items-center rounded-[14px] bg-brand-subtle text-primary">
-        <Icon className="size-5" aria-hidden />
-      </span>
-      <AuthHeader title={title} description={body} />
-      <Button size="lg" className="-mt-4 w-fit" asChild>
-        <Link href={action.href}>
-          {action.label}
-          <ArrowRight data-icon="inline-end" aria-hidden />
-        </Link>
-      </Button>
-    </div>
+    <AuthFrame
+      title={title}
+      description={body}
+      ledger={teamLedger}
+      action={
+        <Button variant="pop" size="lg" asChild>
+          <Link href={action.href}>
+            {action.label}
+            <ArrowRight data-icon="inline-end" aria-hidden />
+          </Link>
+        </Button>
+      }
+    />
   )
 }

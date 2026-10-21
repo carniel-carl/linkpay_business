@@ -17,6 +17,7 @@ import { HttpError } from "../utils/HttpError";
 import { sendTransferAwaitingApprovalEmail, sendTransferFailedEmail, sendTransferRejectedEmail } from "./email";
 import { liquifia, LiquifiaError, newIdempotencyKey, toKobo, toNaira, type LiquifiaBank } from "./liquifia/client";
 import { transferApprovalRequested, transferSettled, transfersDecided } from "./notificationEvents";
+import { assertMoneyCanMove } from "./compliance";
 import { savedByAccount } from "./savings";
 import { canAccessBranch, hasPermission, permissionsFor } from "./team";
 
@@ -103,7 +104,10 @@ export async function resolveBankRecipient(business: BusinessDocument, accountNu
     if (ours.business.equals(business._id)) {
       Object.assign(recipient, { kind: "internal", business: ours.business, branch: ours.branch, label: branch?.name });
     } else {
-      const other = await BusinessModel.findById(ours.business).select("name");
+      const other = await BusinessModel.findById(ours.business).select("name compliance.status");
+      if (other?.compliance?.status === "banned") {
+        throw new HttpError(422, "This account can't receive transfers.", "RECIPIENT_UNAVAILABLE");
+      }
       Object.assign(recipient, { kind: "linkpay", business: ours.business, branch: ours.branch ?? undefined, label: other?.name });
     }
   }
@@ -239,6 +243,7 @@ export async function createTransfers(opts: {
   clientKey?: string;
 }) {
   const { business, membership, userId, requests } = opts;
+  assertMoneyCanMove(business);
   const branch = await BranchModel.findOne({ _id: opts.branchId, business: business._id });
   if (!branch || !canAccessBranch(membership, branch._id)) throw new HttpError(404, "Branch not found");
   const account = await VirtualAccountModel.findOne({ branch: branch._id });
@@ -349,6 +354,10 @@ export async function decideTransfers(opts: {
   note?: string;
 }) {
   const { transfers, userId, decision, note } = opts;
+  if (decision === "approve" && transfers[0]) {
+    const owner = await BusinessModel.findById(transfers[0].business).select("compliance.status");
+    if (owner) assertMoneyCanMove(owner);
+  }
   for (const transfer of transfers) {
     if (transfer.status !== "pending_approval") {
       throw new HttpError(409, "This transfer is no longer waiting for approval", "TRANSFER_NOT_PENDING");
@@ -421,6 +430,14 @@ function failureMessage(err: unknown) {
  */
 export async function submitTransfer(transfer: TransferDocument) {
   if (transfer.status !== "processing" || transfer.provider?.payoutId) return transfer;
+  // A suspended or closed business's approved transfers are held, not sent, until it's reinstated.
+  const owner = await BusinessModel.findById(transfer.business).select("compliance.status");
+  const restriction = owner?.compliance?.status;
+  if (restriction === "suspended" || restriction === "banned") {
+    transfer.set({ "provider.lastCheckedAt": new Date(), "provider.lastError": `Held: the business is ${restriction}` });
+    await transfer.save();
+    return transfer;
+  }
   const account = await VirtualAccountModel.findById(transfer.virtualAccount);
   if (!account) throw new Error(`Virtual account ${transfer.virtualAccount} not found`);
 

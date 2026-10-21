@@ -16,7 +16,8 @@ export function LogoMark({ className }: { className?: string }) {
  * The lockup, as on the LinkPay site: the bridge in `primary` (navy, lime in dark mode), then the
  * name in the display face. The font size drives everything (pass `text-sm` and so on to resize):
  * the mark is 0.78em tall, which matches the wordmark's cap height. `inverse` is for brand-surface
- * panels and only changes the text colours.
+ * panels and only changes the text colours. "Business" sits on the same baseline at 0.62em, so it
+ * reads as LinkPay's business product, not a new brand.
  */
 export function Logo({
   className,
@@ -39,7 +40,14 @@ export function Logo({
       <span className="font-display font-semibold tracking-[-0.02em]">
         linkPay
         {showProduct && (
-          <span className={cn("font-normal", inverse ? "text-brand-surface-muted" : "text-muted-foreground")}> Business</span>
+          <span
+            className={cn(
+              "ml-[0.3em] text-[0.62em] font-medium tracking-normal",
+              inverse ? "text-brand-surface-muted" : "text-muted-foreground",
+            )}
+          >
+            Business
+          </span>
         )}
       </span>
     </span>

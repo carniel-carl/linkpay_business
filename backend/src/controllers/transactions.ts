@@ -47,7 +47,7 @@ function buildFilter(req: Parameters<RequestHandler>[0], f: z.infer<typeof filte
   return filter;
 }
 
-async function serialize(transactions: TransactionDocument[]) {
+export async function serializeTransactions(transactions: TransactionDocument[]) {
   const [branches, accounts] = await Promise.all([
     BranchModel.find({ _id: { $in: transactions.map((t) => t.branch).filter(Boolean) } }).select("name isHeadOffice"),
     VirtualAccountModel.find({ _id: { $in: transactions.map((t) => t.virtualAccount) } }).select("label accountNumber bankName"),
@@ -91,7 +91,7 @@ export const listTransactions: RequestHandler = async (req, res) => {
     TransactionModel.find(filter).sort({ occurredAt: -1, _id: -1 }).skip(query.skip).limit(query.take),
     TransactionModel.countDocuments(filter),
   ]);
-  res.json({ items: await serialize(items), total, skip: query.skip, take: query.take });
+  res.json({ items: await serializeTransactions(items), total, skip: query.skip, take: query.take });
 };
 
 /** Money in and out (successful only) for the same filters, e.g. "this month" on the dashboard. */
@@ -126,5 +126,5 @@ export const getTransaction: RequestHandler<IdParams> = async (req, res) => {
   if (!transaction || (transaction.branch && !canAccessBranch(req.membership!, transaction.branch))) {
     throw new HttpError(404, "Transaction not found");
   }
-  res.json((await serialize([transaction]))[0]);
+  res.json((await serializeTransactions([transaction]))[0]);
 };

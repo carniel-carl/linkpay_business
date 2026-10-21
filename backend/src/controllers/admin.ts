@@ -10,6 +10,7 @@ import {
   sendBusinessRejectedEmail,
 } from "../services/email";
 import { provisionBranchAccount, provisionBusinessAccount } from "../services/accounts";
+import { audit, staffActor } from "../services/audit";
 import { kybDecided } from "../services/notificationEvents";
 import { syncInboundTransfers } from "../services/transactions";
 import { HttpError } from "../utils/HttpError";
@@ -29,6 +30,9 @@ async function findBusiness(id: string) {
 
 async function findSubmittedBusiness(id: string) {
   const business = await findBusiness(id);
+  if (business.compliance?.status === "banned") {
+    throw new HttpError(409, "This business is closed (banned). Lift the ban before reviewing it.", "BUSINESS_BANNED");
+  }
   if (business.status !== "submitted") {
     throw new HttpError(409, `Only submitted businesses can be reviewed (current: ${business.status})`, "NOT_REVIEWABLE");
   }
@@ -43,6 +47,8 @@ const SORTS = {
   submitted: "submittedAt",
   created: "createdAt",
   name: "name",
+  // Most open flags first with dir=desc.
+  flags: "compliance.openFlags",
 } as const;
 
 function escapeRegex(text: string) {
@@ -54,6 +60,8 @@ export const listBusinesses: RequestHandler = async (req, res) => {
     .object({
       status: z.enum(BUSINESS_STATUSES).optional(),
       account: z.enum(["not_started", "pending", "active", "failed"]).optional(),
+      // flagged = has open risk flags; the others are the compliance status.
+      compliance: z.enum(["active", "suspended", "banned", "flagged"]).optional(),
       // Matches the business name, RC/BN number or email, or the owner's name or email.
       q: z.string().trim().max(100).optional(),
       sort: z.enum(Object.keys(SORTS) as [keyof typeof SORTS]).default("submitted"),
@@ -65,6 +73,9 @@ export const listBusinesses: RequestHandler = async (req, res) => {
 
   const filter: Record<string, unknown> = query.status ? { status: query.status } : {};
   if (query.account) filter["liquifia.accountStatus"] = query.account;
+  if (query.compliance === "flagged") filter["compliance.openFlags"] = { $gt: 0 };
+  else if (query.compliance === "active") filter["compliance.status"] = { $in: ["active", null] };
+  else if (query.compliance) filter["compliance.status"] = query.compliance;
   if (query.q) {
     const pattern = new RegExp(escapeRegex(query.q), "i");
     const owners = await UserModel.find({ $or: [{ name: pattern }, { email: pattern }] }).select("_id").limit(500);
@@ -86,16 +97,19 @@ export const listBusinesses: RequestHandler = async (req, res) => {
   res.json({ items, total, skip: query.skip, take: query.take });
 };
 
-/** Counts per status, plus approved businesses whose bank account setup failed. */
+/** Counts per status, approved businesses whose bank account setup failed, and compliance counts. */
 export const getSummary: RequestHandler = async (_req, res) => {
-  const [byStatus, accountSetupFailed] = await Promise.all([
+  const [byStatus, accountSetupFailed, suspended, banned, flagged] = await Promise.all([
     BusinessModel.aggregate<{ _id: string; count: number }>([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
     BusinessModel.countDocuments({ status: "approved", "liquifia.accountStatus": "failed" }),
+    BusinessModel.countDocuments({ "compliance.status": "suspended" }),
+    BusinessModel.countDocuments({ "compliance.status": "banned" }),
+    BusinessModel.countDocuments({ "compliance.openFlags": { $gt: 0 } }),
   ]);
   const counts = Object.fromEntries(BUSINESS_STATUSES.map((s) => [s, 0])) as Record<string, number>;
   for (const { _id, count } of byStatus) counts[_id] = count;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  res.json({ counts, total, accountSetupFailed });
+  res.json({ counts, total, accountSetupFailed, compliance: { flagged, suspended, banned } });
 };
 
 export const getBusiness: RequestHandler<IdParams> = async (req, res) => {
@@ -116,6 +130,12 @@ export const approveBusiness: RequestHandler<IdParams> = async (req, res) => {
   await business.save();
   await KybDocumentModel.updateMany({ business: business._id }, { status: "accepted", $unset: { rejectionReason: 1 } });
   await kybDecided(business, "approved");
+  await audit(await staffActor(req), {
+    action: "kyb.approved",
+    business: business._id,
+    target: { kind: "business", id: business._id },
+    summary: "Verification approved",
+  });
 
   // Approval stands even if Liquifia is down; the failure is recorded on the business and an
   // admin can retry with POST /businesses/:id/provision-account.
@@ -134,6 +154,12 @@ export const retryAccountProvisioning: RequestHandler<IdParams> = async (req, re
   if (business.status !== "approved") {
     throw new HttpError(409, "Only approved businesses get an account", "NOT_APPROVED");
   }
+  await audit(await staffActor(req), {
+    action: "account.provision_retried",
+    business: business._id,
+    target: { kind: "business", id: business._id },
+    summary: "Retried the head office account setup",
+  });
   const account = await provisionBusinessAccount(business._id);
   res.json(account);
 };
@@ -144,6 +170,12 @@ export const retryBranchAccountProvisioning: RequestHandler<BranchParams> = asyn
     throw new HttpError(409, "Only approved businesses get an account", "NOT_APPROVED");
   }
   const branch = await findBranch(business._id, req.params.branchId);
+  await audit(await staffActor(req), {
+    action: "account.provision_retried",
+    business: business._id,
+    target: { kind: "branch", id: branch._id },
+    summary: `Retried the account setup for ${branch.name}`,
+  });
   const account = await provisionBranchAccount(branch._id);
   res.json(account);
 };
@@ -171,6 +203,13 @@ export const requestChanges: RequestHandler<IdParams> = async (req, res) => {
   const email = await ownerEmail(business.owner);
   if (email) await sendBusinessChangesRequestedEmail(email, business.name, body.note);
   await kybDecided(business, "changes_requested", body.note);
+  await audit(await staffActor(req), {
+    action: "kyb.changes_requested",
+    business: business._id,
+    target: { kind: "business", id: business._id },
+    summary: "Asked for changes to the verification",
+    details: { note: body.note, documents: body.documents },
+  });
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 
@@ -184,6 +223,13 @@ export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
   const email = await ownerEmail(business.owner);
   if (email) await sendBusinessRejectedEmail(email, business.name, body.reason);
   await kybDecided(business, "rejected", body.reason);
+  await audit(await staffActor(req), {
+    action: "kyb.rejected",
+    business: business._id,
+    target: { kind: "business", id: business._id },
+    summary: "Verification rejected",
+    details: { reason: body.reason },
+  });
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 

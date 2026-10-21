@@ -22,11 +22,16 @@ export const NOTIFICATION_TYPES = {
   "team.role_changed": { audience: "user", label: "Your role changed", push: true },
   "team.removed": { audience: "user", label: "You were removed from a team", push: true },
   "security.new_sign_in": { audience: "user", label: "New sign-in on a device", push: true },
+  "business.suspended": { audience: "user", label: "Your business was suspended", push: true },
+  "business.reinstated": { audience: "user", label: "Your business was reinstated", push: true },
+  "business.banned": { audience: "user", label: "Your business was closed", push: true },
   // ---- Staff (admin console) ----
   "kyb.submitted": { audience: "staff", label: "A business is waiting for review", push: false },
   "account.setup_failed": { audience: "staff", label: "A bank account couldn't be set up", push: false },
   "staff.invite_accepted": { audience: "staff", label: "Someone accepted your staff invite", push: false },
   "staff.role_changed": { audience: "staff", label: "Your staff role changed", push: false },
+  "compliance.flag_raised": { audience: "staff", label: "A business was flagged", push: false },
+  "compliance.business_restricted": { audience: "staff", label: "A business was suspended or closed", push: false },
 } as const satisfies Record<string, { audience: "user" | "staff"; label: string; push: boolean }>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;
@@ -43,7 +48,7 @@ export function pushChannelOf(type: NotificationType): PushChannel {
   if (type.startsWith("payment.")) return "payments";
   if (type.startsWith("transfer.")) return "transfers";
   if (type.startsWith("invoice.")) return "invoices";
-  return "account"; // verification, bank accounts, team, security
+  return "account"; // verification, bank accounts, team, security, suspensions
 }
 
 /** Notifications are deleted after this long. */

@@ -15,7 +15,9 @@ async function findPublic(token: string) {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) throw new HttpError(404, "Invoice not found", "INVOICE_NOT_FOUND");
   const invoice = await InvoiceModel.findOne({ publicToken: token, status: { $ne: "draft" } });
   const business = invoice && (await BusinessModel.findById(invoice.business));
-  if (!invoice || !business) throw new HttpError(404, "Invoice not found", "INVOICE_NOT_FOUND");
+  // A suspended or closed business's invoices are taken down, so customers don't pay into it.
+  const restricted = business && (business.compliance?.status === "suspended" || business.compliance?.status === "banned");
+  if (!invoice || !business || restricted) throw new HttpError(404, "Invoice not found", "INVOICE_NOT_FOUND");
   return { invoice, business };
 }
 

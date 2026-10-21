@@ -89,6 +89,8 @@ const transferSchema = new Schema(
 );
 
 transferSchema.index({ business: 1, createdAt: -1 });
+// Risk checks over recent transfers across every business.
+transferSchema.index({ createdAt: -1 });
 transferSchema.index({ virtualAccount: 1, status: 1 });
 transferSchema.index({ status: 1, "provider.lastCheckedAt": 1 });
 transferSchema.index({ batch: 1 });

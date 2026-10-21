@@ -9,6 +9,10 @@ export const STAFF_PERMISSIONS = {
   "accounts.provision": "Set up bank accounts for businesses and branches",
   "transactions.sync": "Pull incoming payments from the bank partner",
   "users.view": "See business users",
+  "activity.view": "See a business's transactions, transfers and team, and the platform-wide money feed",
+  "compliance.view": "See risk flags, restrictions, compliance notes and the staff audit log",
+  "compliance.manage": "Raise and resolve risk flags, add notes, suspend and reinstate businesses",
+  "compliance.ban": "Close (ban) a business and lift a ban",
   "staff.manage": "Invite staff, change roles, disable, enable and sign out staff",
 } as const;
 export type StaffPermission = keyof typeof STAFF_PERMISSIONS;
@@ -23,18 +27,26 @@ export const STAFF_ROLE_DETAILS = {
   },
   compliance: {
     label: "Compliance reviewer",
-    description: "Reviews business verifications and their documents.",
-    permissions: ["businesses.view", "documents.view", "kyb.review", "users.view"],
+    description: "Reviews verifications and documents, watches business activity, flags and suspends businesses.",
+    permissions: [
+      "businesses.view",
+      "documents.view",
+      "kyb.review",
+      "users.view",
+      "activity.view",
+      "compliance.view",
+      "compliance.manage",
+    ],
   },
   operations: {
     label: "Operations",
     description: "Sets up bank accounts and syncs incoming payments.",
-    permissions: ["businesses.view", "accounts.provision", "transactions.sync", "users.view"],
+    permissions: ["businesses.view", "accounts.provision", "transactions.sync", "users.view", "activity.view"],
   },
   support: {
     label: "Support (read only)",
     description: "Looks up businesses and users to answer questions. Can't change anything.",
-    permissions: ["businesses.view", "users.view"],
+    permissions: ["businesses.view", "users.view", "activity.view"],
   },
 } as const satisfies Record<string, { label: string; description: string; permissions: readonly StaffPermission[] }>;
 

@@ -14,6 +14,7 @@ import Animated, {
 } from "react-native-reanimated";
 import Svg, { Path, Rect } from "react-native-svg";
 import { scheduleOnRN } from "react-native-worklets";
+import { PRODUCT_SCALE } from "@/components/brand/logo";
 import { useTheme } from "@/theme/theme";
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
@@ -227,8 +228,7 @@ function Wordmark({
           <Text numberOfLines={1} maxFontSizeMultiplier={1.15} style={styles.linkPay} className="text-band-foreground">
             linkPay
             <Text style={styles.business} className="text-band-muted">
-              {" "}
-              Business
+              {"  "}Business
             </Text>
           </Text>
         </Animated.View>
@@ -242,5 +242,5 @@ const styles = StyleSheet.create({
   // The left edge of this clip is the tile's right edge, so the name appears to come out from behind it.
   clip: { overflow: "hidden", paddingLeft: GAP },
   linkPay: { fontFamily: "BricolageDisplay-SemiBold", fontSize: 28, lineHeight: 34, letterSpacing: -0.6 },
-  business: { fontFamily: "BricolageDisplay-Medium" },
+  business: { fontFamily: "BricolageDisplay-Medium", fontSize: Math.round(28 * PRODUCT_SCALE), letterSpacing: 0 },
 });

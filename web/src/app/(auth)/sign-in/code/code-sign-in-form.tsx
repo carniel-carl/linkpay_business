@@ -4,8 +4,10 @@ import { useState, useTransition } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Controller, useForm } from "react-hook-form"
 import type { z } from "zod"
-import { AuthHeader } from "@/components/auth/auth-header"
+import Link from "next/link"
+import { AuthFrame } from "@/components/auth/auth-frame"
 import { CodeInput } from "@/components/auth/code-input"
+import { signInLedger } from "@/components/auth/ledgers"
 import { ResendButton } from "@/components/auth/resend-button"
 import { FormError } from "@/components/common/form-error"
 import { Button } from "@/components/ui/button"
@@ -33,11 +35,12 @@ export function CodeSignInForm({ next }: { next?: string }) {
 
   const { isSubmitting, errors } = form.formState
   return (
-    <>
-      <AuthHeader
-        title="Sign in with a code"
-        description="Enter your email and we'll send you a 6-digit code. No password needed."
-      />
+    <AuthFrame
+      title="Sign in with a code"
+      description="Enter your email and we'll send you a 6-digit code. No password needed."
+      sheetTitle="Email me a code"
+      ledger={signInLedger("code")}
+    >
       <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-6">
         <FormError message={errors.root?.message} />
         <Controller
@@ -56,7 +59,21 @@ export function CodeSignInForm({ next }: { next?: string }) {
           Send code
         </Button>
       </form>
-    </>
+      <PasswordLink next={next} />
+    </AuthFrame>
+  )
+}
+
+function PasswordLink({ next }: { next?: string }) {
+  return (
+    <p className="mt-6 text-sm text-muted-foreground">
+      <Link
+        href={next ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in"}
+        className="font-medium text-primary underline-offset-4 hover:underline"
+      >
+        Sign in with your password instead
+      </Link>
+    </p>
   )
 }
 
@@ -78,16 +95,16 @@ function EnterCode({ email, next, onChangeEmail }: { email: string; next?: strin
   }
 
   return (
-    <>
-      <AuthHeader
-        title="Check your email"
-        description={
-          <>
-            If <span className="font-medium text-foreground">{email}</span> has a LinkPay account, a sign-in code is on
-            its way. It expires in 10 minutes.
-          </>
-        }
-      />
+    <AuthFrame
+      title="Check your email"
+      description={
+        <>
+          If <strong>{email}</strong> has a LinkPay account, a sign-in code is on its way. It expires in 10 minutes.
+        </>
+      }
+      sheetTitle="Enter the code"
+      ledger={signInLedger("code")}
+    >
       <form
         className="grid gap-6"
         onSubmit={(e) => {
@@ -111,6 +128,7 @@ function EnterCode({ email, next, onChangeEmail }: { email: string; next?: strin
           </Button>
         </div>
       </form>
-    </>
+      <PasswordLink next={next} />
+    </AuthFrame>
   )
 }

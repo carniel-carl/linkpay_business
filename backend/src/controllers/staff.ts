@@ -16,6 +16,7 @@ import {
   staffInviteStatus,
   staffRoleLabel,
 } from "../services/staff";
+import { audit, staffActor } from "../services/audit";
 import { staffRoleChanged } from "../services/notificationEvents";
 import { revokeStaffSessions, serializeStaff } from "../services/staffAuth";
 import { HttpError } from "../utils/HttpError";
@@ -111,11 +112,18 @@ export const updateStaff: RequestHandler<IdParams> = async (req, res) => {
   const staff = await findOtherStaff(req);
   await assertKeepsASuperAdmin(staff, { role });
   const changed = staff.role !== role;
+  const previous = staff.role;
   staff.role = role;
   await staff.save();
   if (changed) {
-    const actor = await StaffModel.findById(req.staffId).select("name");
-    await staffRoleChanged(staff._id, role, actor?.name ?? "A super admin");
+    const actor = await staffActor(req);
+    await staffRoleChanged(staff._id, role, actor.name);
+    await audit(actor, {
+      action: "staff.role_changed",
+      target: { kind: "staff", id: staff._id },
+      summary: `Changed ${staff.name}'s role from ${staffRoleLabel(previous)} to ${staffRoleLabel(role)}`,
+      details: { from: previous, to: role },
+    });
   }
   res.json((await serializeStaffList([staff], req.staffId!))[0]);
 };
@@ -126,6 +134,7 @@ export const disableStaff: RequestHandler<IdParams> = async (req, res) => {
   staff.status = "disabled";
   await staff.save();
   await revokeStaffSessions(staff._id);
+  await audit(await staffActor(req), { action: "staff.disabled", target: { kind: "staff", id: staff._id }, summary: `Turned off ${staff.name}'s access` });
   res.json((await serializeStaffList([staff], req.staffId!))[0]);
 };
 
@@ -133,12 +142,14 @@ export const enableStaff: RequestHandler<IdParams> = async (req, res) => {
   const staff = await findOtherStaff(req);
   staff.status = "active";
   await staff.save();
+  await audit(await staffActor(req), { action: "staff.enabled", target: { kind: "staff", id: staff._id }, summary: `Turned on ${staff.name}'s access` });
   res.json((await serializeStaffList([staff], req.staffId!))[0]);
 };
 
 export const signOutStaff: RequestHandler<IdParams> = async (req, res) => {
   const staff = await findOtherStaff(req);
   await revokeStaffSessions(staff._id);
+  await audit(await staffActor(req), { action: "staff.signed_out", target: { kind: "staff", id: staff._id }, summary: `Signed ${staff.name} out everywhere` });
   res.status(204).end();
 };
 
@@ -180,6 +191,12 @@ export const createStaffInvite: RequestHandler = async (req, res) => {
     throw err;
   });
   await sendInvite(invite, token, req.staffId!);
+  await audit(await staffActor(req), {
+    action: "staff.invited",
+    target: { kind: "staff_invite", id: invite._id },
+    summary: `Invited ${invite.email} as ${staffRoleLabel(role)}`,
+    details: { email: invite.email, role },
+  });
   res.status(201).json((await serializeInvites([invite]))[0]);
 };
 
@@ -203,5 +220,10 @@ export const revokeStaffInvite: RequestHandler<IdParams> = async (req, res) => {
   const invite = await findPendingInvite(req.params.id);
   invite.set({ status: "revoked", revokedAt: new Date() });
   await invite.save();
+  await audit(await staffActor(req), {
+    action: "staff.invite_revoked",
+    target: { kind: "staff_invite", id: invite._id },
+    summary: `Cancelled the invite for ${invite.email}`,
+  });
   res.status(204).end();
 };

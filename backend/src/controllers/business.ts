@@ -13,6 +13,7 @@ import { UserModel } from "../models/User";
 import { detectFileType } from "../middleware/upload";
 import { sendBusinessSubmittedEmail } from "../services/email";
 import { kybSubmitted } from "../services/notificationEvents";
+import { complianceStatusOf, restrictionOf } from "../services/compliance";
 import { buildChecklist } from "../services/kyb";
 import { serializeBranches } from "./branches";
 import { readFile, removeFile, saveFile } from "../services/storage";
@@ -106,6 +107,9 @@ export async function sendBusinessOverview(
   if (audience === "owner") {
     json.liquifia = { accountStatus: business.liquifia?.accountStatus ?? "not_started" };
     delete json.reviewedBy;
+    // The business only learns whether it's restricted, never why (flags and notes stay with staff).
+    delete json.compliance;
+    json.restriction = restrictionOf(business);
   }
 
   // For a branch-limited member the head office's status isn't theirs; use their first branch's.
@@ -266,6 +270,7 @@ export const deleteDocument: RequestHandler<DocParams> = async (req, res) => {
 
 export const submitForReview: RequestHandler = async (req, res) => {
   const business = await findEditableBusiness(req.userId);
+  if (complianceStatusOf(business) === "banned") throw new HttpError(403, "This business has been closed. Contact support.", "BUSINESS_BANNED");
   const documents = await KybDocumentModel.find({ business: business._id });
 
   const checklist = buildChecklist(business, documents);

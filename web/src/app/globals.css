@@ -56,6 +56,9 @@
   --color-brand-surface: var(--brand-surface);
   --color-brand-surface-foreground: var(--brand-surface-foreground);
   --color-brand-surface-muted: var(--brand-surface-muted);
+  --color-ink: var(--ink);
+  --color-ink-foreground: var(--ink-foreground);
+  --color-ink-muted: var(--ink-muted);
   --color-paper: var(--paper);
   --color-paper-ink: var(--paper-ink);
   --color-paper-muted: var(--paper-muted);
@@ -96,6 +99,10 @@
   --brand-surface: oklch(0.93 0.02 250);
   --brand-surface-foreground: oklch(0.26 0.04 252);
   --brand-surface-muted: oklch(0.45 0.03 252);
+  /* Solid navy in both themes (the auth band). Deepest navy in dark so it separates from the page. */
+  --ink: oklch(0.338 0.042 251.7);
+  --ink-foreground: oklch(0.975 0.006 250);
+  --ink-muted: oklch(0.83 0.024 245);
   --shadow-surface: 0 1px 2px oklch(0.3 0.04 252 / 0.06), 0 12px 32px -16px oklch(0.3 0.04 252 / 0.24);
 
   /*
@@ -181,6 +188,9 @@
   --brand-surface: oklch(0.29 0.04 252);
   --brand-surface-foreground: oklch(0.975 0.006 250);
   --brand-surface-muted: oklch(0.8 0.028 245);
+  --ink: oklch(0.255 0.038 252);
+  --ink-foreground: oklch(0.975 0.006 250);
+  --ink-muted: oklch(0.8 0.028 245);
   --shadow-surface: 0 1px 2px oklch(0.15 0.03 252 / 0.3), 0 14px 36px -16px oklch(0.15 0.03 252 / 0.6);
 
   --secondary: oklch(0.41 0.036 246);

@@ -1,4 +1,5 @@
 import { Schema, Types, model, type HydratedDocument, type InferSchemaType } from "mongoose";
+import { COMPLIANCE_STATUSES, FLAG_CATEGORY_KEYS, FLAG_SEVERITIES } from "../config/compliance";
 import { BUSINESS_TYPES, ID_TYPES, PERSON_ROLES } from "../config/kyb";
 
 export const BUSINESS_STATUSES = [
@@ -103,9 +104,26 @@ const businessSchema = new Schema(
     },
     // Last invoice number issued (incremented atomically when an invoice is created).
     invoiceSeq: { type: Number, default: 0 },
+
+    // Staff-only compliance state (services/compliance.ts). The business itself only ever sees
+    // `status` and `since` (as `restriction`), never the reason, note or flags.
+    compliance: {
+      status: { type: String, enum: COMPLIANCE_STATUSES, default: "active" },
+      reason: { type: String, enum: FLAG_CATEGORY_KEYS },
+      note: { type: String, trim: true },
+      since: { type: Date },
+      by: { type: Types.ObjectId, ref: "Staff" },
+      // Kept in step with ComplianceFlag (refreshFlagSummary), for list filters and sorting.
+      openFlags: { type: Number, default: 0 },
+      highestOpenSeverity: { type: String, enum: [...FLAG_SEVERITIES, null], default: null },
+      lastFlaggedAt: { type: Date },
+    },
   },
   { timestamps: true },
 );
+
+businessSchema.index({ "compliance.status": 1 });
+businessSchema.index({ "compliance.openFlags": -1 });
 
 export type Business = InferSchemaType<typeof businessSchema>;
 export type BusinessDocument = HydratedDocument<Business>;

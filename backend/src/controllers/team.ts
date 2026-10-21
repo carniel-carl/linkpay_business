@@ -242,14 +242,14 @@ export const listMyMemberships: RequestHandler = async (req, res) => {
   if (owned) await ensureOwnerMembership(owned);
 
   const memberships = await MembershipModel.find({ user: req.userId }).sort({ createdAt: 1 });
-  const businesses = await BusinessModel.find({ _id: { $in: memberships.map((m) => m.business) } }).select("name status");
+  const businesses = await BusinessModel.find({ _id: { $in: memberships.map((m) => m.business) } }).select("name status compliance.status");
   res.json(
     memberships.flatMap((m) => {
       const business = businesses.find((b) => b._id.equals(m.business));
       return business
         ? [
             {
-              business: { _id: business.id, name: business.name, status: business.status },
+              business: { _id: business.id, name: business.name, status: business.status, restriction: business.compliance?.status ?? "active" },
               role: m.role,
               roleLabel: ROLE_LABELS[m.role],
               isOwner: m.role === "owner",
