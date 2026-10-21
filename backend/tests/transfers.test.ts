@@ -289,7 +289,7 @@ describe("approvals", () => {
       token: owner.token,
       body: { approval: { mode: "above_threshold", thresholdKobo: 50_000_00 } },
     });
-    expect(rule.body).toEqual({ approval: { mode: "above_threshold", thresholdKobo: 50_000_00 } });
+    expect(rule.body).toEqual({ approval: { mode: "above_threshold", thresholdKobo: 50_000_00, tiers: [] } });
 
     const small = await t.api("POST", "/api/transfers", { token: owner.token, body: { branch: headOfficeId, amountKobo: 1_000_00, recipient: toBank() } });
     expect(small.body.status).toBe("processing");
@@ -322,6 +322,206 @@ describe("approvals", () => {
     const viewer = await member("viewer");
     expect((await t.api("POST", "/api/transfers", { token: viewer.token, body: { branch: headOfficeId, amountKobo: 100_00, recipient: toBank() } })).status).toBe(403);
     expect((await t.api("GET", "/api/transfers", { token: viewer.token })).body.total).toBe(1);
+  });
+});
+
+describe("approval workflows", () => {
+  /** ₦100,000 and up: level 1 is either approver, level 2 the owner. ₦1m and up adds the admin as level 3. */
+  async function withWorkflow() {
+    const ctx = await setup();
+    const [first, second, admin, finance] = [await ctx.member("approver"), await ctx.member("approver"), await ctx.member("admin"), await ctx.member("finance")];
+    const res = await t.api("PATCH", "/api/transfers/settings", {
+      token: ctx.owner.token,
+      body: {
+        approval: {
+          mode: "workflow",
+          tiers: [
+            { minKobo: 1_000_000_00, levels: [{ approvers: [first.user.id] }, { approvers: [ctx.owner.user.id] }, { approvers: [admin.user.id] }] },
+            { minKobo: 100_000_00, levels: [{ approvers: [first.user.id, second.user.id] }, { approvers: [ctx.owner.user.id] }] },
+          ],
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    return { ...ctx, first, second, admin, finance, settings: res.body };
+  }
+  const send = (token: string, branch: string, amountKobo: number) =>
+    t.api("POST", "/api/transfers", { token, body: { branch, amountKobo, recipient: toBank() } });
+
+  test("the rule is saved sorted, with approvers' names and roles", async () => {
+    const { settings, owner, first, second } = await withWorkflow();
+    expect(settings.approval.mode).toBe("workflow");
+    expect(settings.approval.tiers.map((t: any) => t.minKobo)).toEqual([100_000_00, 1_000_000_00]);
+    expect(settings.approval.tiers[0].levels).toEqual([
+      {
+        approvers: [
+          { _id: first.user.id, name: "approver", role: "approver", roleLabel: "Approver", canApprove: true },
+          { _id: second.user.id, name: "approver", role: "approver", roleLabel: "Approver", canApprove: true },
+        ],
+      },
+      { approvers: [{ _id: owner.user.id, name: "Owner", role: "owner", roleLabel: "Owner", canApprove: true }] },
+    ]);
+
+    const directory = await t.api("GET", "/api/transfers/approvers", { token: owner.token });
+    expect(directory.body.map((d: any) => d.role).sort()).toEqual(["admin", "approver", "approver", "owner"]);
+    expect(directory.body.find((d: any) => d.role === "owner")).toMatchObject({ branches: null, email: owner.user.email });
+  });
+
+  test("refuses approvers who can't approve, and one person at two levels", async () => {
+    const { owner, first, finance } = await withWorkflow();
+    const patch = (tiers: unknown) => t.api("PATCH", "/api/transfers/settings", { token: owner.token, body: { approval: { mode: "workflow", tiers } } });
+
+    const notApprover = await patch([{ minKobo: 0, levels: [{ approvers: [finance.user.id] }] }]);
+    expect(notApprover.body).toMatchObject({ code: "INVALID_APPROVER", details: { userId: finance.user.id } });
+    const twice = await patch([{ minKobo: 0, levels: [{ approvers: [first.user.id] }, { approvers: [first.user.id] }] }]);
+    expect(twice.body.code).toBe("DUPLICATE_APPROVER");
+    const sameStart = await patch([
+      { minKobo: 0, levels: [{ approvers: [first.user.id] }] },
+      { minKobo: 0, levels: [{ approvers: [owner.user.id] }] },
+    ]);
+    expect(sameStart.body.code).toBe("INVALID_APPROVAL_RULE");
+    const tooManyLevels = await patch([{ minKobo: 0, levels: Array.from({ length: 4 }, () => ({ approvers: [first.user.id] })) }]);
+    expect(tooManyLevels.status).toBe(400);
+    const finance2 = await t.api("PATCH", "/api/transfers/settings", { token: finance.token, body: { approval: { mode: "never" } } });
+    expect(finance2.status).toBe(403);
+  });
+
+  test("a transfer goes through each level in order, then is sent", async () => {
+    const { owner, headOfficeId, first, second, finance } = await withWorkflow();
+    const fee = await t.api("GET", "/api/transfers/fee?amountKobo=20000000", { token: finance.token });
+    expect(fee.body).toMatchObject({ needsApproval: true, approvalLevels: 2 });
+
+    const res = await send(finance.token, headOfficeId, 200_000_00);
+    expect(res.body).toMatchObject({ status: "pending_approval", approval: { current: 1 } });
+    expect(res.body.approval.levels.map((l: any) => [l.level, l.status, l.approvers.length])).toEqual([
+      [1, "waiting", 2],
+      [2, "upcoming", 1],
+    ]);
+    // Level 1's approvers are told; the owner isn't yet.
+    const approveMails = () => outbox.filter((m) => m.subject.startsWith("Approve ₦200,000.00"));
+    expect(approveMails().map((m) => m.to).sort()).toEqual([first.user.email, second.user.email].sort());
+
+    // The owner is level 2 and has to wait.
+    const early = await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: owner.token });
+    expect(early.status).toBe(403);
+    expect(early.body.code).toBe("NOT_YOUR_LEVEL");
+    expect((await t.api("GET", "/api/transfers?awaiting=me", { token: owner.token })).body.total).toBe(0);
+    expect((await t.api("GET", "/api/transfers?awaiting=me", { token: second.token })).body.total).toBe(1);
+
+    const payoutsBefore = t.liquifia.payouts.length;
+    const one = await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: first.token, body: { note: "Invoice checked" } });
+    expect(one.body).toMatchObject({ status: "pending_approval", decision: null, approval: { current: 2 } });
+    expect(one.body.approval.levels[0]).toMatchObject({ status: "approved", approvedBy: { _id: first.user.id }, note: "Invoice checked" });
+    expect(t.liquifia.payouts.length).toBe(payoutsBefore);
+    // Now it waits for the owner, not level 1.
+    expect((await t.api("GET", "/api/transfers?awaiting=me", { token: second.token })).body.total).toBe(0);
+    const ownerWaiting = await t.api("GET", "/api/transfers?awaiting=me", { token: owner.token });
+    expect(ownerWaiting.body.items[0]).toMatchObject({ _id: res.body._id, canApprove: true });
+    expect(approveMails().at(-1)!.to).toBe(owner.user.email);
+    expect((await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: first.token })).body.code).toBe("ALREADY_APPROVED");
+
+    const done = await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: owner.token });
+    expect(done.body).toMatchObject({ status: "processing", decision: { by: { name: "Owner" } }, approval: { current: null } });
+    expect(done.body.approval.levels.map((l: any) => l.status)).toEqual(["approved", "approved"]);
+    expect(t.liquifia.payouts.length).toBe(payoutsBefore + 1);
+
+    const approvedTab = await t.api("GET", "/api/transfers?approval=approved", { token: owner.token });
+    expect(approvedTab.body.items.map((i: any) => i._id)).toEqual([res.body._id]);
+  });
+
+  test("below the lowest tier only members who can't approve need a check; above the top tier it takes three", async () => {
+    const { owner, headOfficeId, finance, first } = await withWorkflow();
+    const small = await send(owner.token, headOfficeId, 50_000_00);
+    expect(small.body).toMatchObject({ status: "processing", approval: null });
+    const fromFinance = await send(finance.token, headOfficeId, 50_000_00);
+    expect(fromFinance.body.approval.levels).toMatchObject([{ any: true, approvers: [], status: "waiting" }]);
+    expect((await t.api("POST", `/api/transfers/${fromFinance.body._id}/approve`, { token: first.token })).body.status).toBe("processing");
+
+    const big = await send(finance.token, headOfficeId, 1_500_000_00);
+    expect(big.status).toBe(422); // more than the ₦500,000 balance, but the plan was reachable
+    expect(big.body.code).toBe("INSUFFICIENT_BALANCE");
+    const fee = await t.api("GET", "/api/transfers/fee?amountKobo=150000000", { token: finance.token });
+    expect(fee.body.approvalLevels).toBe(3);
+  });
+
+  test("a creator never approves their own level; the transfer is refused when nobody else is there", async () => {
+    const { owner, headOfficeId, first, admin } = await withWorkflow();
+    const own = await send(owner.token, headOfficeId, 200_000_00);
+    expect(own.status).toBe(409);
+    expect(own.body).toMatchObject({ code: "NO_APPROVER", details: { level: 2 } });
+
+    // A creator who is one of their level's approvers: the level still needs someone else on it.
+    await t.api("PATCH", "/api/transfers/settings", {
+      token: owner.token,
+      body: { approval: { mode: "workflow", tiers: [{ minKobo: 0, levels: [{ approvers: [admin.user.id, first.user.id] }] }] } },
+    });
+    const fromAdmin = await send(admin.token, headOfficeId, 200_000_00);
+    expect(fromAdmin.body.status).toBe("pending_approval");
+    expect((await t.api("POST", `/api/transfers/${fromAdmin.body._id}/approve`, { token: admin.token })).body.code).toBe("CANNOT_APPROVE_OWN");
+    expect((await t.api("POST", `/api/transfers/${fromAdmin.body._id}/approve`, { token: first.token })).body.status).toBe("processing");
+  });
+
+  test("a rejection at any level is final and releases the money", async () => {
+    const { owner, headOfficeId, first, finance } = await withWorkflow();
+    const res = await send(finance.token, headOfficeId, 200_000_00);
+    await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: first.token });
+    const rejected = await t.api("POST", `/api/transfers/${res.body._id}/reject`, { token: owner.token, body: { note: "Not this month" } });
+    expect(rejected.body).toMatchObject({ status: "rejected", decision: { by: { name: "Owner" }, note: "Not this month" }, canApprove: false });
+    expect(rejected.body.approval.levels.map((l: any) => l.status)).toEqual(["approved", "rejected"]);
+    expect((await t.api("GET", "/api/transfers?approval=rejected", { token: owner.token })).body.total).toBe(1);
+    const accounts = await t.api("GET", "/api/accounts", { token: owner.token });
+    expect(accounts.body.find((a: any) => a.branch.isHeadOffice).balance.heldKobo).toBe(0);
+  });
+
+  test("changing the rule doesn't change transfers already waiting", async () => {
+    const { owner, headOfficeId, first, finance } = await withWorkflow();
+    const res = await send(finance.token, headOfficeId, 200_000_00);
+    await t.api("PATCH", "/api/transfers/settings", { token: owner.token, body: { approval: { mode: "never" } } });
+    const after = await t.api("GET", `/api/transfers/${res.body._id}`, { token: owner.token });
+    expect(after.body.approval.levels).toHaveLength(2);
+    expect((await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: owner.token })).body.code).toBe("NOT_YOUR_LEVEL");
+    await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: first.token });
+    expect((await t.api("POST", `/api/transfers/${res.body._id}/approve`, { token: owner.token })).body.status).toBe("processing");
+  });
+
+  test("a batch moves through the levels together", async () => {
+    const { owner, headOfficeId, second, finance } = await withWorkflow();
+    t.liquifia.bankAccounts.set("1111111111", "AMAKA OBI");
+    const res = await t.api("POST", "/api/transfers/bulk", {
+      token: finance.token,
+      body: {
+        branch: headOfficeId,
+        title: "Suppliers",
+        items: [
+          { accountNumber: "0123456789", bankUuid: "BANK-GTB", amountKobo: 80_000_00 },
+          { accountNumber: "1111111111", bankUuid: "BANK-ACCESS", amountKobo: 70_000_00 },
+        ],
+      },
+    });
+    const batch = res.body.batch;
+    expect(batch.items.every((i: any) => i.approval.levels.length === 2)).toBe(true);
+    expect((await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token })).body.code).toBe("NOT_YOUR_LEVEL");
+
+    const one = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: second.token });
+    expect(one.body.statusCounts).toMatchObject({ pending_approval: 2 });
+    expect(one.body.items.every((i: any) => i.approval.current === 2)).toBe(true);
+    // One notification for the batch, not one per row.
+    expect(outbox.filter((m) => m.to === owner.user.email && m.subject.startsWith("Approve 2 transfers"))).toHaveLength(1);
+
+    const two = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token });
+    expect(two.body.statusCounts).toMatchObject({ processing: 2, pending_approval: 0 });
+  });
+
+  test("an approver who loses the role is skipped; a level with nobody left blocks new transfers", async () => {
+    const { owner, headOfficeId, first, second, finance } = await withWorkflow();
+    await MembershipModel.updateOne({ user: second.user._id }, { role: "viewer" });
+    const settings = await t.api("GET", "/api/transfers/settings", { token: owner.token });
+    expect(settings.body.approval.tiers[0].levels[0].approvers.find((a: any) => a._id === second.user.id).canApprove).toBe(false);
+    expect((await send(finance.token, headOfficeId, 200_000_00)).body.status).toBe("pending_approval");
+
+    await MembershipModel.deleteOne({ user: first.user._id });
+    const blocked = await send(finance.token, headOfficeId, 200_000_00);
+    expect(blocked.body).toMatchObject({ code: "NO_APPROVER", details: { level: 1 } });
   });
 });
 

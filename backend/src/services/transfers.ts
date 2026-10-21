@@ -3,7 +3,7 @@ import type { Types } from "mongoose";
 import { BranchModel } from "../models/Branch";
 import type { BusinessDocument } from "../models/Business";
 import { BusinessModel } from "../models/Business";
-import { MembershipModel, type MembershipDocument } from "../models/Membership";
+import type { MembershipDocument } from "../models/Membership";
 import { TransactionModel } from "../models/Transaction";
 import {
   TransferBatchModel,
@@ -19,7 +19,18 @@ import { liquifia, LiquifiaError, newIdempotencyKey, toKobo, toNaira, type Liqui
 import { transferApprovalRequested, transferSettled, transfersDecided } from "./notificationEvents";
 import { assertMoneyCanMove } from "./compliance";
 import { savedByAccount } from "./savings";
-import { canAccessBranch, hasPermission, permissionsFor } from "./team";
+import {
+  approvalPlan,
+  approversForBranch,
+  assertCanDecide,
+  assertPlanReachable,
+  currentLevel,
+  initialApproval,
+  levelApprovers,
+  levelsOf,
+  type PlannedLevel,
+} from "./approvals";
+import { canAccessBranch } from "./team";
 
 // ---------------------------------------------------------------------------------------------------------
 // Banks, account lookup and fees
@@ -211,22 +222,7 @@ const newReference = () => `LPB${randomBytes(8).toString("hex").toUpperCase()}`;
 
 /** Does this transfer need someone else to approve it before it goes? */
 export function needsApproval(business: BusinessDocument, membership: MembershipDocument, totalAmountKobo: number) {
-  if (!hasPermission(membership, "transfers.approve")) return true;
-  const rule = business.transferApproval;
-  if (rule?.mode === "always") return true;
-  if (rule?.mode === "above_threshold" && totalAmountKobo >= (rule.thresholdKobo ?? 0)) return true;
-  return false;
-}
-
-/** Team members (other than `exceptUserId`) who can approve transfers from this branch. */
-export async function eligibleApprovers(business: BusinessDocument, branchId: Types.ObjectId, exceptUserId: string) {
-  const memberships = await MembershipModel.find({ business: business._id, user: { $ne: exceptUserId } });
-  const approvers = memberships.filter((m) => permissionsFor(m.role).includes("transfers.approve") && canAccessBranch(m, branchId));
-  // The owner's membership is created lazily, so count the owner even without one.
-  if (!business.owner.equals(exceptUserId) && !approvers.some((m) => m.user.equals(business.owner))) {
-    return [business.owner, ...approvers.map((m) => m.user)];
-  }
-  return approvers.map((m) => m.user);
+  return approvalPlan(business, membership, totalAmountKobo).length > 0;
 }
 
 /**
@@ -267,14 +263,9 @@ export async function createTransfers(opts: {
   const amountKobo = requests.reduce((s, r) => s + r.amountKobo, 0);
   const feeKobo = requests.reduce((s, r) => s + fees.get(r.amountKobo)!.feeKobo, 0);
   const totalKobo = amountKobo + feeKobo;
-  const approval = needsApproval(business, membership, amountKobo);
-  if (approval && (await eligibleApprovers(business, branch._id, userId)).length === 0) {
-    throw new HttpError(
-      409,
-      "This transfer needs approval, but nobody else on your team can approve transfers from this branch.",
-      "NO_APPROVER",
-    );
-  }
+  const plan = approvalPlan(business, membership, amountKobo);
+  const approval = plan.length > 0;
+  await assertPlanReachable(business, branch._id, plan, userId);
 
   const { transfers, batch } = await withAccountLock(account._id, async () => {
     const { availableKobo } = await availableBalance(account);
@@ -324,6 +315,7 @@ export async function createTransfers(opts: {
           reference: newReference(),
           status: approval ? "pending_approval" : "processing",
           createdBy: userId,
+          approval: initialApproval(plan),
           // Only the first transfer carries the key: the unique index is per transfer.
           clientKey: i === 0 ? opts.clientKey : undefined,
           provider: { idempotencyKey: newIdempotencyKey() },
@@ -334,7 +326,8 @@ export async function createTransfers(opts: {
   });
 
   if (approval) {
-    await notifyApprovers(business, branch._id, userId, transfers, batch?.id).catch((err) => console.error("Couldn't email approvers:", err));
+    const approvers = levelApprovers(plan[0]!, await approversForBranch(business, branch._id), [userId]);
+    await notifyApprovers(business, approvers, userId, transfers).catch((err) => console.error("Couldn't email approvers:", err));
   } else {
     for (const transfer of transfers) await submitTransfer(transfer);
   }
@@ -345,7 +338,10 @@ export async function createTransfers(opts: {
 // Approving, rejecting, cancelling
 // ---------------------------------------------------------------------------------------------------------
 
-/** Approves or rejects transfers waiting for approval. The person who created them can't decide on them. */
+/**
+ * Approves or rejects transfers waiting for approval. An approval clears the current level: the transfer moves
+ * to the next level's approvers, or, after the last level, is sent. A rejection at any level is final.
+ */
 export async function decideTransfers(opts: {
   transfers: TransferDocument[];
   membership: MembershipDocument;
@@ -359,28 +355,42 @@ export async function decideTransfers(opts: {
     if (owner) assertMoneyCanMove(owner);
   }
   for (const transfer of transfers) {
-    if (transfer.status !== "pending_approval") {
-      throw new HttpError(409, "This transfer is no longer waiting for approval", "TRANSFER_NOT_PENDING");
-    }
-    if (transfer.createdBy.equals(userId)) {
-      throw new HttpError(403, "Someone else has to approve a transfer you created", "CANNOT_APPROVE_OWN");
-    }
     if (!canAccessBranch(opts.membership, transfer.branch)) throw new HttpError(404, "Transfer not found");
+    assertCanDecide(transfer, opts.membership, userId);
   }
 
-  const decided: TransferDocument[] = [];
+  const now = new Date();
+  const decided: TransferDocument[] = []; // fully approved, or rejected
+  const advanced: TransferDocument[] = []; // approved at a level, waiting for the next
   for (const transfer of transfers) {
-    // Conditional update, so two approvers clicking at once can't both act.
+    const levels = levelsOf(transfer);
+    const index = currentLevel(transfer);
+    const stored = (transfer.approval?.levels?.length ?? 0) > 0;
+    const mark = stored ? { [`approval.levels.${index}.approvedBy`]: userId, [`approval.levels.${index}.approvedAt`]: now, [`approval.levels.${index}.note`]: note } : {};
+    const next = levels[index + 1];
+
+    let update: Record<string, unknown>;
+    if (decision === "reject") {
+      update = { status: "rejected", decision: { by: userId, at: now, note }, completedAt: now, "approval.waitingOn": [], "approval.waitingOnAny": false };
+    } else if (next) {
+      update = { ...mark, "approval.current": index + 1, "approval.waitingOn": next.any ? [] : next.approvers, "approval.waitingOnAny": next.any };
+    } else {
+      update = {
+        ...mark,
+        status: "processing",
+        decision: { by: userId, at: now, note },
+        ...(stored && { "approval.current": levels.length }),
+        "approval.waitingOn": [],
+        "approval.waitingOnAny": false,
+      };
+    }
+    // Conditional update, so two approvers clicking at once can't both act on the same level.
     const updated = await TransferModel.findOneAndUpdate(
-      { _id: transfer._id, status: "pending_approval" },
-      {
-        status: decision === "approve" ? "processing" : "rejected",
-        decision: { by: userId, at: new Date(), note },
-        ...(decision === "reject" && { completedAt: new Date() }),
-      },
+      { _id: transfer._id, status: "pending_approval", ...(stored && { "approval.current": index }) },
+      update,
       { returnDocument: "after" },
     );
-    if (updated) decided.push(updated);
+    if (updated) (decision === "approve" && next ? advanced : decided).push(updated);
   }
 
   if (decided.length) {
@@ -390,12 +400,13 @@ export async function decideTransfers(opts: {
     ]);
     if (business) await transfersDecided(business, decided, decision, decider?.name ?? "A team member", note);
   }
+  if (advanced.length) await notifyNextLevel(advanced, userId).catch((err) => console.error("Couldn't tell the next approvers:", err));
   if (decision === "approve") {
     for (const transfer of decided) await submitTransfer(transfer);
   } else if (decided.length) {
     await notifyRejected(decided, note).catch((err) => console.error("Couldn't email the rejection:", err));
   }
-  return decided;
+  return [...decided, ...advanced];
 }
 
 /** The creator withdraws transfers that haven't been approved yet. */
@@ -592,13 +603,16 @@ export function startTransferProcessor(intervalMs: number) {
 
 async function notifyApprovers(
   business: BusinessDocument,
-  branchId: Types.ObjectId,
-  creatorId: string,
+  approverIds: Types.ObjectId[],
+  creatorId: Types.ObjectId | string,
   transfers: TransferDocument[],
-  batchId?: string,
+  progress?: string,
 ) {
-  const [approverIds, creator] = await Promise.all([eligibleApprovers(business, branchId, creatorId), UserModel.findById(creatorId).select("name")]);
-  const approvers = await UserModel.find({ _id: { $in: approverIds } }).select("email");
+  const batchId = transfers[0]!.batch ? String(transfers[0]!.batch) : undefined;
+  const [creator, approvers] = await Promise.all([
+    UserModel.findById(creatorId).select("name"),
+    UserModel.find({ _id: { $in: approverIds } }).select("email"),
+  ]);
   const amountKobo = transfers.reduce((s, t) => s + t.amountKobo, 0);
   for (const approver of approvers) {
     await sendTransferAwaitingApprovalEmail(approver.email, {
@@ -610,7 +624,28 @@ async function notifyApprovers(
       path: batchId ? `/transfers?batch=${batchId}` : `/transfers?transfer=${transfers[0]!.id}`,
     });
   }
-  await transferApprovalRequested(business, approverIds, creator?.name ?? "A team member", transfers);
+  await transferApprovalRequested(business, approverIds, creator?.name ?? "A team member", transfers, progress);
+}
+
+/** After a level is approved: tells the next level's approvers, one message per batch or transfer. */
+async function notifyNextLevel(transfers: TransferDocument[], approvedBy: string) {
+  const groups = new Map<string, TransferDocument[]>();
+  for (const t of transfers) {
+    const key = t.batch ? `b${t.batch}` : `t${t.id}`;
+    groups.set(key, [...(groups.get(key) ?? []), t]);
+  }
+  const approver = await UserModel.findById(approvedBy).select("name");
+  for (const group of groups.values()) {
+    const first = group[0]!;
+    const business = await BusinessModel.findById(first.business);
+    if (!business) continue;
+    const levels = levelsOf(first);
+    const index = currentLevel(first);
+    const earlier = levels.slice(0, index).map((l) => l.approvedBy).filter((id): id is Types.ObjectId => !!id);
+    const ids = levelApprovers(levels[index]! as PlannedLevel, await approversForBranch(business, first.branch), [first.createdBy, ...earlier]);
+    const progress = `${approver?.name ?? "A team member"} approved level ${index} of ${levels.length}.`;
+    await notifyApprovers(business, ids, first.createdBy, group, progress);
+  }
 }
 
 async function notifyRejected(transfers: TransferDocument[], note?: string) {

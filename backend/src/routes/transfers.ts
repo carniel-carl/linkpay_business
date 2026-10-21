@@ -11,6 +11,7 @@ import {
   getFee,
   getTransfer,
   getTransferSettings,
+  listApprovers,
   listTransfers,
   refreshTransferStatus,
   rejectBatch,
@@ -34,6 +35,7 @@ transfersRouter.post("/resolve-account", create, resolveAccount);
 transfersRouter.get("/fee", create, getFee);
 transfersRouter.get("/settings", view, getTransferSettings);
 transfersRouter.patch("/settings", requirePermission("transfers.manage"), updateTransferSettings);
+transfersRouter.get("/approvers", requirePermission("transfers.manage"), listApprovers);
 
 transfersRouter.post("/bulk", create, createBulkTransfer);
 transfersRouter.get("/batches/:id", view, getBatch);

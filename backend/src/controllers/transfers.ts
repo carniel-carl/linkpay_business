@@ -3,14 +3,24 @@ import { isValidObjectId, Types } from "mongoose";
 import { z } from "zod";
 import { BranchModel } from "../models/Branch";
 import { TRANSFER_KINDS, TRANSFER_STATUSES, TransferBatchModel, TransferModel, type TransferDocument } from "../models/Transfer";
+import { ROLE_LABELS } from "../config/permissions";
+import { MembershipModel } from "../models/Membership";
 import { UserModel } from "../models/User";
-import { branchScope, canAccessBranch, hasPermission } from "../services/team";
+import {
+  approvalBlocker,
+  approvalPlan,
+  currentLevel,
+  levelsOf,
+  MAX_APPROVERS_PER_LEVEL,
+  MAX_LEVELS,
+  MAX_TIERS,
+} from "../services/approvals";
+import { branchScope, canAccessBranch, ensureOwnerMembership, hasPermission } from "../services/team";
 import {
   cancelTransfers,
   createTransfers,
   decideTransfers,
   listBanks,
-  needsApproval,
   quoteFee,
   refreshTransfer,
   resolveBankRecipient,
@@ -37,7 +47,11 @@ function clientKey(req: Request) {
 // ---------------------------------------------------------------------------------------------------------
 
 async function serialize(req: Request, transfers: TransferDocument[]) {
-  const userIds = transfers.flatMap((t) => [t.createdBy, t.decision?.by].filter(Boolean));
+  const userIds = transfers.flatMap((t) => [
+    t.createdBy,
+    t.decision?.by,
+    ...levelsOf(t).flatMap((l) => [...l.approvers, l.approvedBy]),
+  ].filter(Boolean));
   const branchIds = transfers.flatMap((t) => [t.branch, t.recipient?.branch].filter(Boolean));
   const [users, branches] = await Promise.all([
     UserModel.find({ _id: { $in: userIds } }).select("name"),
@@ -52,7 +66,6 @@ async function serialize(req: Request, transfers: TransferDocument[]) {
     return b ? { _id: b.id, name: b.name, isHeadOffice: b.isHeadOffice } : null;
   };
   const me = req.userId!;
-  const mayApprove = hasPermission(req.membership!, "transfers.approve");
 
   return transfers.map((t) => ({
     _id: t.id,
@@ -77,12 +90,43 @@ async function serialize(req: Request, transfers: TransferDocument[]) {
     failureReason: t.failureReason ?? null,
     createdBy: user(t.createdBy),
     decision: t.decision?.by ? { by: user(t.decision.by), at: t.decision.at, note: t.decision.note ?? null } : null,
+    approval: describeApproval(t, user),
     createdAt: t.get("createdAt"),
     submittedAt: t.submittedAt ?? null,
     completedAt: t.completedAt ?? null,
-    canApprove: t.status === "pending_approval" && mayApprove && !t.createdBy.equals(me),
+    canApprove: approvalBlocker(t, req.membership!, me) === null,
     canCancel: t.status === "pending_approval" && t.createdBy.equals(me),
   }));
+}
+
+type LevelStatus = "approved" | "waiting" | "upcoming" | "rejected" | "cancelled" | "not_reached";
+
+/** The transfer's approval levels and where each stands, or null when it didn't need approval. */
+function describeApproval(t: TransferDocument, user: (id?: Types.ObjectId | null) => { _id: string; name: string } | null) {
+  const levels = levelsOf(t);
+  if (!levels.length) return null;
+  const current = currentLevel(t);
+  const statusAt = (i: number): LevelStatus => {
+    if (i < current) return "approved";
+    if (i > current) return t.status === "pending_approval" ? "upcoming" : "not_reached";
+    if (t.status === "pending_approval") return "waiting";
+    if (t.status === "rejected") return "rejected";
+    if (t.status === "cancelled") return "cancelled";
+    return "approved";
+  };
+  return {
+    current: t.status === "pending_approval" ? current + 1 : null, // 1-based level waiting for a decision
+    levels: levels.map((l, i) => ({
+      level: i + 1,
+      // true: anyone who can approve transfers; otherwise one of `approvers`.
+      any: l.any,
+      approvers: l.approvers.map((id) => user(id)).filter(Boolean),
+      status: statusAt(i),
+      approvedBy: user(l.approvedBy),
+      approvedAt: l.approvedAt ?? null,
+      note: l.note ?? null,
+    })),
+  };
 }
 
 /** Loads a transfer of this business that the member may see. */
@@ -144,11 +188,13 @@ export const resolveAccount: RequestHandler = async (req, res) => {
 export const getFee: RequestHandler = async (req, res) => {
   const query = z.object({ amountKobo: z.coerce.number().pipe(amountKobo) }).parse(req.query);
   const fee = await quoteFee(query.amountKobo);
+  const plan = approvalPlan(req.business!, req.membership!, query.amountKobo);
   res.json({
     amountKobo: query.amountKobo,
     ...fee,
     totalKobo: query.amountKobo + fee.feeKobo,
-    needsApproval: needsApproval(req.business!, req.membership!, query.amountKobo),
+    needsApproval: plan.length > 0,
+    approvalLevels: plan.length,
   });
 };
 
@@ -156,14 +202,85 @@ export const getFee: RequestHandler = async (req, res) => {
 // Approval rule
 // ---------------------------------------------------------------------------------------------------------
 
-function describeApprovalRule(req: Request) {
+/** Members of this business who can approve transfers, by user id, with their role and branches. */
+async function approverDirectory(req: Request) {
+  const business = req.business!;
+  await ensureOwnerMembership(business);
+  const memberships = await MembershipModel.find({ business: business._id });
+  const approvers = memberships.filter((m) => hasPermission(m, "transfers.approve"));
+  const [users, branches] = await Promise.all([
+    UserModel.find({ _id: { $in: approvers.map((m) => m.user) } }).select("name email"),
+    BranchModel.find({ business: business._id }).select("name"),
+  ]);
+  return approvers.flatMap((m) => {
+    const u = users.find((x) => x._id.equals(m.user));
+    if (!u) return [];
+    const scope = branchScope(m);
+    return [
+      {
+        _id: u.id as string,
+        name: u.name,
+        email: u.email,
+        role: m.role,
+        roleLabel: ROLE_LABELS[m.role],
+        // null = every branch
+        branches: scope ? branches.filter((b) => scope.some((id) => id.equals(b._id))).map((b) => ({ _id: b.id, name: b.name })) : null,
+      },
+    ];
+  });
+}
+
+async function describeApprovalRule(req: Request) {
   const rule = req.business!.transferApproval;
-  return { mode: rule?.mode ?? "never", thresholdKobo: rule?.thresholdKobo ?? null };
+  const mode = rule?.mode ?? "never";
+  const tiers = mode === "workflow" ? [...(rule?.tiers ?? [])].sort((a, b) => a.minKobo - b.minKobo) : [];
+  const directory = tiers.length ? await approverDirectory(req) : [];
+  const ids = [...new Set(tiers.flatMap((t) => t.levels.flatMap((l) => l.approvers.map(String))))];
+  const users = await UserModel.find({ _id: { $in: ids } }).select("name email");
+  return {
+    mode,
+    thresholdKobo: rule?.thresholdKobo ?? null,
+    tiers: tiers.map((t) => ({
+      minKobo: t.minKobo,
+      levels: t.levels.map((l) => ({
+        approvers: l.approvers.map((id) => {
+          const member = directory.find((d) => d._id === String(id));
+          const u = users.find((x) => x._id.equals(id));
+          return {
+            _id: String(id),
+            name: member?.name ?? u?.name ?? "Former member",
+            role: member?.role ?? null,
+            roleLabel: member?.roleLabel ?? null,
+            // false once they've left or lost the right to approve; the level then relies on the others.
+            canApprove: !!member,
+          };
+        }),
+      })),
+    })),
+  };
 }
 
 export const getTransferSettings: RequestHandler = async (req, res) => {
-  res.json({ approval: describeApprovalRule(req) });
+  res.json({ approval: await describeApprovalRule(req) });
 };
+
+/** For the workflow editor: who can be named as an approver. */
+export const listApprovers: RequestHandler = async (req, res) => {
+  res.json(await approverDirectory(req));
+};
+
+const workflowTiers = z
+  .array(
+    z.object({
+      minKobo: z.number().int().min(0),
+      levels: z
+        .array(z.object({ approvers: z.array(objectId).min(1).max(MAX_APPROVERS_PER_LEVEL) }))
+        .min(1)
+        .max(MAX_LEVELS),
+    }),
+  )
+  .min(1)
+  .max(MAX_TIERS);
 
 export const updateTransferSettings: RequestHandler = async (req, res) => {
   const body = z
@@ -172,16 +289,42 @@ export const updateTransferSettings: RequestHandler = async (req, res) => {
         z.object({ mode: z.literal("never") }),
         z.object({ mode: z.literal("always") }),
         z.object({ mode: z.literal("above_threshold"), thresholdKobo: z.number().int().min(100) }),
+        z.object({ mode: z.literal("workflow"), tiers: workflowTiers }),
       ]),
     })
     .parse(req.body);
   const business = req.business!;
+  const approval = body.approval;
+
+  let tiers: { minKobo: number; levels: { approvers: Types.ObjectId[] }[] }[] | undefined;
+  if (approval.mode === "workflow") {
+    const amounts = approval.tiers.map((t) => t.minKobo);
+    if (new Set(amounts).size !== amounts.length) {
+      throw new HttpError(400, "Two tiers start at the same amount", "INVALID_APPROVAL_RULE");
+    }
+    const directory = new Set((await approverDirectory(req)).map((d) => d._id));
+    for (const tier of approval.tiers) {
+      const named = tier.levels.flatMap((l) => l.approvers);
+      if (new Set(named).size !== named.length) {
+        throw new HttpError(400, "Each person can only be at one level of a tier", "DUPLICATE_APPROVER");
+      }
+      const outsider = named.find((id) => !directory.has(id));
+      if (outsider) {
+        throw new HttpError(400, "Approvers must be team members who can approve transfers", "INVALID_APPROVER", { userId: outsider });
+      }
+    }
+    tiers = approval.tiers
+      .sort((a, b) => a.minKobo - b.minKobo)
+      .map((t) => ({ minKobo: t.minKobo, levels: t.levels.map((l) => ({ approvers: l.approvers.map((id) => new Types.ObjectId(id)) })) }));
+  }
+
   business.set("transferApproval", {
-    mode: body.approval.mode,
-    thresholdKobo: body.approval.mode === "above_threshold" ? body.approval.thresholdKobo : undefined,
+    mode: approval.mode,
+    thresholdKobo: approval.mode === "above_threshold" ? approval.thresholdKobo : undefined,
+    tiers,
   });
   await business.save();
-  res.json({ approval: describeApprovalRule(req) });
+  res.json({ approval: await describeApprovalRule(req) });
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -193,8 +336,10 @@ const listFilters = z.object({
   kind: z.enum(TRANSFER_KINDS).optional(),
   branch: objectId.optional(),
   batch: objectId.optional(),
-  // "me": waiting for the signed-in member's approval.
+  // "me": waiting for the signed-in member's approval at its current level.
   awaiting: z.literal("me").optional(),
+  // Fund approvals tabs: waiting, approved (and sent), or declined.
+  approval: z.enum(["pending", "approved", "rejected"]).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   q: z.string().trim().max(100).optional(),
@@ -219,8 +364,19 @@ export const listTransfers: RequestHandler = async (req, res) => {
     if (!hasPermission(req.membership!, "transfers.approve")) {
       return void res.json({ items: [], total: 0, skip: f.skip, take: f.take });
     }
+    const me = new Types.ObjectId(req.userId);
     filter.status = "pending_approval";
-    filter.createdBy = { $ne: new Types.ObjectId(req.userId) };
+    filter.createdBy = { $ne: me };
+    filter["approval.levels.approvedBy"] = { $ne: me };
+    filter.$and = [
+      { $or: [{ "approval.waitingOn": me }, { "approval.waitingOnAny": true }, { "approval.levels.0": { $exists: false } }] },
+    ];
+  }
+  if (f.approval === "pending") filter.status = "pending_approval";
+  if (f.approval === "rejected") filter.status = "rejected";
+  if (f.approval === "approved") {
+    filter["decision.by"] = { $exists: true };
+    filter.status = f.status && ["processing", "success", "failed"].includes(f.status) ? f.status : { $in: ["processing", "success", "failed"] };
   }
   if (f.from || f.to) filter.createdAt = { ...(f.from && { $gte: f.from }), ...(f.to && { $lte: f.to }) };
   if (f.q) {

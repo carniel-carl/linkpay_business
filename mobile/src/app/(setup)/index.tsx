@@ -3,6 +3,7 @@ import { Alert } from "react-native";
 import { BandScreen } from "@/components/security/band-screen";
 import { CreatePasscode } from "@/components/security/create-passcode";
 import { TextButton } from "@/components/ui/button";
+import { setUnlocked } from "@/lib/auth/session";
 import { useAuth } from "@/lib/auth/store";
 import { getBiometry } from "@/lib/security/biometrics";
 import { setPasscode } from "@/lib/security/passcode";
@@ -12,6 +13,8 @@ export default function SetPasscode() {
 
   async function created(code: string) {
     await setPasscode(code);
+    // The owner just chose the passcode, so requests can go: the Face ID step asks the server for a sign-in key.
+    setUnlocked(true);
     const biometry = await getBiometry();
     if (biometry.available) router.replace("/biometrics");
     else passcodeReady();

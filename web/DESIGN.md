@@ -58,7 +58,7 @@ Every colour, radius and font is a CSS variable in `src/app/globals.css`. Compon
 ## Layout
 
 - **Dashboard:**
-  - The sidebar has the branch switcher at the top, then the Banking nav, then Settings and a small wordmark at the bottom. It collapses to icons (Cmd/Ctrl+B) and becomes a slide-out sheet under 768px.
+  - The sidebar has the branch switcher at the top, then the nav in groups (Home with no heading, then Banking, then Business), then Settings and a small wordmark at the bottom. It collapses to icons (Cmd/Ctrl+B) and becomes a slide-out sheet under 768px.
   - The header is **fixed**, not sticky (`PinnedHeader`). Its position comes from `--dashboard-header-left` and `--dashboard-header-width`, which the sidebar wrapper sets from its open state. It animates with the sidebar over the same 200ms.
   - Overscroll is off (`overscroll-behavior: none`). On sidebar pages the page background is the frame colour, so nothing different shows behind the app.
   - Below the header come the status banner (until verified), the band with the page title, then the overlapping content.

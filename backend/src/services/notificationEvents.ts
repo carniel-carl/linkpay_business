@@ -41,13 +41,14 @@ function byCreator(transfers: TransferDocument[]) {
 // Transfers
 // ---------------------------------------------------------------------------------------------------------
 
-export async function transferApprovalRequested(business: BizRef, approverIds: Id[], creatorName: string, transfers: TransferDocument[]) {
+/** `progress`: earlier approval levels already cleared, e.g. "Ada approved level 1 of 2." */
+export async function transferApprovalRequested(business: BizRef, approverIds: Id[], creatorName: string, transfers: TransferDocument[], progress?: string) {
   await notifyUsers(
     approverIds,
     {
       type: "transfer.approval_requested",
       title: "Transfer waiting for approval",
-      body: `${creatorName} wants to send ${describeTransfers(transfers)}.`,
+      body: `${creatorName} wants to send ${describeTransfers(transfers)}.${progress ? ` ${progress}` : ""}`,
       link: transferLink(transfers),
       data: transferData(transfers),
     },

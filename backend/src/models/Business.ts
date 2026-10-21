@@ -11,6 +11,9 @@ export const BUSINESS_STATUSES = [
 ] as const;
 export type BusinessStatus = (typeof BUSINESS_STATUSES)[number];
 
+export const TRANSFER_APPROVAL_MODES = ["never", "always", "above_threshold", "workflow"] as const;
+export type TransferApprovalMode = (typeof TRANSFER_APPROVAL_MODES)[number];
+
 const personSchema = new Schema(
   {
     fullName: { type: String, required: true, trim: true },
@@ -77,8 +80,21 @@ const businessSchema = new Schema(
     // When a second person must approve a transfer before money leaves. Transfers created by someone
     // without `transfers.approve` always need approval, whatever this says.
     transferApproval: {
-      mode: { type: String, enum: ["never", "always", "above_threshold"], default: "never" },
+      mode: { type: String, enum: TRANSFER_APPROVAL_MODES, default: "never" },
       thresholdKobo: { type: Number, min: 0 },
+      // mode "workflow": amount tiers, sorted by `minKobo`. A transfer uses the highest tier it reaches
+      // (below the lowest it needs no approval) and goes through that tier's levels in order. One of a
+      // level's named approvers clears it. See services/approvals.ts.
+      tiers: {
+        type: [
+          {
+            _id: false,
+            minKobo: { type: Number, required: true, min: 0 },
+            levels: [{ _id: false, approvers: [{ type: Types.ObjectId, ref: "User" }] }],
+          },
+        ],
+        default: undefined,
+      },
     },
 
     // How the business's invoices and receipts look (see services/branding.ts). Set under Settings.

@@ -55,10 +55,31 @@ const transferSchema = new Schema(
     createdBy: { type: Types.ObjectId, ref: "User", required: true },
     // Optional key from the client (Idempotency-Key header) so a retried request doesn't send twice.
     clientKey: { type: String },
+    // The final approval or the rejection.
     decision: {
       by: { type: Types.ObjectId, ref: "User" },
       at: { type: Date },
       note: { type: String, trim: true },
+    },
+    // The approval levels this transfer needs, fixed when it's created so later rule changes don't apply.
+    // Empty when it needed none (and on transfers from before levels, which had one "any approver" level).
+    approval: {
+      levels: [
+        {
+          _id: false,
+          // Anyone who can approve transfers clears it (the simple rules); otherwise one of `approvers`.
+          any: { type: Boolean, default: false },
+          approvers: [{ type: Types.ObjectId, ref: "User" }],
+          approvedBy: { type: Types.ObjectId, ref: "User" },
+          approvedAt: { type: Date },
+          note: { type: String, trim: true },
+        },
+      ],
+      // Index of the level waiting for a decision; equals levels.length once fully approved.
+      current: { type: Number, default: 0 },
+      // The current level's approvers (or `waitingOnAny`), so "waiting for me" is one query.
+      waitingOn: [{ type: Types.ObjectId, ref: "User" }],
+      waitingOnAny: { type: Boolean, default: false },
     },
 
     provider: {
@@ -94,6 +115,7 @@ transferSchema.index({ createdAt: -1 });
 transferSchema.index({ virtualAccount: 1, status: 1 });
 transferSchema.index({ status: 1, "provider.lastCheckedAt": 1 });
 transferSchema.index({ batch: 1 });
+transferSchema.index({ business: 1, status: 1, "approval.waitingOn": 1 });
 transferSchema.index(
   { business: 1, createdBy: 1, clientKey: 1 },
   { unique: true, partialFilterExpression: { clientKey: { $type: "string" } } },

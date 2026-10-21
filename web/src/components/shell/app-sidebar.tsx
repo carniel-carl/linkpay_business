@@ -50,7 +50,10 @@ export function AppSidebar({
   permissions,
 }: Props) {
   // Owners of an unverified business have no membership details yet; show everything (locked).
-  const visible = NAV.filter((item) => !item.permission || !permissions || permissions.includes(item.permission))
+  const groups = NAV.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.permission || !permissions || permissions.includes(item.permission)),
+  })).filter((group) => group.items.length > 0)
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader className="gap-1.5 px-2 pt-3">
@@ -64,17 +67,21 @@ export function AppSidebar({
           selectedId={selectedBranchId}
         />
       </SidebarHeader>
-      <SidebarContent className="pt-2">
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/85">Banking</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-0.5">
-              {visible.map((item) => (
-                <NavLink key={item.href} item={item} approved={approved} />
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+      <SidebarContent className="gap-0 pt-2">
+        {groups.map((group) => (
+          <SidebarGroup key={group.label ?? "top"} className="py-1">
+            {group.label && (
+              <SidebarGroupLabel className="text-sidebar-foreground/85">{group.label}</SidebarGroupLabel>
+            )}
+            <SidebarGroupContent>
+              <SidebarMenu className="gap-0.5">
+                {group.items.map((item) => (
+                  <NavLink key={item.href} item={item} approved={approved} />
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
       <SidebarFooter className="gap-3 pb-3">
         <SidebarMenu>
