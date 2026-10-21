@@ -1,3 +1,4 @@
+import { env } from "./config/env";
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
@@ -15,6 +16,7 @@ import { pocketsRouter } from "./routes/pockets";
 import { safelocksRouter } from "./routes/safelocks";
 import { beneficiariesRouter } from "./routes/beneficiaries";
 import { payoutListsRouter } from "./routes/payoutLists";
+import { paymentLinksRouter } from "./routes/paymentLinks";
 import { publicRouter } from "./routes/public";
 import { teamRouter } from "./routes/team";
 import { transactionsRouter } from "./routes/transactions";
@@ -24,6 +26,10 @@ import { usersRouter } from "./routes/users";
 import { errorHandler, notFound } from "./middleware/errorHandler";
 
 export const app = express();
+
+// Rate limits key on req.ip. The web calls the public routes for payers (pay pages, invoices) and passes
+// their address in X-Forwarded-For; only proxies listed here are believed (default: this machine).
+app.set("trust proxy", env.trustProxy);
 
 app.use(cors());
 // Before express.json(): webhook signatures need the raw body.
@@ -49,6 +55,7 @@ app.use("/api/pockets", pocketsRouter);
 app.use("/api/safelocks", safelocksRouter);
 app.use("/api/beneficiaries", beneficiariesRouter);
 app.use("/api/payout-lists", payoutListsRouter);
+app.use("/api/payment-links", paymentLinksRouter);
 app.use("/api/branding", brandingRouter);
 app.use("/api/public", publicRouter);
 app.use("/api/invites", invitesRouter);

@@ -6,6 +6,7 @@ import { SAFELOCK_RELEASE_INTERVAL_MS } from "./src/config/safelock";
 import { startInvoiceReminders } from "./src/services/invoices";
 import { startRiskChecks } from "./src/services/risk";
 import { startSafelockReleases } from "./src/services/safelocks";
+import { startLinkImageCleanup } from "./src/services/paymentLinkImages";
 import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
 
@@ -25,6 +26,8 @@ const stopReminders = startInvoiceReminders(15 * 60 * 1000);
 const stopRiskChecks = startRiskChecks(RISK_CHECK_INTERVAL_MS);
 // Releases Safelocks whose unlock day has come and tells the branch's team.
 const stopSafelockReleases = startSafelockReleases(SAFELOCK_RELEASE_INTERVAL_MS);
+// Payment-link pictures uploaded but never attached to a link.
+const stopImageCleanup = startLinkImageCleanup(60 * 60 * 1000);
 
 async function shutdown() {
   stopSync();
@@ -32,6 +35,7 @@ async function shutdown() {
   stopReminders();
   stopRiskChecks();
   stopSafelockReleases();
+  stopImageCleanup();
   server.close();
   await disconnectDB();
   process.exit(0);

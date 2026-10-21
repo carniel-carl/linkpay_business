@@ -19,6 +19,10 @@ const transactionSchema = new Schema(
     invoice: { type: Types.ObjectId, ref: "Invoice" },
     // When the invoice matcher last looked at this payment; it looks once (see services/invoices.ts).
     invoiceCheckedAt: { type: Date },
+    // Incoming payments: the payment-link checkout this paid (matched on amount or reference, or by hand).
+    checkout: { type: Types.ObjectId, ref: "Checkout" },
+    // When the checkout matcher looked at this payment; it looks once, before the invoice matcher (see services/paymentLinks.ts).
+    checkoutCheckedAt: { type: Date },
     // When savings auto-save last looked at this payment; it looks once (see services/pockets.ts).
     autoSaveCheckedAt: { type: Date },
     direction: { type: String, enum: ["credit", "debit"], required: true },
@@ -57,6 +61,7 @@ transactionSchema.index({ business: 1, occurredAt: -1 });
 transactionSchema.index({ occurredAt: -1 });
 transactionSchema.index({ branch: 1, occurredAt: -1 });
 transactionSchema.index({ direction: 1, status: 1, invoiceCheckedAt: 1 });
+transactionSchema.index({ direction: 1, status: 1, checkoutCheckedAt: 1 });
 transactionSchema.index({ virtualAccount: 1, autoSaveCheckedAt: 1, occurredAt: 1 });
 
 export type Transaction = InferSchemaType<typeof transactionSchema>;

@@ -111,7 +111,8 @@ export type Permission =
   | "transfers.approve"
   | "transfers.manage"
   | "invoices.manage"
-  | "savings.manage";
+  | "savings.manage"
+  | "payments.manage";
 
 /** `branches: null` means every branch. Decide from `permissions`, never from the role name. */
 export type Membership = { _id: string; role: string; permissions: Permission[]; branches: string[] | null };
@@ -146,9 +147,16 @@ export type Account = {
   currency: "NGN";
   /**
    * `availableKobo` is what can be sent: the bank balance minus money held for pending transfers and money set
-   * aside in savings (`savedKobo`). Use it when present.
+   * aside in savings (`savedKobo`, pockets and Safelocks; `lockedKobo` is the Safelock part). Use it when present.
    */
-  balance: { amountKobo: number; currency: "NGN"; heldKobo?: number; savedKobo?: number; availableKobo?: number } | null;
+  balance: {
+    amountKobo: number;
+    currency: "NGN";
+    heldKobo?: number;
+    savedKobo?: number;
+    lockedKobo?: number;
+    availableKobo?: number;
+  } | null;
 };
 
 // ---- Transactions ----
@@ -528,6 +536,52 @@ export type Pocket = {
 
 export type PocketList = { items: Pocket[]; savedKobo: number; currency: "NGN" };
 
+// ---- Safelock (/api/safelocks; docs/briefs/savings.md §6) ----
+
+/**
+ * A fixed amount of one branch's available balance, held until `unlockOn` (midnight, Lagos). It can't be
+ * broken early, topped up, shortened or extended; only the title changes.
+ */
+export type Safelock = {
+  _id: string;
+  title: string;
+  status: "locked" | "released";
+  branch: BranchRef | null;
+  amountKobo: number;
+  currency: "NGN";
+  /** YYYY-MM-DD, Lagos. */
+  lockedOn: string;
+  unlockOn: string;
+  /** The moment it unlocks, for a countdown. */
+  unlockAt: string;
+  totalDays: number;
+  /** 0 once released. */
+  daysLeft: number;
+  /** 0..10000: how far through the lock period. */
+  progressBps: number;
+  releasedAt: string | null;
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+  /** savings.manage, and still locked. */
+  canRename: boolean;
+};
+
+/** `lockedKobo` sums the running locks in the list. */
+export type SafelockList = { items: Safelock[]; lockedKobo: number; currency: "NGN" };
+
+/** GET /api/safelocks/limits. Never hard-code these. */
+export type SafelockLimits = {
+  minAmountKobo: number;
+  maxAmountKobo: number;
+  minDays: number;
+  maxDays: number;
+  earliestUnlockOn: string;
+  latestUnlockOn: string;
+  maxPerBranch: number;
+  canBreakEarly: false;
+  interestRateBps: number;
+};
+
 export type PocketMovement = {
   _id: string;
   kind: "deposit" | "withdrawal" | "auto_save" | "close";
@@ -542,3 +596,90 @@ export type PocketMovement = {
 };
 
 export type PocketActivity = { items: PocketMovement[]; nextBefore: string | null };
+
+// ---- Payment links (contract: docs/briefs/payment-links.md) ----
+
+export type PhoneFieldMode = "off" | "optional" | "required";
+export type PaymentLinkUnavailableReason = "inactive" | "expired" | "sold_out" | "account_not_ready";
+export type CheckoutStatus = "pending" | "expired" | "paid" | "underpaid";
+
+/** A picture on a payment link. `url` is an API path (signed in on the dashboard routes). */
+export type PaymentLinkImage = { _id: string; url: string; width: number; height: number };
+
+export type PaymentLink = {
+  _id: string;
+  title: string;
+  description: string | null;
+  slug: string;
+  /** WEB_URL/pay/<slug> */
+  url: string;
+  branch: BranchRef | null;
+  /** null = the payer chooses (at least `minAmountKobo`, if set). */
+  amountKobo: number | null;
+  minAmountKobo: number | null;
+  phone: PhoneFieldMode;
+  customFields: { _id: string; label: string; required: boolean }[];
+  /** In order; the first is the cover. */
+  images: PaymentLinkImage[];
+  successMessage: string | null;
+  redirectUrl: string | null;
+  status: "active" | "inactive";
+  /** Websites that may embed it; [] = any site. */
+  allowedOrigins: string[];
+  expiresAt: string | null;
+  maxPayments: number | null;
+  paymentsCount: number;
+  collectedKobo: number;
+  lastPaidAt: string | null;
+  available: boolean;
+  unavailableReason: PaymentLinkUnavailableReason | null;
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+  canManage: boolean;
+};
+
+export type PaymentLinkList = { items: PaymentLink[]; total: number; skip: number; take: number };
+
+export type PaymentLinkSummary = {
+  links: { active: number; inactive: number };
+  collectedKobo: number;
+  paymentsCount: number;
+  last30Days: { collectedKobo: number; paymentsCount: number };
+};
+
+/** GET /api/payment-links/:id/embed */
+export type PaymentLinkEmbed = {
+  url: string;
+  scriptUrl: string;
+  button: string;
+  inline: string;
+  javascript: string;
+  allowedOrigins: string[];
+  verifyUrl: string;
+};
+
+/** One payer's checkout, as the team sees it. */
+export type LinkCheckout = {
+  _id: string;
+  reference: string;
+  status: CheckoutStatus;
+  link: { _id: string; title: string; slug: string } | null;
+  branch: BranchRef | null;
+  payer: { name: string; email: string; phone: string | null; fields: { label: string; value: string }[] };
+  priceKobo: number;
+  /** What the payer was asked to send: the price plus 1 to 99 kobo. */
+  amountKobo: number;
+  paidKobo: number | null;
+  paidAt: string | null;
+  source: "page" | "embed";
+  embedOrigin: string | null;
+  clientReference: string | null;
+  metadata: Record<string, string>;
+  matchedBy: "amount" | "reference" | "manual" | null;
+  matchedByUser: { _id: string; name: string } | null;
+  expiresAt: string;
+  createdAt: string;
+  canMatch: boolean;
+};
+
+export type LinkCheckoutList = { items: LinkCheckout[]; total: number; skip: number; take: number };

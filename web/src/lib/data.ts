@@ -14,8 +14,14 @@ import type {
   InvoiceDefaults,
   InvoiceList,
   InvoiceSummary,
+  LinkCheckout,
+  LinkCheckoutList,
   MembershipSummary,
   Overview,
+  PaymentLink,
+  PaymentLinkEmbed,
+  PaymentLinkList,
+  PaymentLinkSummary,
   Pocket,
   PocketList,
   Safelock,
@@ -45,6 +51,9 @@ export const getMe = cache(async () => {
   try {
     return await api<User>("/api/auth/me")
   } catch (err) {
+    // A valid token for an account that no longer exists (a restarted mock API, a deleted user) is a 404:
+    // treat it as signed out rather than crashing every page.
+    if (err instanceof ApiError && err.authed && err.status === 404) redirect("/auth/sign-out?expired=1")
     onReadError(err)
   }
 })
@@ -211,3 +220,28 @@ export const getSafelock = (id: string) => load<Safelock>(`/api/safelocks/${enco
 
 /** Amount and date limits for new Safelocks. */
 export const getSafelockLimits = cache(() => load<SafelockLimits>("/api/safelocks/limits"))
+
+/** GET /api/payment-links (see lib/payment-links.ts for the query). Needs `accounts.view`. */
+export const getPaymentLinks = (params: URLSearchParams) => load<PaymentLinkList>(`/api/payment-links?${params}`)
+
+export const getPaymentLinkSummary = (branchId?: string) =>
+  load<PaymentLinkSummary>(`/api/payment-links/summary${branchId ? `?branch=${encodeURIComponent(branchId)}` : ""}`)
+
+/** One link, or null when it doesn't exist or isn't in the member's branches. */
+export async function getPaymentLink(id: string) {
+  try {
+    return await api<PaymentLink>(`/api/payment-links/${encodeURIComponent(id)}`)
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
+    onReadError(err)
+  }
+}
+
+/** Code for the business's website: button, inline frame and the JavaScript call. */
+export const getPaymentLinkEmbed = (id: string) => load<PaymentLinkEmbed>(`/api/payment-links/${encodeURIComponent(id)}/embed`)
+
+/** Payers' checkouts, for one link or across links. */
+export const getLinkCheckouts = (params: URLSearchParams) => load<LinkCheckoutList>(`/api/payment-links/checkouts?${params}`)
+
+/** One checkout, for links (the notification) to one that isn't in the list on screen. */
+export const getLinkCheckout = (id: string) => load<LinkCheckout>(`/api/payment-links/checkouts/${encodeURIComponent(id)}`)

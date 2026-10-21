@@ -17,6 +17,10 @@ export const env = {
   appName: process.env.APP_NAME ?? "LinkPay",
   // Public URL of the web app, used in emailed links (team invites).
   webUrl: (process.env.WEB_URL ?? "http://localhost:3000").replace(/\/$/, ""),
+  // Public URL of this API, shown to businesses for checking embedded payments from their own servers.
+  apiPublicUrl: (process.env.API_URL ?? `http://localhost:${process.env.PORT ?? 4000}`).replace(/\/$/, ""),
+  // Proxies whose X-Forwarded-For is believed (Express "trust proxy"): the web server and any load balancer.
+  trustProxy: process.env.TRUST_PROXY ?? "loopback",
   // Public URL of the admin console (admin/), used in staff invite links.
   adminAppUrl: (process.env.ADMIN_APP_URL ?? "http://localhost:3001").replace(/\/$/, ""),
   // Phone pushes: "expo" sends through Expo's push service; anything else prints them to the console.

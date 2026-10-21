@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { Lock, Plus } from "lucide-react"
+import { BalanceAmount } from "@/components/accounts/balance-visibility"
 import { NavTabs } from "@/components/common/nav-tabs"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -82,7 +83,9 @@ export function SafelockView({ locked, released, query, linked, branches, limits
           <p id="locked-total" className="text-sm text-muted-foreground">
             Total locked
           </p>
-          <p className="type-display text-[2.75rem] break-all sm:text-6xl figure">{formatNaira(locked.lockedKobo)}</p>
+          <p className="type-display text-[2.75rem] break-all sm:text-6xl figure">
+            <BalanceAmount kobo={locked.lockedKobo} />
+          </p>
           <p className="text-sm text-muted-foreground">
             {locked.items.length === 0
               ? "Nothing locked right now"

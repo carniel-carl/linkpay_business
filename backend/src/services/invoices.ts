@@ -466,10 +466,10 @@ export async function addPayment(business: BusinessDocument, invoice: InvoiceDoc
     if (!tx) throw new HttpError(404, "Payment not found", "TRANSACTION_NOT_FOUND");
     // Claim it atomically so the same payment can't count towards two invoices.
     const claimed = await TransactionModel.findOneAndUpdate(
-      { _id: tx._id, invoice: { $exists: false } },
+      { _id: tx._id, invoice: { $exists: false }, checkout: { $exists: false } },
       { invoice: invoice._id, invoiceCheckedAt: new Date() },
     );
-    if (!claimed) throw new HttpError(409, "That payment is already linked to an invoice", "TRANSACTION_ALREADY_LINKED");
+    if (!claimed) throw new HttpError(409, "That payment is already linked to an invoice or a payment link", "TRANSACTION_ALREADY_LINKED");
     invoice.payments.push({ amountKobo: tx.amountKobo, method: "transfer", transaction: tx._id, auto: false, paidAt: tx.occurredAt, recordedBy: userId as any });
   } else {
     invoice.payments.push({ amountKobo: input.amountKobo, method: input.method, paidAt: input.paidAt ?? new Date(), note: input.note, recordedBy: userId as any });
@@ -497,6 +497,7 @@ export async function suggestPayments(invoice: InvoiceDocument) {
     direction: "credit",
     status: "success",
     invoice: { $exists: false },
+    checkout: { $exists: false },
     occurredAt: { $gte: new Date(Date.parse(`${invoice.issueDate}T00:00:00+01:00`) - 7 * 86_400_000) },
     $or: [{ amountKobo: balance }, ...(words.length ? [{ "counterparty.name": new RegExp(words.join("|"), "i") }] : [])],
   })
@@ -525,6 +526,7 @@ export function findInvoiceInText<T extends { seq: number; prefix: string }>(tex
  */
 export async function matchInvoicePayments() {
   const pending = await TransactionModel.find({ direction: "credit", status: "success", invoiceCheckedAt: { $exists: false } }).limit(1000);
+  // (Transfers that paid a payment-link checkout are marked as checked when they're matched.)
   let matched = 0;
   for (const tx of pending) {
     try {

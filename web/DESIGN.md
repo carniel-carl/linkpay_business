@@ -78,6 +78,10 @@ When the user belongs to more than one business, a slim "Switch business" row wi
 - The role picker is a set of choice cards built from `GET /api/team/roles`, each with one line generated from its permissions. The branch picker defaults to "All branches".
 - Invite links use the auth frame (`AuthShell`) with a panel about team access instead of the verification checklist. Dead ends (expired, revoked, used, invalid) are an icon tile, a display title, one sentence and one next step.
 
+## Public pay page (`/pay/[slug]`)
+
+The payer meets the business, not LinkPay. Its colour (`--biz`, `--on-biz`, `--biz-text` from `business.palette`) fills a full-height panel on the left (a band on phones that the sheet overlaps by 4rem, the auth frame's grammar recoloured), with grain, the logo squircle, the link's pictures at their own aspect ratio, the title and the price in display type, and a vertical step timeline (done: filled node with a tick; current: ringed node; next: hollow number; the connector fills as steps finish). The work sits on one paper sheet. The transfer step is a perforated slip: kobo that identifies the transfer is highlighted in the business colour, the account number is grouped 3-3-4. Every tint is `color-mix` from `--biz` (`pay-brand` utility), so any colour works; accent-coloured text is never used in dark mode. Focus rings, selection and the main button take the business colour. Embeds use the compact header and the horizontal step track. Motion: the slip prints in (`slip-in`), the paid tick lands (`pop-in`). On a desktop the page never scrolls unless the form itself is taller than the screen: the panel is one screen tall, the picture takes the height left, and `short:` (desktop width, height ≤ 820px) tightens type and spacing.
+
 ## Motion
 
 - `page-enter`: content rises 8px over 320ms on entry.

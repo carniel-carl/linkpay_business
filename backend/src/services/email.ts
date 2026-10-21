@@ -287,6 +287,25 @@ export const sendInvoiceReceiptEmail = (
   });
 };
 
+/** To someone who paid through a payment link, once their transfer is matched. */
+export const sendPaymentLinkReceiptEmail = (
+  to: string,
+  opts: { brand: InvoiceBrand; title: string; payerName: string; paidKobo: number; reference: string; paidAt: Date; message?: string | null; clientReference?: string | null },
+) => {
+  const when = opts.paidAt.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Lagos" });
+  const line = `Thank you, ${opts.payerName}. ${opts.brand.businessName} has received ${formatNaira(opts.paidKobo)} for ${opts.title}.`;
+  // The business's own order number, when its website sent one.
+  const order = opts.clientReference ? ` Your order: ${opts.clientReference}.` : "";
+  const details = `Reference: ${opts.reference}.${order} Paid ${when} (Lagos time).`;
+  return sendEmail({
+    to,
+    replyTo: opts.brand.replyTo,
+    subject: `Payment received: ${opts.title} (${opts.brand.businessName})`,
+    text: [line, opts.message, details].filter(Boolean).join("\n\n"),
+    html: brandedHtml(opts.brand, [escapeHtml(line), ...(opts.message ? [escapeHtml(opts.message)] : []), escapeHtml(details)]),
+  });
+};
+
 /** To the team member who created the invoice. */
 export const sendInvoicePaidNotice = (to: string, opts: { number: string; customerName: string; paidKobo: number; invoiceId: string }) =>
   sendEmail({

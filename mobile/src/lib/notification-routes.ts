@@ -21,9 +21,17 @@ export function hrefFor({ type, data }: NotificationTarget): Href {
     const id = str(data.transactionId);
     return id ? { pathname: "/payments/[id]", params: { id } } : "/payments";
   }
+  if (type === "payment_link.paid") {
+    const id = str(data.checkoutId);
+    return id ? { pathname: "/more/payment-links/checkout/[id]", params: { id } } : "/more/payment-links";
+  }
   if (family === "invoice") {
     const id = str(data.invoiceId);
     return id ? { pathname: "/invoices/[id]", params: { id } } : "/invoices";
+  }
+  if (type === "savings.safelock_released") {
+    const id = str(data.safelockId);
+    return id ? { pathname: "/savings/safelock/[id]", params: { id } } : { pathname: "/savings", params: { view: "safelock" } };
   }
   if (family === "savings") {
     const id = str(data.pocketId);

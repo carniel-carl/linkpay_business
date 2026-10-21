@@ -5,6 +5,8 @@
 @custom-variant dark (&:is(.dark *));
 /* Inside a layout that paints the ink band behind page headers (dashboard, admin). */
 @custom-variant on-band (&:where([data-band] *));
+/* A desktop-width window that is short (small laptops): the pay page tightens so it fits one screen. */
+@custom-variant short (@media (width >= 64rem) and (height <= 820px));
 
 @theme inline {
   --color-background: var(--background);
@@ -377,6 +379,60 @@
 @utility figure {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+/*
+ * Public pay page: the business's colour (set inline as --biz, --on-biz, --biz-text from its palette)
+ * fills the brand panel and the main button, and themes focus rings and text selection. Everything
+ * else is mixed from it, so any colour a business picks works.
+ */
+@utility pay-brand {
+  --biz-line: color-mix(in oklch, var(--on-biz) 22%, transparent);
+  --biz-muted: color-mix(in oklch, var(--on-biz) 80%, var(--biz));
+  --biz-soft: color-mix(in oklch, var(--biz) 9%, var(--card));
+  --biz-strong: var(--biz);
+  & ::selection {
+    background-color: var(--biz);
+    color: var(--on-biz);
+  }
+}
+
+:root:not(.dark) .pay-brand {
+  --ring: var(--biz-text);
+}
+
+.dark .pay-brand {
+  --biz-strong: color-mix(in oklch, var(--biz), white 30%);
+}
+
+/* The transfer slip prints in from the top. */
+@utility slip-in {
+  animation: slip-in 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slip-in {
+  from {
+    opacity: 0.4;
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: none;
+  }
+}
+
+/* The paid tick lands with a small overshoot. */
+@utility pop-in {
+  animation: pop-in 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both 120ms;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6) rotate(-8deg);
+  }
 }
 
 /* Z-index scale (see DESIGN.md): header 20, sidebar 30 (shadcn), overlays 50 (shadcn). */

@@ -1,9 +1,11 @@
 import {
   ArrowLeftRight,
+  CircleHelp,
   History,
   House,
   PiggyBank,
   Landmark,
+  Link2,
   ReceiptText,
   Settings,
   ShieldCheck,
@@ -41,6 +43,7 @@ export const NAV: NavGroup[] = [
       { href: "/transfers", label: "Transfers", icon: ArrowLeftRight, permission: "accounts.view" },
       { href: "/approvals", label: "Fund approvals", icon: ShieldCheck, permission: "accounts.view" },
       { href: "/invoices", label: "Invoices", icon: ReceiptText, permission: "accounts.view" },
+      { href: "/payment-links", label: "Payment links", icon: Link2, permission: "accounts.view" },
       { href: "/savings", label: "Savings", icon: PiggyBank, permission: "accounts.view" },
     ],
   },
@@ -53,4 +56,7 @@ export const NAV: NavGroup[] = [
   },
 ]
 
-export const NAV_FOOTER: NavItem[] = [{ href: "/settings", label: "Settings", icon: Settings, openBeforeApproval: true }]
+export const NAV_FOOTER: NavItem[] = [
+  { href: "/help", label: "Help", icon: CircleHelp, openBeforeApproval: true },
+  { href: "/settings", label: "Settings", icon: Settings, openBeforeApproval: true },
+]

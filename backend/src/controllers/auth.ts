@@ -192,7 +192,10 @@ export const resendTwoFactor: RequestHandler = async (req, res) => {
 // ---- Current user & 2FA management (authenticated) ----
 
 export const me: RequestHandler = async (req, res) => {
-  res.json(await findUserOrThrow(req.userId));
+  // A valid token for an account that's gone (deleted, or an in-memory dev database restarted): signed out.
+  const user = await UserModel.findById(req.userId);
+  if (!user) throw new HttpError(401, "This account no longer exists. Sign in again.", "UNAUTHENTICATED");
+  res.json(user);
 };
 
 export const setupTotp: RequestHandler = async (req, res) => {

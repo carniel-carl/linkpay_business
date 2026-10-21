@@ -1,0 +1,210 @@
+# Payment links, checkout and embed (contract)
+
+Backend: `backend/src/{models/PaymentLink.ts, services/paymentLinks.ts, controllers/paymentLinks.ts, controllers/publicPaymentLinks.ts, config/paymentLinks.ts}`. Tests: `backend/tests/paymentLinks.test.ts`.
+
+Payment links work like Paystack's, but **bank transfer only** for now. Liquifia only collects by transfer into a branch's one fixed account, and gives no payer reference we can rely on. So each checkout asks the payer to send a **unique amount** (the price plus 1 to 99 kobo) and shows a **reference** (`LP-7K2Q9M`) to put in the narration. Either one ties the transfer to the checkout.
+
+Money is always integer kobo. Errors are `{ error, code?, details? }`.
+
+## 1. Concepts
+
+- **Payment link:** settings for a public page at `WEB_URL/pay/<slug>` that pays into one branch's account. It has a fixed amount or lets the payer choose (with an optional minimum). It always asks for name and email, can ask for phone (`off | optional | required`) and up to 5 custom questions. It can have a success message, a redirect URL, an end date, a payment limit and allowed websites (embed). Status is `active | inactive`. The slug never changes.
+- **Checkout:** one payer's attempt. It holds the exact amount to send (`amountKobo`), the price (`priceKobo`), the account details, a 30-minute "pay within" time (`expiresAt`), the reference and an unguessable `token` for the payer's status page.
+  - Statuses are `pending | expired | paid | underpaid`. `expired` is only a pending checkout past its time; a late transfer still counts while the amount is held (2 hours).
+  - The **same payer** (email), **same price** and **same order** (`clientReference`) get their open checkout back instead of a new one.
+- **Matching** runs after every incoming-transfer sync, before invoices. A reference in the narration matches at any amount, within 7 days: less than the price is `underpaid`, the price or more is `paid`. Otherwise the exact unique amount matches while it is held.
+  - Anything the matcher misses can be linked by hand from the checkout.
+  - A transfer linked to a checkout can never count for an invoice, and vice versa.
+- **When it's paid:** the link's totals update, everyone with `payments.manage` on the branch (plus the link's creator) gets `payment_link.paid`, and the payer gets a branded receipt email.
+
+Limits are in `config/paymentLinks.ts`: ₦100 to ₦100m per payment, 5 questions, 500 links per business, 10 allowed websites, a 100-character `clientReference`, and 10 metadata keys of up to 500 characters each.
+
+## 2. Permissions
+
+- Reading needs `accounts.view`: links, checkouts, the summary and the embed code. Everything is limited to the member's branches.
+- Writing needs **`payments.manage`** (owner, admin and finance): create, edit, turn off, delete and link a payment by hand.
+- Every link and checkout carries `canManage` / `canMatch`; use those to show or hide actions.
+
+## 3. Dashboard API (`/api/payment-links`, signed in, approved business)
+
+| Route | Notes |
+| --- | --- |
+| `GET /summary?branch=` | `{ links: { active, inactive }, collectedKobo, paymentsCount, last30Days: { collectedKobo, paymentsCount }, currency }` |
+| `GET /?status=active\|inactive\|all&branch=&q=&skip=&take=` | `{ items: PaymentLink[], total, skip, take }`, newest first. `q` searches the title |
+| `POST /` | `{ branch, title, description?, amountKobo?, minAmountKobo?, phone?, customFields?: [{ label, required }], images?: string[], successMessage?, redirectUrl?, allowedOrigins?: string[], expiresAt?, maxPayments? }` → 201 `PaymentLink` |
+| `GET /:id` | `PaymentLink` |
+| `POST /images` | Multipart `file`, see §7 → 201 `{ _id, url, width, height }` |
+| `GET /images/:id` | The picture (WebP), for any member of the business; 404 if it's on a link in a branch they can't see |
+| `PATCH /:id` | Any of the above except `branch`, plus `status`. `images` replaces the list (pictures left out are deleted). `null` clears the pictures, the description, fixed amount (the payer chooses), minimum, message, redirect, allowed websites (any site again), end date and limit. `customFields` replaces the list; send `_id` to keep a question. Setting `amountKobo` drops the minimum. Changes apply to new checkouts only |
+| `DELETE /:id` | 204. Only links nobody has started paying through; otherwise `409 PAYMENT_LINK_IN_USE` (turn it off instead) |
+| `GET /:id/embed` | Code to paste into a website, see §5 |
+| `GET /checkouts?link=&branch=&status=pending\|expired\|paid\|underpaid\|received\|all&source=page\|embed&q=&skip=&take=` | `{ items: Checkout[], total, skip, take }`. `received` = paid and underpaid. `q` searches the payer's name or email, our reference, or the business's order reference |
+| `GET /checkouts/:id` | `Checkout` |
+| `GET /checkouts/:id/suggested-payments` | `payments.manage`. `{ items: [{ _id, amountKobo, counterparty: { name, bankName }, narration, reference, occurredAt, exactAmount }] }`, unlinked incoming payments on the same account that look like this checkout's (the price, the exact amount, or the payer's name). The same shape as the invoice suggestions |
+| `POST /checkouts/:id/match` | `payments.manage`. `{ transactionId }` → `Checkout` (paid or underpaid; the receipt is sent) |
+
+**PaymentLink:**
+
+```ts
+{
+  _id, title, description: string | null, slug, url /* WEB_URL/pay/<slug> */,
+  branch: { _id, name, isHeadOffice } | null,
+  amountKobo: number | null /* null = the payer chooses */, minAmountKobo: number | null, currency: "NGN",
+  phone: "off" | "optional" | "required", customFields: [{ _id, label, required }],
+  images: [{ _id, url /* "/api/payment-links/images/<id>", no host, signed in */, width, height }] /* in order; the first is the cover */,
+  successMessage: string | null, redirectUrl: string | null,
+  status: "active" | "inactive",
+  allowedOrigins: string[] /* [] = any website may embed it */,
+  expiresAt: string | null, maxPayments: number | null,
+  paymentsCount, collectedKobo, lastPaidAt: string | null,
+  available: boolean, unavailableReason: "inactive" | "expired" | "sold_out" | "account_not_ready" | null,
+  createdBy: { _id, name } | null, createdAt, updatedAt, canManage: boolean
+}
+```
+
+**Checkout:**
+
+```ts
+{
+  _id, reference /* "LP-7K2Q9M" */, status: "pending" | "expired" | "paid" | "underpaid",
+  link: { _id, title, slug } | null, branch: { _id, name, isHeadOffice } | null,
+  payer: { name, email, phone: string | null, fields: [{ label, value }] },
+  priceKobo, amountKobo /* what they were asked to send */, currency: "NGN",
+  paidKobo: number | null, paidAt: string | null,
+  source: "page" | "embed", embedOrigin: string | null /* "https://shop.example.ng" */,
+  clientReference: string | null /* the business's own order id */, metadata: Record<string, string>,
+  matchedBy: "amount" | "reference" | "manual" | null, matchedByUser: { _id, name } | null,
+  transaction: string | null, expiresAt, createdAt, canMatch: boolean
+}
+```
+
+**Error codes:** `PAYMENT_LINK_NOT_FOUND`, `PAYMENT_LINK_LIMIT`, `PAYMENT_LINK_IN_USE`, `INVALID_AMOUNT` (a fixed amount together with a minimum), `INVALID_DATES` (an end date in the past), `CHECKOUT_NOT_FOUND`, `CHECKOUT_NOT_PENDING`, `TRANSACTION_NOT_FOUND`, `TRANSACTION_ALREADY_LINKED`. Validation errors are 400 with zod `details` (for example `allowedOrigins.1`: "Use a website address like https://shop.example.com (https only)").
+
+**Notification** `payment_link.paid` (push channel `payments`): titled "Payment link paid" or "Payment link part paid". `link` is `/payment-links/<linkId>?checkout=<checkoutId>`; `data` is `{ paymentLinkId, checkoutId, branchId }`.
+
+## 4. Public API (no sign-in; `/api/public`, 120 requests a minute per IP)
+
+| Route | Notes |
+| --- | --- |
+| `GET pay/:slug` | `{ business: { name, logo: { url, width, height } \| null, palette }, link: { slug, title, description, amountKobo, minAmountKobo, maxAmountKobo, currency, phone, customFields, images: [{ _id, url, width, height }] }, embed: { allowedOrigins }, available, unavailableReason }`. 404 `PAYMENT_LINK_NOT_FOUND` for unknown slugs and for suspended or banned businesses. With a fixed price, `minAmountKobo` and `maxAmountKobo` are null |
+| `GET pay/:slug/images/:imageId` | One of the link's pictures (WebP, cached for a week, `immutable`: URLs carry `?v=`). Only pictures attached to that link. The web proxies it at `/pay/<slug>/images/<id>` |
+| `GET pay/:slug/logo` | The business's logo image. The web proxies it at `/pay/<slug>/logo` |
+| `POST pay/:slug/checkouts` | Limited to 20 per 10 minutes per IP (`429 TOO_MANY_CHECKOUTS`). Body below. 201 with a new `PublicCheckout`; 200 when the payer's open checkout is reused |
+| `GET checkouts/:token` | `PublicCheckout`. While pending, each call pulls new transfers from Liquifia (at most every 30 s, waiting up to 2 s), so polling every 4 to 5 s is enough. **The business's server confirms a payment here** before fulfilling an order |
+
+Starting a checkout:
+
+```ts
+{
+  name: string, email: string, phone?: string,
+  amountKobo?: number /* links without a fixed price */, fields?: { [customFieldId]: string },
+  // From the business's website (embed):
+  source?: "page" | "embed", embedOrigin?: string /* the website's origin */,
+  clientReference?: string /* letters, numbers, spaces and . : / # - _ ; up to 100 */,
+  metadata?: { [key: string]: string | number | boolean } /* up to 10 keys, 40 chars, starting with a letter; values become strings */
+}
+```
+
+Errors when starting:
+- `409 PAYMENT_LINK_UNAVAILABLE` (`details.reason` is one of the `unavailableReason` values).
+- `400 INVALID_AMOUNT` (`details.minKobo`, `details.maxKobo`).
+- `400 FIELD_REQUIRED` (`details.field` is `"phone"` or a custom field id).
+- `403 EMBED_NOT_ALLOWED`: `source: "embed"` from a website the link doesn't allow, or with no `embedOrigin` when the link has a list.
+- `409 ACCOUNT_NOT_READY`.
+- `503 CHECKOUT_BUSY`: all 99 amounts for that price are held; ask the payer to try again in a few minutes.
+
+**PublicCheckout:**
+
+```ts
+{
+  token, reference, status: "pending" | "expired" | "paid" | "underpaid",
+  priceKobo, amountKobo /* send exactly this */, currency: "NGN",
+  payTo: { accountNumber, accountName, bankName } | null /* only while pending */,
+  expiresAt, paidKobo, paidAt,
+  payer: { name, email },
+  source, clientReference, metadata,
+  link: { slug, title, image: { _id, url, width, height } | null /* the cover */ }, business: { name, logo, palette },
+  successMessage: string | null /* once received */,
+  redirectUrl: string | null /* once paid: the link's redirect + ?reference=&status=paid&client_reference= */
+}
+```
+
+## 5. Embed (on the business's own website)
+
+`GET /api/payment-links/:id/embed` returns:
+
+```ts
+{
+  url,                      // WEB_URL/pay/<slug>
+  scriptUrl,                // WEB_URL/embed.js
+  button: string,           // <script src=".../embed.js" async></script> + <button data-linkpay-link="<slug>">Pay ₦25,000</button>
+  inline: string,           // <iframe src=".../pay/<slug>?embed=inline" ...> (works without the script)
+  javascript: string,       // LinkPay.open({ link, clientReference, email, onSuccess, onClose })
+  allowedOrigins: string[], // [] = any site
+  verifyUrl: string         // API_URL/api/public/checkouts/{token}
+}
+```
+
+**Allowed websites** (`allowedOrigins`) are stored as origins: `shop.adaeze.ng/x` becomes `https://shop.adaeze.ng`, and `https://*.adaeze.ng` allows every subdomain but not the bare domain. HTTPS only, except `http://localhost` for testing; `*.ng`-style wildcards are refused. An empty list means any site.
+- The web turns the list into the pay page's `Content-Security-Policy: frame-ancestors`, so browsers refuse to show the page framed elsewhere.
+- The backend refuses embedded checkouts started from other sites (`EMBED_NOT_ALLOWED`).
+
+### `embed.js` (served by the web at `WEB_URL/embed.js`)
+
+The web builds and owns the script. The contract is:
+
+- **Buttons:** any element with `data-linkpay-link="<slug>"` opens the checkout in a popup (a full-screen overlay holding an iframe of `WEB_URL/pay/<slug>?embed=popup`). Optional attributes:
+  - `data-name`, `data-email`, `data-phone`: prefill the form.
+  - `data-amount-kobo`: links where the payer chooses the amount.
+  - `data-reference`: becomes `clientReference`.
+  - `data-meta-<key>`: becomes `metadata.<key>`.
+- The button fires DOM events on itself (they bubble): `linkpay:open`, `linkpay:checkout`, `linkpay:update`, `linkpay:success`, `linkpay:close`, each with `event.detail` as below.
+- **Inline:** `<div data-linkpay-inline="<slug>" ...same data attributes>` renders the page in place (`?embed=inline`) and grows with its content.
+- **JavaScript:** `LinkPay.open({ link, name?, email?, phone?, amountKobo?, clientReference?, metadata?, onOpen?, onCheckout?, onUpdate?, onSuccess?, onClose? })`, and `LinkPay.close()`.
+  - `onCheckout(checkout)`: the account details are on screen.
+  - `onUpdate(checkout)`: any change of status (including `underpaid` and `expired`).
+  - `onSuccess(checkout)`: paid.
+  - `onClose(checkout | null)`: the payer closed the popup.
+- **The checkout object** passed to callbacks and events: `{ token, reference, status, priceKobo, amountKobo, paidKobo, clientReference, metadata }`.
+- **Redirect:** when a paid link has a redirect URL, the paid screen shows "Continue", a link with `target="_top"`, so it leaves the frame and opens `redirectUrl` in the business's tab. On its own page (not embedded) the payer is sent on after 5 seconds.
+- **Closing:** the popup closes with its × button, a click on the backdrop, or Escape (the page inside the frame catches the key and asks the script to close).
+
+The iframe and the script talk over `postMessage`. Messages from the iframe are `{ source: "linkpay", type, frameId, checkout?, height? }`, where `type` is `ready | checkout | update | paid | close | resize`. A pasted `<iframe>` (no `frame` id) still resizes when the script is on the page. The script checks that `event.origin` is WEB_URL and that `frameId` is one it created.
+
+Inside the iframe, the pay page sends `source: "embed"` with `embedOrigin`, taken first from `location.ancestorOrigins[0]`, then the `origin` query parameter the script adds, then `document.referrer`.
+
+**Confirm on the server.** A browser callback can be faked. Before fulfilling an order, the business's server should call `GET API_URL/api/public/checkouts/<token>` and check `status === "paid"`, `paidKobo` and `clientReference`. Webhooks to the business's server aren't built yet (open question 18).
+
+**Web files:** `web/public/embed.js` (the script), `web/src/app/pay/[slug]/` (the page), `web/src/components/pay/pay-client.tsx` (form, checkout, messages), `web/src/app/api/pay/` (start and poll, forwarding the payer's address), and `web/src/proxy.ts` (`frame-ancestors`).
+
+**Rate limits behind the web:** the web calls the public routes for payers and passes their address in `X-Forwarded-For`. The backend believes it only from `TRUST_PROXY` (default `loopback`), so each payer has their own limit. Set `TRUST_PROXY` to the web server's and load balancer's addresses in production.
+
+## 6. Pictures
+
+A link can show up to 4 pictures, for example a product photo or an e-book's cover. The first is the cover.
+
+- **Upload first:** `POST /api/payment-links/images` (`payments.manage`, multipart `file`). This works before the link exists, so the create form can take pictures.
+  - PNG, JPEG or WebP, up to 5 MB. HEIC isn't accepted (sharp's prebuilt binaries can't read it), so convert on the phone.
+  - We store our own WebP, never the upload: turned upright by EXIF, metadata stripped, fitted inside 1600px. Under 64px on both sides is refused.
+  - The response is `{ _id, url, width, height }`, where `url` is the signed-in route `/api/payment-links/images/<id>`.
+- **Attach:** send the ids, in order, as `images` on create or `PATCH`. On `PATCH` the list replaces the saved one: pictures left out are deleted, and `null` or `[]` clears.
+  - An id must be an upload of this business that's unattached or already on this link.
+  - Uploads never attached are deleted after 24 hours (`startLinkImageCleanup`, hourly).
+  - Deleting a link deletes its pictures.
+- **Errors:**
+  - `400 FILE_REQUIRED`
+  - `400 UNSUPPORTED_FILE_TYPE`
+  - `400 FILE_TOO_LARGE`: over 5 MB. This is now the code for every upload over the limit.
+  - `400 IMAGE_TOO_SMALL`
+  - `400 IMAGE_NOT_FOUND`: an id that isn't usable here.
+  - `400 PAYMENT_LINK_IMAGE_LIMIT`: more than 4.
+- **Public:** `link.images` on `GET pay/:slug`, and `link.image` (the cover) on checkouts, both with URLs relative to the API: `/api/public/pay/<slug>/images/<id>?v=<n>`.
+- **Seed:** `dev:mock --seed` gives the Ankara bundle link two pictures.
+
+## 7. Where clients link
+
+- **Web:**
+  - `/payment-links` has two views: links (cards or table) and payments (`?view=payments`).
+  - `/payment-links/<id>` is the detail page; `?checkout=<id>` opens that checkout's sheet, which is where the notification link lands.
+  - The public page is `/pay/<slug>`. A refresh resumes the payer's checkout with `?checkout=<token>`.
+- **Mobile:** a Payment links screen (list and detail, share the link, copy the embed code) and a checkout detail screen with "Link a payment". `payment_link.paid` opens the checkout.

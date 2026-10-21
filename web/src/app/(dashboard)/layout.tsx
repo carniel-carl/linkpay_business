@@ -1,5 +1,6 @@
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
+import { BalanceVisibilityProvider } from "@/components/accounts/balance-visibility"
 import { StatusBadge } from "@/components/business/status-badge"
 import { NotificationBell } from "@/components/notifications/notification-bell"
 import { NotificationsProvider } from "@/components/notifications/notifications-provider"
@@ -9,6 +10,7 @@ import { PinnedHeader } from "@/components/shell/pinned-header"
 import { StatusBanner } from "@/components/shell/status-banner"
 import { UserMenu } from "@/components/shell/user-menu"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import { BALANCES_HIDDEN_COOKIE } from "@/lib/balance-visibility"
 import { getBusinessCookie } from "@/lib/business-context"
 import { getMe, getMemberships, getOverview, getSelected, getUnreadNotificationCount } from "@/lib/data"
 import { can, isOwner, roleLabel } from "@/lib/permissions"
@@ -76,7 +78,9 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
           </PinnedHeader>
           <StatusBanner overview={overview} />
           <main id="main" className="page-enter w-full max-w-6xl flex-1 px-4 pb-16 md:px-8">
-            {children}
+            <BalanceVisibilityProvider defaultHidden={jar.get(BALANCES_HIDDEN_COOKIE)?.value === "true"}>
+              {children}
+            </BalanceVisibilityProvider>
           </main>
         </SidebarInset>
       </SidebarProvider>

@@ -4,6 +4,7 @@ import { VirtualAccountModel } from "../models/VirtualAccount";
 import { liquifia, type LiquifiaInboundTransfer } from "./liquifia/client";
 import { matchInvoicePayments } from "./invoices";
 import { paymentReceived } from "./notificationEvents";
+import { matchCheckoutPayments } from "./paymentLinks";
 import { applyAutoSaves } from "./pockets";
 
 const PAGE_SIZE = 100;
@@ -87,10 +88,16 @@ async function notifyPaymentReceived(providerTransactionId: string, businessId: 
 
 /**
  * Pulls incoming transfers from Liquifia and records any new ones or status changes, then links new
- * payments to the invoices their narration mentions and applies savings auto-save rules. Safe to run repeatedly.
+ * payments to payment-link checkouts and to the invoices their narration mentions, and applies savings
+ * auto-save rules. Safe to run repeatedly.
  */
 export async function syncInboundTransfers() {
   const counts = await pullInboundTransfers();
+  // Before invoices: a transfer that pays a checkout isn't an invoice payment.
+  const checkouts = await matchCheckoutPayments().catch((err) => {
+    console.error("Matching payments to payment-link checkouts failed:", err);
+    return { checked: 0, matched: 0 };
+  });
   const invoices = await matchInvoicePayments().catch((err) => {
     console.error("Matching payments to invoices failed:", err);
     return { checked: 0, matched: 0 };
@@ -99,7 +106,7 @@ export async function syncInboundTransfers() {
     console.error("Applying savings auto-saves failed:", err);
     return { checked: 0, saved: 0 };
   });
-  return { ...counts, invoicesMatched: invoices.matched, autoSaved: autoSaves.saved };
+  return { ...counts, checkoutsMatched: checkouts.matched, invoicesMatched: invoices.matched, autoSaved: autoSaves.saved };
 }
 
 async function pullInboundTransfers() {

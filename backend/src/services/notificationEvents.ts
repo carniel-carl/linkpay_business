@@ -126,6 +126,31 @@ export async function paymentReceived(
   );
 }
 
+/** A payment-link checkout was paid: whoever made the link, plus everyone who manages links for that branch. */
+export async function paymentLinkPaid(
+  business: BusinessLike,
+  link: { _id: Id; title: string; branch: Id; createdBy: Id },
+  checkout: { _id: Id; status: string; priceKobo: number; paidKobo?: number | null; payer?: { name: string } | null },
+) {
+  const paid = formatNaira(checkout.paidKobo ?? 0);
+  const payer = checkout.payer?.name ?? "Someone";
+  const body =
+    checkout.status === "underpaid"
+      ? `${payer} paid ${paid} of ${formatNaira(checkout.priceKobo)} for ${link.title}.`
+      : `${payer} paid ${paid} for ${link.title}.`;
+  await notifyUsers(
+    [String(link.createdBy), ...(await membersWith(business, "payments.manage", { branch: link.branch }))],
+    {
+      type: "payment_link.paid",
+      title: checkout.status === "underpaid" ? "Payment link part paid" : "Payment link paid",
+      body,
+      link: `/payment-links/${link._id}?checkout=${checkout._id}`,
+      data: { paymentLinkId: String(link._id), checkoutId: String(checkout._id), branchId: String(link.branch) },
+    },
+    business,
+  );
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Savings
 // ---------------------------------------------------------------------------------------------------------

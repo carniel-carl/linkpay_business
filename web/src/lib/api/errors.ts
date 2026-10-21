@@ -89,6 +89,23 @@ const MESSAGES: Record<string, string> = {
   SAFELOCK_LIMIT: "This branch already has 50 running Safelocks. Wait for one to unlock before adding another.",
   SAFELOCK_RELEASED: "This Safelock has already unlocked, so it can't be renamed.",
   SAFELOCK_NOT_FOUND: "We couldn't find that Safelock. It may be on a branch you can't see.",
+  // Payment links
+  PAYMENT_LINK_NOT_FOUND: "We couldn't find that payment link. It may be on a branch you can't see.",
+  PAYMENT_LINK_LIMIT: "You have 500 payment links, the most a business can have. Delete some you no longer use.",
+  PAYMENT_LINK_IN_USE: "People have already paid or started paying through this link, so it can't be deleted. Turn it off instead.",
+  PAYMENT_LINK_UNAVAILABLE: "This payment link isn't taking payments right now.",
+  PAYMENT_LINK_IMAGE_LIMIT: "A payment link can have up to 4 pictures. Remove one to add another.",
+  IMAGE_NOT_FOUND: "One of the pictures has expired or was removed. Take it off and upload it again.",
+  FILE_TOO_LARGE: "That file is over 5 MB. Use a smaller one.",
+  IMAGE_TOO_SMALL: "That picture is too small. Use one at least 64 pixels wide or tall.",
+  CHECKOUT_NOT_FOUND: "We couldn't find that payment.",
+  CHECKOUT_NOT_PENDING: "This payment has already been matched. Refresh to see it.",
+  TRANSACTION_ALREADY_LINKED: "That transfer is already linked to an invoice or another payment.",
+  TRANSACTION_NOT_FOUND: "We couldn't find that transfer. Refresh and try again.",
+  CHECKOUT_BUSY: "Lots of people are paying this amount right now. Try again in a few minutes.",
+  EMBED_NOT_ALLOWED: "This payment link can't be used on this website.",
+  TOO_MANY_CHECKOUTS: "Too many attempts. Wait a few minutes and try again.",
+  FIELD_REQUIRED: "Fill in the required fields.",
 }
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

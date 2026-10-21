@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { PiggyBank, Plus } from "lucide-react"
+import { BalanceAmount } from "@/components/accounts/balance-visibility"
 import { NavTabs } from "@/components/common/nav-tabs"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import type { Pocket, PocketList } from "@/lib/api/types"
@@ -102,7 +103,9 @@ export function SavingsView({ active, closed, query, linked, branches, canManage
           <p id="saved-total" className="text-sm text-muted-foreground">
             Total saved
           </p>
-          <p className="type-display text-[2.75rem] break-all sm:text-6xl figure">{formatNaira(active.savedKobo)}</p>
+          <p className="type-display text-[2.75rem] break-all sm:text-6xl figure">
+            <BalanceAmount kobo={active.savedKobo} />
+          </p>
           <p className="text-sm text-muted-foreground">
             {active.items.length === 0
               ? "No open pockets"

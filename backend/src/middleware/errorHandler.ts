@@ -18,6 +18,10 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     console.error(`Liquifia error: ${err.status} ${err.code}: ${err.message}`, err.requestId ?? "");
     return res.status(502).json({ error: "Our banking partner is unavailable. Please try again shortly.", code: "PROVIDER_ERROR" });
   }
+  // Multer's size limit (5 MB): same message as before, now with a code.
+  if (err?.name === "MulterError" && err.code === "LIMIT_FILE_SIZE") {
+    return res.status(400).json({ error: "File too large", code: "FILE_TOO_LARGE" });
+  }
   if (err instanceof ZodError) {
     return res.status(400).json({ error: "Validation failed", details: err.issues });
   }

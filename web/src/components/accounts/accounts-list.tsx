@@ -8,9 +8,9 @@ import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { AccountsResult } from "@/lib/accounts"
 import type { Account, AccountSetupStatus, AccountWithBalance } from "@/lib/api/types"
-import { formatNaira } from "@/lib/format"
 import { AccountSetupNotice, ProviderDownNotice } from "./account-notices"
 import { availableKobo, HeldNote, heldKobo, SavedNote, savedKobo } from "./balance"
+import { BalanceAmount, BalanceToggle } from "./balance-visibility"
 import { CopyButton, shareText } from "./copy-button"
 import { useAccounts } from "./use-accounts"
 
@@ -37,12 +37,17 @@ export function AccountsList({ initial, setupStatus, fallback }: Props) {
     <section className="surface overflow-hidden">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b p-6 sm:px-8">
         <div className="grid gap-1">
-          <p className="text-sm text-muted-foreground">
-            Available balance, {accounts.length} {accounts.length === 1 ? "account" : "accounts"}
-          </p>
+          <div className="flex items-center gap-1">
+            <p className="text-sm text-muted-foreground">
+              Available balance, {accounts.length} {accounts.length === 1 ? "account" : "accounts"}
+            </p>
+            {accounts.some((a) => a.balance) && <BalanceToggle />}
+          </div>
           {totalKobo !== null ? (
             <>
-              <p className="type-display text-4xl sm:text-5xl figure">{formatNaira(totalKobo)}</p>
+              <p className="type-display text-4xl sm:text-5xl figure">
+                <BalanceAmount kobo={totalKobo} />
+              </p>
               <HeldNote kobo={totalHeldKobo} className="text-sm" />
               <SavedNote kobo={totalSavedKobo} className="text-sm" />
             </>
@@ -164,7 +169,9 @@ function AccountBalance({ account }: { account: AccountWithBalance }) {
   if (!account.balance) return <span className="text-muted-foreground">Unavailable</span>
   return (
     <span className="grid justify-items-end gap-0.5">
-      <span className="font-medium figure">{formatNaira(availableKobo(account.balance))}</span>
+      <span className="font-medium figure">
+        <BalanceAmount kobo={availableKobo(account.balance)} />
+      </span>
       <HeldNote kobo={heldKobo(account.balance)} short />
       <SavedNote kobo={savedKobo(account.balance)} short />
     </span>

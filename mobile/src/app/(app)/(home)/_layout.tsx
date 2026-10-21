@@ -20,6 +20,8 @@ export default function HomeLayout() {
       <Stack.Screen name="savings/[id]" options={{ title: "Pocket" }} />
       <Stack.Screen name="savings/edit" options={{ title: "New pocket" }} />
       <Stack.Screen name="savings/move" options={{ title: "Add money" }} />
+      <Stack.Screen name="savings/safelock/new" options={{ title: "New Safelock" }} />
+      <Stack.Screen name="savings/safelock/[id]" options={{ title: "Safelock" }} />
       <Stack.Screen name="onboarding/index" options={{ title: "Verification" }} />
       <Stack.Screen name="onboarding/type" options={{ title: "Business type" }} />
       <Stack.Screen name="onboarding/details" options={{ title: "Business details" }} />

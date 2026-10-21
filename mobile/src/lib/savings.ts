@@ -78,3 +78,12 @@ export const MOVEMENT_LABELS: Record<PocketMovement["kind"], string> = {
   auto_save: "Auto-saved",
   close: "Closed, returned to the account",
 };
+
+/** "12 days left", "1 day left", "Unlocks today". Copy from the web. */
+export function daysLeftLabel(days: number) {
+  if (days <= 0) return "Unlocks today";
+  return days === 1 ? "1 day left" : `${days.toLocaleString("en-NG")} days left`;
+}
+
+/** Lock-for shortcuts on the create screen, kept to those inside the server's window. */
+export const SAFELOCK_PRESETS = [30, 90, 180, 365];

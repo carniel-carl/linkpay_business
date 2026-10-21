@@ -13,6 +13,10 @@ import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { provisionBusinessAccount } from "../src/services/accounts";
 import { addDays, addPayment, createInvoice, sendInvoice, todayInLagos } from "../src/services/invoices";
 import { closePocket, movePocketMoney } from "../src/services/pockets";
+import { CheckoutModel, PaymentLinkModel, type PaymentLinkDocument } from "../src/models/PaymentLink";
+import { newSlug, startCheckout } from "../src/services/paymentLinks";
+import { setLinkImages, uploadLinkImage } from "../src/services/paymentLinkImages";
+import sharp from "sharp";
 import { startOfLagosDay } from "../src/services/safelocks";
 import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
@@ -122,9 +126,91 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   const pockets = await seedPockets(business, owner.id, accounts);
   const safelocks = await seedSafelocks(business, owner.id, accounts);
   const payees = await seedBeneficiaries(business, owner.id, accounts, liquifia);
+  const links = await seedPaymentLinks(business, owner.id, accounts, liquifia);
   const risky = await seedCompliance(liquifia, apiUrl);
-  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}, ${links}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
   console.log(`Compliance demo: ${risky}`);
+}
+
+/**
+ * Payment links: a fixed-price one with payments matched on amount and on reference, a part payment, one
+ * still waiting, an expired one and a round-amount transfer to link by hand; a "payer chooses" link; a
+ * limited ticket link; and one turned off. Public pages at WEB_URL/pay/<slug> (slugs print below).
+ */
+async function seedPaymentLinks(
+  business: BusinessDocument,
+  userId: string,
+  accounts: { branch?: Types.ObjectId | null; providerAccountId: string }[],
+  liquifia: MockLiquifia,
+) {
+  const [head, ikeja, kano] = accounts;
+  const make = (account: typeof head, fields: Record<string, unknown>): Promise<PaymentLinkDocument> =>
+    PaymentLinkModel.create({ business: business._id, branch: account!.branch!, slug: newSlug(), createdBy: userId, ...fields });
+  const bundle = await make(head, {
+    title: "Ankara bundle, 6 yards",
+    description: "Six yards of Ankara print, delivered anywhere in Lagos within two days.",
+    amountKobo: 25_000_00,
+    phone: "required",
+    customFields: [{ label: "Delivery address", required: true }, { label: "Preferred colours", required: false }],
+    successMessage: "Thank you! We'll call you to arrange delivery.",
+  });
+  const open = await make(ikeja, { title: "Pay Adaeze Fabrics (Ikeja)", description: "Pay any amount for orders at the Ikeja store.", minAmountKobo: 1_000_00 });
+  const tickets = await make(kano, {
+    title: "Fabric fair, Kano: entry ticket",
+    amountKobo: 15_000_00,
+    maxPayments: 50,
+    expiresAt: new Date(Date.now() + 10 * 86_400_000),
+    // Only the fair's website may embed it.
+    allowedOrigins: ["https://fabricfair.ng", "https://*.fabricfair.ng"],
+  });
+  await make(head, { title: "Eid sale deposit", amountKobo: 10_000_00, status: "inactive" });
+  // Two made-up product pictures (stripes in Ankara-like colours) on the bundle, the first as its cover.
+  const stripes = (colours: string[]) =>
+    sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900">${colours.map((c, i) => `<rect x="${i * (1200 / colours.length)}" width="${1200 / colours.length + 1}" height="900" fill="${c}"/>`).join("")}</svg>`)).png().toBuffer();
+  const covers = await Promise.all([
+    stripes(["#C2410C", "#F59E0B", "#065F46", "#1E3A8A", "#F59E0B", "#C2410C"]).then((png) => uploadLinkImage(business._id, userId, png)),
+    stripes(["#7C2D12", "#FDE68A", "#7C2D12", "#FDE68A"]).then((png) => uploadLinkImage(business._id, userId, png)),
+  ]);
+  await setLinkImages(bundle, covers);
+
+  const payer = (name: string, extra: Record<string, unknown> = {}) => ({ name, email: `${name.split(" ")[0]!.toLowerCase()}@example.com`, fields: [], ...extra });
+  const address = { phone: "08031234567", fields: [{ label: "Delivery address", value: "4 Adeola Odeku St, Victoria Island" }] };
+  const start = async (link: PaymentLinkDocument, who: ReturnType<typeof payer>, price = link.amountKobo!, context?: Parameters<typeof startCheckout>[3]) =>
+    (await startCheckout(link, who, price, context)).checkout;
+  const pay = (account: typeof head, kobo: number, name: string, narration?: string) =>
+    liquifia.inboundTransfers.unshift(
+      inboundTransfer(account!.providerAccountId, kobo, { payer_name: name, narration: narration ?? null, created_at: new Date().toISOString() }),
+    );
+
+  const byAmount = await start(bundle, payer("Olumide Bakare", address));
+  pay(head, byAmount.amountKobo, "Olumide Bakare");
+  const byReference = await start(bundle, payer("Ngozi Eze", address));
+  pay(head, 25_000_00, "Ngozi Eze", `Ankara ${byReference.reference}`);
+  const short = await start(bundle, payer("Ibrahim Musa", address));
+  pay(head, 20_000_00, "Ibrahim Musa", short.reference);
+  await start(bundle, payer("Funke Adeyemi", address)); // still waiting
+  const expired = await start(bundle, payer("Halima Bello", address));
+  const missed = await start(bundle, payer("Emeka Obi", address));
+  const past = { expiresAt: new Date(Date.now() - 3 * 3_600_000), holdUntil: new Date(Date.now() - 3_600_000) };
+  await CheckoutModel.updateMany({ _id: { $in: [expired._id, missed._id] } }, { $set: past, $unset: { amountReserved: 1 } });
+  // Round amount, no reference: shows as a suggestion on Emeka's checkout.
+  pay(head, 25_000_00, "Emeka Obi Ventures");
+
+  pay(ikeja, (await start(open, payer("Chiamaka Nwosu"), 7_500_00)).amountKobo, "Chiamaka Nwosu");
+  for (const name of ["Tunde Salami", "Aisha Danjuma"]) pay(kano, (await start(tickets, payer(name))).amountKobo, name);
+  // Bought on the fair's website (embedded checkout), with the site's order number.
+  const embedded = await start(tickets, payer("Zainab Lawal"), undefined, {
+    source: "embed",
+    embedOrigin: "https://tickets.fabricfair.ng",
+    clientReference: "FAIR-20451",
+    metadata: { ticketType: "Early bird", seats: "2" },
+  });
+  pay(kano, embedded.amountKobo, "Zainab Lawal");
+  // Another from the bundle's page on the shop's website, still waiting.
+  await start(bundle, payer("Kelechi Udo", address), undefined, { source: "embed", embedOrigin: "https://adaezefabrics.ng", clientReference: "ORD-1042" });
+
+  await syncInboundTransfers();
+  return `4 payment links (${[bundle, open, tickets].map((l) => `/pay/${l.slug}`).join(", ")})`;
 }
 
 /** Invoices in every state: paid by hand, part-paid by a matched transfer, overdue, open, draft and void. */

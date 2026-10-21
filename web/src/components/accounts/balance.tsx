@@ -1,7 +1,7 @@
 import Link from "next/link"
 import type { Balance } from "@/lib/api/types"
-import { formatNaira } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { BalanceAmount } from "./balance-visibility"
 
 /** What can be sent: the bank balance minus what transfers are holding. Older backends only send `amountKobo`. */
 export const availableKobo = (balance: Balance) => balance.availableKobo ?? balance.amountKobo
@@ -15,7 +15,10 @@ export function HeldNote({ kobo, short, className }: { kobo: number; short?: boo
   if (kobo <= 0) return null
   return (
     <span className={cn("text-xs text-muted-foreground", className)}>
-      <span className="figure">{formatNaira(kobo)}</span> {short ? "held" : "held for transfers"}
+      <span className="figure">
+        <BalanceAmount kobo={kobo} />
+      </span>{" "}
+      {short ? "held" : "held for transfers"}
     </span>
   )
 }
@@ -28,7 +31,10 @@ export function SavedNote({ kobo, short, className }: { kobo: number; short?: bo
       href="/savings"
       className={cn("w-fit text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline", className)}
     >
-      <span className="figure">{formatNaira(kobo)}</span> {short ? "saved" : "in savings"}
+      <span className="figure">
+        <BalanceAmount kobo={kobo} />
+      </span>{" "}
+      {short ? "saved" : "in savings"}
     </Link>
   )
 }

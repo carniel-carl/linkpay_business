@@ -8,9 +8,9 @@ import { Spinner } from "@/components/ui/spinner"
 import type { AccountsResult } from "@/lib/accounts"
 import { RecentTransactions } from "@/components/transactions/recent-transactions"
 import type { Account, AccountSetupStatus, AccountWithBalance, Transaction } from "@/lib/api/types"
-import { formatNaira } from "@/lib/format"
 import { AccountSetupNotice, ProviderDownNotice } from "./account-notices"
 import { availableKobo, HeldNote, heldKobo, SavedNote, savedKobo } from "./balance"
+import { BalanceAmount, BalanceToggle } from "./balance-visibility"
 import { CopyButton, shareText } from "./copy-button"
 import { useAccounts } from "./use-accounts"
 
@@ -80,11 +80,14 @@ function AccountCard({
         </div>
 
         <div className="grid gap-2" aria-live="polite">
-          <p className="text-sm text-muted-foreground">Available balance</p>
+          <div className="flex items-center gap-1">
+            <p className="text-sm text-muted-foreground">Available balance</p>
+            {account.balance && <BalanceToggle />}
+          </div>
           {account.balance ? (
             <>
               <p className="type-display text-[2.75rem] break-all sm:text-6xl figure">
-                {formatNaira(availableKobo(account.balance))}
+                <BalanceAmount kobo={availableKobo(account.balance)} />
               </p>
               <HeldNote kobo={heldKobo(account.balance)} className="text-sm" />
               <SavedNote kobo={savedKobo(account.balance)} className="text-sm" />

@@ -84,6 +84,14 @@ export default function More() {
               onPress={() => router.push("/savings")}
             />
           )}
+          {business.status === "approved" && can(overview.data, "accounts.view") && (
+            <ListRow
+              icon={{ ios: "link", android: "link" }}
+              title="Payment links"
+              detail="Get paid with a link or your website"
+              onPress={() => router.push("/more/payment-links")}
+            />
+          )}
           {business.status === "approved" && can(overview.data, "invoices.manage") && (
             <ListRow
               icon={{ ios: "paintpalette", android: "palette" }}
@@ -140,6 +148,15 @@ export default function More() {
             trailing={preference === a.value && <Icon ios="checkmark" android="check" size={17} color={colors.primary} />}
           />
         ))}
+      </ListSection>
+
+      <ListSection title="Help">
+        <ListRow
+          icon={{ ios: "questionmark.circle", android: "help" }}
+          title="Questions and answers"
+          detail="Transfers, savings, invoices, team and security"
+          onPress={() => router.push("/more/help")}
+        />
       </ListSection>
 
       <ListSection title="Account">

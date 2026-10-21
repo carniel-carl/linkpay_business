@@ -183,6 +183,7 @@ export type Permission =
   | "transfers.manage"
   | "invoices.manage"
   | "savings.manage"
+  | "payments.manage"
 
 /** Fixed roles today; custom roles may come later, so treat unknown names gracefully. */
 export type TeamRole = "owner" | "admin" | "finance" | "approver" | "viewer" | (string & {})
@@ -602,6 +603,7 @@ export type NotificationType =
   | "transfer.completed"
   | "transfer.failed"
   | "payment.received"
+  | "payment_link.paid"
   | "invoice.viewed"
   | "invoice.payment_received"
   | "invoice.paid"
@@ -744,4 +746,151 @@ export type SafelockLimits = {
   maxPerBranch: number
   canBreakEarly: false
   interestRateBps: number
+}
+
+// ---- Payment links (contract: docs/briefs/payment-links.md) ----
+
+export type PhoneFieldMode = "off" | "optional" | "required"
+export type PaymentLinkStatus = "active" | "inactive"
+export type PaymentLinkUnavailableReason = "inactive" | "expired" | "sold_out" | "account_not_ready"
+export type CheckoutStatus = "pending" | "expired" | "paid" | "underpaid"
+export type CheckoutSource = "page" | "embed"
+
+export type PaymentLinkField = { _id: string; label: string; required: boolean }
+
+/**
+ * A picture on a payment link (the first is the cover). `url` is an API path with no host:
+ * `/api/payment-links/images/<id>` (signed in) or `/api/public/pay/<slug>/images/<id>?v=<n>` (public).
+ */
+export type PaymentLinkImage = { _id: string; url: string; width: number; height: number }
+
+/** GET /api/payment-links/:id */
+export type PaymentLink = {
+  _id: string
+  title: string
+  description: string | null
+  slug: string
+  /** WEB_URL/pay/<slug> */
+  url: string
+  branch: BranchRef | null
+  /** null = the payer chooses (at least `minAmountKobo`, if set). */
+  amountKobo: number | null
+  minAmountKobo: number | null
+  currency: "NGN"
+  phone: PhoneFieldMode
+  customFields: PaymentLinkField[]
+  /** Up to 4, in order; the first is the cover. */
+  images: PaymentLinkImage[]
+  successMessage: string | null
+  redirectUrl: string | null
+  status: PaymentLinkStatus
+  /** Websites that may embed it; [] = any site. */
+  allowedOrigins: string[]
+  expiresAt: string | null
+  maxPayments: number | null
+  paymentsCount: number
+  collectedKobo: number
+  lastPaidAt: string | null
+  available: boolean
+  unavailableReason: PaymentLinkUnavailableReason | null
+  createdBy: { _id: string; name: string } | null
+  createdAt: string
+  updatedAt: string
+  canManage: boolean
+}
+
+export type PaymentLinkList = { items: PaymentLink[]; total: number; skip: number; take: number }
+
+export type PaymentLinkSummary = {
+  links: { active: number; inactive: number }
+  collectedKobo: number
+  paymentsCount: number
+  last30Days: { collectedKobo: number; paymentsCount: number }
+  currency: "NGN"
+}
+
+/** GET /api/payment-links/:id/embed: code to paste into the business's website. */
+export type PaymentLinkEmbed = {
+  url: string
+  scriptUrl: string
+  button: string
+  inline: string
+  javascript: string
+  allowedOrigins: string[]
+  /** API_URL/api/public/checkouts/{token} */
+  verifyUrl: string
+}
+
+/** A payer's checkout as the team sees it (GET /api/payment-links/checkouts). */
+export type LinkCheckout = {
+  _id: string
+  reference: string
+  status: CheckoutStatus
+  link: { _id: string; title: string; slug: string } | null
+  branch: BranchRef | null
+  payer: { name: string; email: string; phone: string | null; fields: { label: string; value: string }[] }
+  priceKobo: number
+  /** What the payer was asked to send: the price plus 1 to 99 kobo. */
+  amountKobo: number
+  currency: "NGN"
+  paidKobo: number | null
+  paidAt: string | null
+  source: CheckoutSource
+  embedOrigin: string | null
+  /** The business's own order id, from its website. */
+  clientReference: string | null
+  metadata: Record<string, string>
+  matchedBy: "amount" | "reference" | "manual" | null
+  matchedByUser: { _id: string; name: string } | null
+  transaction: string | null
+  expiresAt: string
+  createdAt: string
+  canMatch: boolean
+}
+
+export type LinkCheckoutList = { items: LinkCheckout[]; total: number; skip: number; take: number }
+
+/** GET /api/public/pay/:slug: what the payer sees. */
+export type PublicPaymentLink = {
+  business: { name: string; logo: { url: string; width: number; height: number } | null; palette: BrandPalette }
+  link: {
+    slug: string
+    title: string
+    description: string | null
+    amountKobo: number | null
+    minAmountKobo: number | null
+    maxAmountKobo: number | null
+    currency: "NGN"
+    phone: PhoneFieldMode
+    customFields: PaymentLinkField[]
+    /** Up to 4, in order; the first is the cover. Show them through `/pay/<slug>/images/<id>`. */
+    images: PaymentLinkImage[]
+  }
+  embed: { allowedOrigins: string[] }
+  available: boolean
+  unavailableReason: PaymentLinkUnavailableReason | null
+}
+
+/** GET /api/public/checkouts/:token and POST /api/public/pay/:slug/checkouts. */
+export type PublicCheckout = {
+  token: string
+  reference: string
+  status: CheckoutStatus
+  priceKobo: number
+  /** Send exactly this. */
+  amountKobo: number
+  currency: "NGN"
+  payTo: PayTo | null
+  expiresAt: string
+  paidKobo: number | null
+  paidAt: string | null
+  payer: { name: string; email: string }
+  source: CheckoutSource
+  clientReference: string | null
+  metadata: Record<string, string>
+  /** `image` is the link's cover picture. */
+  link: { slug: string; title: string; image: PaymentLinkImage | null }
+  business: PublicPaymentLink["business"]
+  successMessage: string | null
+  redirectUrl: string | null
 }

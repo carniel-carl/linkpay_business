@@ -9,6 +9,7 @@ export const NOTIFICATION_TYPES = {
   "transfer.completed": { audience: "user", label: "Your transfer was delivered", push: true },
   "transfer.failed": { audience: "user", label: "Your transfer failed", push: true },
   "payment.received": { audience: "user", label: "Money came in", push: true },
+  "payment_link.paid": { audience: "user", label: "Someone paid through a payment link", push: true },
   "invoice.viewed": { audience: "user", label: "A customer opened an invoice", push: false },
   "invoice.payment_received": { audience: "user", label: "An invoice was part paid", push: true },
   "invoice.paid": { audience: "user", label: "An invoice was paid in full", push: true },
@@ -46,7 +47,7 @@ export type NotificationAudience = "user" | "staff";
 export const PUSH_CHANNELS = ["payments", "transfers", "invoices", "account"] as const;
 export type PushChannel = (typeof PUSH_CHANNELS)[number];
 export function pushChannelOf(type: NotificationType): PushChannel {
-  if (type.startsWith("payment.")) return "payments";
+  if (type.startsWith("payment.") || type.startsWith("payment_link.")) return "payments";
   if (type.startsWith("transfer.")) return "transfers";
   if (type.startsWith("invoice.")) return "invoices";
   return "account"; // verification, bank accounts, team, security, suspensions
