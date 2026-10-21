@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Types } from "mongoose";
+import { BeneficiaryModel } from "../models/Beneficiary";
 import { BranchModel } from "../models/Branch";
 import type { BusinessDocument } from "../models/Business";
 import { BusinessModel } from "../models/Business";
@@ -100,29 +101,34 @@ export async function resolveBankRecipient(business: BusinessDocument, accountNu
   }
   if (!lookup?.account_name) throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
 
-  const recipient: ResolvedRecipient = {
+  return classifyRecipient(business, {
     kind: "bank",
     accountNumber,
     accountName: lookup.account_name,
     bankName: lookup.bank_name ?? bank.name,
     bankUuid,
-  };
+  });
+}
 
-  // Is it one of ours? Then it's a branch of this business or another business on LinkPay.
+/**
+ * Notes when a bank recipient is one of our accounts: a branch of this business (internal) or another
+ * business on LinkPay. Database only, no name enquiry. Refuses closed (banned) businesses.
+ */
+export async function classifyRecipient(business: BusinessDocument, recipient: ResolvedRecipient): Promise<ResolvedRecipient> {
+  const { accountNumber, bankUuid } = recipient;
   const ours = await VirtualAccountModel.findOne({ accountNumber }).select("business branch bankUuid bankName");
   if (ours && (!ours.bankUuid || ours.bankUuid === bankUuid)) {
     const branch = ours.branch ? await BranchModel.findById(ours.branch).select("name isHeadOffice") : null;
     if (ours.business.equals(business._id)) {
-      Object.assign(recipient, { kind: "internal", business: ours.business, branch: ours.branch, label: branch?.name });
-    } else {
-      const other = await BusinessModel.findById(ours.business).select("name compliance.status");
-      if (other?.compliance?.status === "banned") {
-        throw new HttpError(422, "This account can't receive transfers.", "RECIPIENT_UNAVAILABLE");
-      }
-      Object.assign(recipient, { kind: "linkpay", business: ours.business, branch: ours.branch ?? undefined, label: other?.name });
+      return { ...recipient, kind: "internal", business: ours.business, branch: ours.branch ?? undefined, label: branch?.name };
     }
+    const other = await BusinessModel.findById(ours.business).select("name compliance.status");
+    if (other?.compliance?.status === "banned") {
+      throw new HttpError(422, "This account can't receive transfers.", "RECIPIENT_UNAVAILABLE");
+    }
+    return { ...recipient, kind: "linkpay", business: ours.business, branch: ours.branch ?? undefined, label: other?.name };
   }
-  return recipient;
+  return { ...recipient, kind: "bank", business: undefined, branch: undefined, label: undefined };
 }
 
 /** One of the business's own branches as the recipient. */
@@ -216,7 +222,13 @@ export async function withAccountLock<T>(accountId: Types.ObjectId, fn: () => Pr
 // Creating transfers
 // ---------------------------------------------------------------------------------------------------------
 
-export type TransferRequest = { recipient: ResolvedRecipient; amountKobo: number; narration?: string };
+export type TransferRequest = {
+  recipient: ResolvedRecipient;
+  amountKobo: number;
+  narration?: string;
+  /** The saved beneficiary being paid, if any. */
+  beneficiary?: Types.ObjectId;
+};
 
 const newReference = () => `LPB${randomBytes(8).toString("hex").toUpperCase()}`;
 
@@ -236,6 +248,8 @@ export async function createTransfers(opts: {
   branchId: string;
   requests: TransferRequest[];
   batchTitle?: string;
+  /** The saved payout list a batch was run from. */
+  payoutList?: Types.ObjectId;
   clientKey?: string;
 }) {
   const { business, membership, userId, requests } = opts;
@@ -282,6 +296,7 @@ export async function createTransfers(opts: {
             business: business._id,
             branch: branch._id,
             title: opts.batchTitle,
+            payoutList: opts.payoutList,
             createdBy: userId,
             count: requests.length,
             amountKobo,
@@ -310,6 +325,7 @@ export async function createTransfers(opts: {
             bankUuid: r.recipient.bankUuid,
             business: r.recipient.business,
             branch: r.recipient.branch,
+            beneficiary: r.beneficiary,
           },
           narration: r.narration,
           reference: newReference(),
@@ -324,6 +340,9 @@ export async function createTransfers(opts: {
     );
     return { transfers: transfers as unknown as TransferDocument[], batch };
   });
+
+  const paid = requests.flatMap((r) => (r.beneficiary ? [r.beneficiary] : []));
+  if (paid.length) await BeneficiaryModel.updateMany({ _id: { $in: paid } }, { lastPaidAt: new Date() });
 
   if (approval) {
     const approvers = levelApprovers(plan[0]!, await approversForBranch(business, branch._id), [userId]);

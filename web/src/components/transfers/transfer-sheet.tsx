@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import type { Transfer } from "@/lib/api/types"
 import { formatDateTime, formatNaira } from "@/lib/format"
 import { KIND_LABELS } from "@/lib/transfers"
+import { ApprovalTimeline } from "./approval-timeline"
 import { KindIcon, recipientName, TransferAmount, TransferStatusBadge } from "./parts"
 
 /** Everything about one transfer, with approve, reject and cancel where the member may. */
@@ -34,6 +35,10 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<"approve" | "reject" | "cancel" | null>(null)
   const [checking, startCheck] = useTransition()
+  const levels = t.approval?.levels.length ?? 0
+  const current = t.approval?.current ?? null
+  // Approving an earlier level hands it on; only the last level sends the money.
+  const finalLevel = current === null || current >= levels
 
   async function act(action: "approve" | "reject" | "cancel") {
     setPending(action)
@@ -43,7 +48,9 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
     if (!result.ok) return setError(result.error)
     toast.success(
       action === "approve"
-        ? `Approved. ${formatNaira(t.amountKobo)} is on its way to ${recipientName(t)}.`
+        ? finalLevel
+          ? `Approved. ${formatNaira(t.amountKobo)} is on its way to ${recipientName(t)}.`
+          : `Level ${current} approved. It now goes to level ${current! + 1} of ${levels}.`
         : action === "reject"
           ? "Rejected. The money is available again."
           : "Transfer cancelled. The money is available again.",
@@ -103,6 +110,15 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
           <Row label="Total from the account" value={<span className="figure font-semibold">{formatNaira(t.totalKobo)}</span>} />
         </Group>
 
+        {t.approval && (
+          <section className="grid gap-2">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              {levels > 1 ? `Approvals, ${levels} levels` : "Approval"}
+            </h3>
+            <ApprovalTimeline approval={t.approval} decision={t.decision} />
+          </section>
+        )}
+
         <Group title="Recipient">
           <Row label="Name" value={t.recipient.accountName} />
           {t.recipient.branch && <Row label="Branch" value={t.recipient.branch.name} />}
@@ -124,7 +140,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
             }
           />
           <Row label="Prepared by" value={t.createdBy?.name} />
-          {t.decision && (
+          {t.decision && !t.approval && (
             <Row
               label={t.status === "rejected" ? "Rejected by" : "Approved by"}
               value={`${t.decision.by?.name ?? "Unknown"}, ${formatDateTime(t.decision.at)}`}
@@ -142,7 +158,9 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
               <Field>
                 <FieldLabel htmlFor="decision-note">Note (optional)</FieldLabel>
                 <Textarea id="decision-note" rows={2} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
-                <FieldDescription>The person who prepared it sees this.</FieldDescription>
+                <FieldDescription>
+                  {finalLevel ? "The person who prepared it sees this." : "The next approvers and the person who prepared it see this."}
+                </FieldDescription>
               </Field>
               <div className="grid grid-cols-2 gap-2">
                 <Button variant="outline" disabled={!!pending} onClick={() => act("reject")}>
@@ -151,7 +169,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
                 </Button>
                 <Button disabled={!!pending} onClick={() => act("approve")}>
                   {pending === "approve" && <Spinner />}
-                  Approve and send
+                  {finalLevel ? "Approve and send" : `Approve level ${current}`}
                 </Button>
               </div>
             </>

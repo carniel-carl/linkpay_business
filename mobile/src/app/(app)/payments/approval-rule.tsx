@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -8,13 +8,15 @@ import { OptionList, OptionRow } from "@/components/ui/options";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { friendlyMessage } from "@/lib/api/errors";
-import { useApprovalRule, useSaveApprovalRule } from "@/lib/api/transfers";
+import { describeApprovalRule, useApprovalRule, useSaveApprovalRule } from "@/lib/api/transfers";
 import type { ApprovalRule } from "@/lib/api/types";
 import { formatNaira } from "@/lib/format";
 import { parseNaira } from "@/lib/send-draft";
 
 // Options and copy match web/src/components/transfers/approval-rule-dialog.tsx.
-const OPTIONS: { mode: ApprovalRule["mode"]; title: string; description: string }[] = [
+type SimpleMode = Exclude<ApprovalRule["mode"], "workflow">;
+
+const OPTIONS: { mode: SimpleMode; title: string; description: string }[] = [
   { mode: "never", title: "Only for team members who can't approve", description: "Owners, admins and approvers send straight away." },
   { mode: "above_threshold", title: "From an amount you choose", description: "Transfers at or above it need a second person, whoever sends them." },
   { mode: "always", title: "Every transfer", description: "A second person approves every transfer before it leaves." },
@@ -56,7 +58,9 @@ export default function ApprovalRuleScreen() {
 
 function RuleForm({ rule }: { rule: ApprovalRule }) {
   const save = useSaveApprovalRule();
-  const [mode, setMode] = useState(rule.mode);
+  // A workflow is edited on the web; here the owner can only replace it with one of the simple rules.
+  const workflow = rule.mode === "workflow";
+  const [mode, setMode] = useState<SimpleMode | undefined>(OPTIONS.some((o) => o.mode === rule.mode) ? (rule.mode as SimpleMode) : undefined);
   const [threshold, setThreshold] = useState(rule.thresholdKobo !== null ? koboToInput(rule.thresholdKobo) : "");
   const [submitted, setSubmitted] = useState(false);
 
@@ -65,12 +69,27 @@ function RuleForm({ rule }: { rule: ApprovalRule }) {
 
   function submit() {
     setSubmitted(true);
-    if (thresholdError) return;
-    save.mutate(mode === "above_threshold" ? { mode, thresholdKobo: kobo! } : { mode }, { onSuccess: () => router.back() });
+    if (!mode || thresholdError) return;
+    const apply = () =>
+      save.mutate(mode === "above_threshold" ? { mode, thresholdKobo: kobo! } : { mode }, { onSuccess: () => router.back() });
+    if (!workflow) return apply();
+    Alert.alert("Replace the approval workflow?", "Its tiers and approvers are removed. Transfers already waiting keep their levels.", [
+      { text: "Keep workflow", style: "cancel" },
+      { text: "Replace", style: "destructive", onPress: apply },
+    ]);
   }
 
   return (
     <>
+      {workflow && (
+        <View className="gap-1 rounded-field bg-muted px-4 py-3">
+          <Text className="text-[15px] font-semibold text-foreground">Approval workflow</Text>
+          <Text className="text-[14px] leading-5 text-muted-foreground">{describeApprovalRule(rule)}</Text>
+          <Text className="text-[14px] leading-5 text-muted-foreground">
+            Change its tiers and approvers on the web. Choosing a rule below replaces it.
+          </Text>
+        </View>
+      )}
       <OptionList label="Transfers need approval">
         {OPTIONS.map((o) => (
           <OptionRow key={o.mode} title={o.title} detail={o.description} selected={mode === o.mode} onPress={() => setMode(o.mode)} />
@@ -89,7 +108,7 @@ function RuleForm({ rule }: { rule: ApprovalRule }) {
         />
       )}
       <FormError message={save.error ? friendlyMessage(save.error) : undefined} />
-      <Button loading={save.isPending} onPress={submit}>
+      <Button loading={save.isPending} disabled={!mode} onPress={submit}>
         Save rule
       </Button>
     </>

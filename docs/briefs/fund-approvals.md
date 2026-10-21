@@ -1,6 +1,6 @@
 # Brief: Fund Approvals (approval workflows)
 
-Backend done 2026-10-21. This is the contract for the web and mobile clients. Modelled on PiggyVest Business's **Fund Approval** page ("Set approval levels, assign approvers"; Pending / Approved / Declined tabs).
+Backend, web and mobile done 2026-10-21. This is the contract for the web and mobile clients. Modelled on PiggyVest Business's **Fund Approval** page ("Set approval levels, assign approvers"; Pending / Approved / Declined tabs).
 
 ## 1. Product decisions (product owner, 2026-10-21)
 

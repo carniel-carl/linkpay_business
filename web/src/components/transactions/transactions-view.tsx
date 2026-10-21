@@ -366,8 +366,17 @@ function DirectionFilter({ value, onChange }: { value?: string; onChange: (v: st
   )
 }
 
-/** Preset periods, or a custom range of Lagos calendar days. */
-function PeriodPicker({ query, onChange }: { query: TransactionQuery; onChange: (patch: Patch) => void }) {
+/** Preset periods, or a custom range of Lagos calendar days. Also used by Fund approvals. */
+export function PeriodPicker({
+  query,
+  onChange,
+  defaultPeriod = DEFAULT_PERIOD,
+}: {
+  query: Pick<TransactionQuery, "period" | "from" | "to">
+  onChange: (patch: Patch) => void
+  /** The period that leaves `?period=` out of the URL. */
+  defaultPeriod?: Period
+}) {
   const [open, setOpen] = useState(false)
   const [from, setFrom] = useState(query.from ?? "")
   const [to, setTo] = useState(query.to ?? "")
@@ -375,7 +384,7 @@ function PeriodPicker({ query, onChange }: { query: TransactionQuery; onChange: 
 
   function choose(period: Period) {
     setOpen(false)
-    onChange({ period: period === DEFAULT_PERIOD ? undefined : period, from: undefined, to: undefined, page: undefined })
+    onChange({ period: period === defaultPeriod ? undefined : period, from: undefined, to: undefined, page: undefined })
   }
 
   return (

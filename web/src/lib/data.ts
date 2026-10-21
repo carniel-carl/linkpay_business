@@ -22,6 +22,7 @@ import type {
   TeamMember,
   TransactionList,
   TransactionSummary,
+  Approver,
   Transfer,
   TransferBatch,
   TransferList,
@@ -151,6 +152,15 @@ export const getAwaitingApprovalCount = cache(async () => {
 })
 
 export const getTransferSettings = cache(() => load<TransferSettings>("/api/transfers/settings"))
+
+/** How many transfers are waiting for approval at any level, across the member's branches. */
+export const getPendingApprovalCount = cache(async () => {
+  const result = await load<TransferList>("/api/transfers?approval=pending&take=1")
+  return result.ok ? result.data.total : 0
+})
+
+/** People who can be named at a workflow level. Needs `transfers.manage`. */
+export const getApprovers = () => load<Approver[]>("/api/transfers/approvers")
 
 /** GET /api/invoices (see lib/invoices.ts for the query). Needs `accounts.view`. */
 export const getInvoices = (params: URLSearchParams) => load<InvoiceList>(`/api/invoices?${params}`)

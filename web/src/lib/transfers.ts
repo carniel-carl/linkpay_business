@@ -1,4 +1,4 @@
-import type { TransferKind, TransferSettings, TransferStatus } from "@/lib/api/types"
+import type { ApprovalLevelStatus, TransferKind, TransferSettings, TransferStatus } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 
 /**
@@ -27,6 +27,18 @@ export const STATUS_LABELS: Record<TransferStatus, string> = {
   failed: "Failed",
 }
 
+export const LEVEL_STATUS_LABELS: Record<ApprovalLevelStatus, string> = {
+  approved: "Approved",
+  waiting: "Waiting",
+  upcoming: "Next",
+  rejected: "Rejected",
+  cancelled: "Cancelled",
+  not_reached: "Not reached",
+}
+
+/** "Needs 2 approvals" for a fee quote's `approvalLevels`. */
+export const approvalsNeeded = (levels: number) => (levels === 1 ? "Needs 1 approval" : `Needs ${levels} approvals`)
+
 export const KIND_LABELS: Record<TransferKind, string> = {
   bank: "Bank transfer",
   internal: "Between branches",
@@ -35,6 +47,12 @@ export const KIND_LABELS: Record<TransferKind, string> = {
 
 /** "Large transfers need approval" style summary of the rule. Used in the page header (server). */
 export function describeApprovalRule({ approval }: TransferSettings) {
+  if (approval.mode === "workflow" && approval.tiers.length) {
+    const lowest = approval.tiers[0]
+    const most = Math.max(...approval.tiers.map((t) => t.levels.length))
+    const from = lowest.minKobo > 0 ? `from ${formatNaira(lowest.minKobo)}` : ""
+    return `Transfers ${from ? `${from} ` : ""}go through ${most === 1 ? "one approval level" : `up to ${most} approval levels`}, depending on the amount.`
+  }
   if (approval.mode === "always") return "Every transfer needs a second person's approval."
   if (approval.mode === "above_threshold" && approval.thresholdKobo !== null) {
     return `Transfers of ${formatNaira(approval.thresholdKobo)} or more need a second person's approval.`

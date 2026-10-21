@@ -122,7 +122,9 @@ export default function Review() {
         {q?.needsApproval && (
           <View className="rounded-field bg-warning-subtle px-4 py-3">
             <Text className="text-[14px] leading-5 text-warning-foreground">
-              This transfer needs a second person to approve it. The money is held until they do.
+              {q.approvalLevels > 1
+                ? `This transfer needs ${q.approvalLevels} approvals, one after the other. The money is held until the last one.`
+                : "This transfer needs a second person to approve it. The money is held until they do."}
             </Text>
           </View>
         )}

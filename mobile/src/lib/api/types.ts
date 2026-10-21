@@ -257,15 +257,34 @@ export type Transfer = {
   reference: string;
   failureReason: string | null;
   createdBy: { _id: string; name: string } | null;
+  /** The final approval, or the rejection. Stays null while the transfer moves between levels. */
   decision: { by: { _id: string; name: string } | null; at: string; note: string | null } | null;
+  /** Null when the transfer didn't need approval. */
+  approval: TransferApproval | null;
   createdAt: string;
   submittedAt: string | null;
   completedAt: string | null;
-  /** Waiting for approval, the member may approve, and someone else created it. */
+  /** The member is an approver at the current level, didn't approve an earlier one, and didn't create it. */
   canApprove: boolean;
   /** Waiting for approval and the member created it. */
   canCancel: boolean;
 };
+
+export type ApprovalLevelStatus = "approved" | "waiting" | "upcoming" | "rejected" | "cancelled" | "not_reached";
+
+/** One level of a transfer's approval. `any`: anyone who can approve clears it (`approvers` is then empty). */
+export type ApprovalLevel = {
+  level: number;
+  any: boolean;
+  approvers: { _id: string; name: string }[];
+  status: ApprovalLevelStatus;
+  approvedBy: { _id: string; name: string } | null;
+  approvedAt: string | null;
+  note: string | null;
+};
+
+/** `current` is the 1-based level waiting for a decision, null when nothing is waiting. */
+export type TransferApproval = { current: number | null; levels: ApprovalLevel[] };
 
 export type TransferList = { items: Transfer[]; total: number; skip: number; take: number };
 
@@ -275,9 +294,25 @@ export type Bank = { uuid: string; name: string; code: string | null };
 export type ResolvedAccount = { accountNumber: string; accountName: string; bankName: string | null; kind: TransferKind; label: string | null };
 
 /** GET /api/transfers/fee */
-export type FeeQuote = { amountKobo: number; feeKobo: number; stampDutyKobo: number; totalKobo: number; needsApproval: boolean };
+export type FeeQuote = {
+  amountKobo: number;
+  feeKobo: number;
+  stampDutyKobo: number;
+  totalKobo: number;
+  needsApproval: boolean;
+  /** How many approvals the signed-in member's transfer would need (0 = goes straight away). */
+  approvalLevels: number;
+};
 
-export type ApprovalRule = { mode: "never" | "always" | "above_threshold"; thresholdKobo: number | null };
+export type ApprovalRuleMode = "never" | "always" | "above_threshold" | "workflow";
+
+/** A workflow tier: transfers from `minKobo` go through its levels in order. Edited on the web only. */
+export type ApprovalTier = {
+  minKobo: number;
+  levels: { approvers: { _id: string; name: string; role: string | null; roleLabel: string | null; canApprove: boolean }[] }[];
+};
+
+export type ApprovalRule = { mode: ApprovalRuleMode; thresholdKobo: number | null; tiers: ApprovalTier[] };
 
 // ---- Invoices (/api/invoices; shapes from backend/src/controllers/invoices.ts) ----
 

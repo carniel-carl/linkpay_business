@@ -15,6 +15,7 @@ import {
   MAX_LEVELS,
   MAX_TIERS,
 } from "../services/approvals";
+import { beneficiaryRecipient, findBeneficiary, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
 import { branchScope, canAccessBranch, ensureOwnerMembership, hasPermission } from "../services/team";
 import {
   cancelTransfers,
@@ -25,7 +26,6 @@ import {
   refreshTransfer,
   resolveBankRecipient,
   resolveBranchRecipient,
-  type TransferRequest,
 } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
 
@@ -84,6 +84,8 @@ async function serialize(req: Request, transfers: TransferDocument[]) {
       bankName: t.recipient!.bankName ?? null,
       // Internal transfers: the receiving branch.
       branch: t.kind === "internal" ? branch(t.recipient!.branch) : null,
+      // The saved beneficiary paid, if any.
+      beneficiary: t.recipient!.beneficiary ? String(t.recipient!.beneficiary) : null,
     },
     narration: t.narration ?? null,
     reference: t.reference,
@@ -151,6 +153,7 @@ async function serializeBatch(req: Request, batch: InstanceType<typeof TransferB
   return {
     _id: batch.id,
     title: batch.title ?? null,
+    payoutList: batch.payoutList ? String(batch.payoutList) : null,
     count: batch.count,
     amountKobo: batch.amountKobo,
     feeKobo: batch.feeKobo,
@@ -336,6 +339,8 @@ const listFilters = z.object({
   kind: z.enum(TRANSFER_KINDS).optional(),
   branch: objectId.optional(),
   batch: objectId.optional(),
+  // Payments to one saved beneficiary.
+  beneficiary: objectId.optional(),
   // "me": waiting for the signed-in member's approval at its current level.
   awaiting: z.literal("me").optional(),
   // Fund approvals tabs: waiting, approved (and sent), or declined.
@@ -360,6 +365,7 @@ export const listTransfers: RequestHandler = async (req, res) => {
   if (f.status) filter.status = f.status;
   if (f.kind) filter.kind = f.kind;
   if (f.batch) filter.batch = new Types.ObjectId(f.batch);
+  if (f.beneficiary) filter["recipient.beneficiary"] = new Types.ObjectId(f.beneficiary);
   if (f.awaiting) {
     if (!hasPermission(req.membership!, "transfers.approve")) {
       return void res.json({ items: [], total: 0, skip: f.skip, take: f.take });
@@ -399,71 +405,67 @@ export const getTransfer: RequestHandler<IdParams> = async (req, res) => {
 const recipientInput = z.discriminatedUnion("type", [
   z.object({ type: z.literal("bank"), accountNumber, bankUuid: z.string().trim().min(1) }),
   z.object({ type: z.literal("branch"), branch: objectId }),
+  z.object({ type: z.literal("beneficiary"), beneficiary: objectId }),
 ]);
 
-/** Sends money from one of the business's branch accounts. Send an Idempotency-Key header to retry safely. */
+/**
+ * Sends money from one of the business's branch accounts. Send an Idempotency-Key header to retry safely.
+ * `saveBeneficiary: true` adds a new bank recipient to the saved beneficiaries.
+ */
 export const createTransfer: RequestHandler = async (req, res) => {
-  const body = z.object({ branch: objectId, amountKobo, narration, recipient: recipientInput }).parse(req.body);
+  const body = z
+    .object({ branch: objectId, amountKobo, narration, recipient: recipientInput, saveBeneficiary: z.boolean().optional() })
+    .parse(req.body);
   const business = req.business!;
-  const recipient =
-    body.recipient.type === "branch"
-      ? await resolveBranchRecipient(business, body.recipient.branch)
-      : await resolveBankRecipient(business, body.recipient.accountNumber, body.recipient.bankUuid);
+  let beneficiary: Types.ObjectId | undefined;
+  let recipient;
+  if (body.recipient.type === "branch") {
+    recipient = await resolveBranchRecipient(business, body.recipient.branch);
+  } else if (body.recipient.type === "beneficiary") {
+    const saved = await findBeneficiary(business, body.recipient.beneficiary);
+    recipient = await beneficiaryRecipient(business, saved);
+    beneficiary = saved._id;
+  } else {
+    recipient = await resolveBankRecipient(business, body.recipient.accountNumber, body.recipient.bankUuid);
+  }
+  if (body.saveBeneficiary && !beneficiary && recipient.kind !== "internal") {
+    beneficiary = (await saveBeneficiary(business, req.userId!, recipient)).beneficiary._id;
+  }
 
   const { transfers, replayed } = await createTransfers({
     business,
     membership: req.membership!,
     userId: req.userId!,
     branchId: body.branch,
-    requests: [{ recipient, amountKobo: body.amountKobo, narration: body.narration }],
+    requests: [{ recipient, amountKobo: body.amountKobo, narration: body.narration, beneficiary }],
     clientKey: clientKey(req),
   });
   res.status(replayed ? 200 : 201).json((await serialize(req, transfers.slice(0, 1)))[0]);
 };
 
-const MAX_BULK_ITEMS = 200;
+export const MAX_BULK_ITEMS = 200;
+
+/** A bulk row: a saved beneficiary, or an account number and bank. */
+export const payoutRow = z.union([
+  z.object({ beneficiary: objectId, amountKobo, narration }),
+  z.object({ accountNumber, bankUuid: z.string().trim().min(1), amountKobo, narration }),
+]);
 
 /**
- * Several transfers from one account at once. Every row is checked with the bank first; if any row fails,
- * nothing is created and the errors come back per row (`details.rows`).
+ * Several transfers from one account at once. Every row is checked first; if any row fails, nothing is
+ * created and the errors come back per row (`details.rows`). `saveBeneficiaries: true` saves the new accounts.
  */
 export const createBulkTransfer: RequestHandler = async (req, res) => {
   const body = z
     .object({
       branch: objectId,
       title: z.string().trim().max(80).optional(),
-      items: z
-        .array(z.object({ accountNumber, bankUuid: z.string().trim().min(1), amountKobo, narration }))
-        .min(1)
-        .max(MAX_BULK_ITEMS),
+      items: z.array(payoutRow).min(1).max(MAX_BULK_ITEMS),
+      saveBeneficiaries: z.boolean().optional(),
     })
     .parse(req.body);
   const business = req.business!;
-
-  const requests: TransferRequest[] = new Array(body.items.length);
-  const rows: { row: number; error: string; code?: string }[] = [];
-  // A few lookups at a time: each is a name enquiry with the recipient's bank.
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: 5 }, async () => {
-      while (next < body.items.length) {
-        const i = next++;
-        const item = body.items[i]!;
-        try {
-          const recipient = await resolveBankRecipient(business, item.accountNumber, item.bankUuid);
-          requests[i] = { recipient, amountKobo: item.amountKobo, narration: item.narration };
-        } catch (err) {
-          if (!(err instanceof HttpError)) throw err;
-          rows.push({ row: i, error: err.message, code: err.code });
-        }
-      }
-    }),
-  );
-  if (rows.length) {
-    throw new HttpError(422, `${rows.length} of ${body.items.length} rows need fixing`, "INVALID_ROWS", {
-      rows: rows.sort((a, b) => a.row - b.row),
-    });
-  }
+  const requests = await resolvePayoutRows(business, body.items, { save: body.saveBeneficiaries, userId: req.userId! });
 
   const { transfers, batch, replayed } = await createTransfers({
     business,
@@ -474,13 +476,15 @@ export const createBulkTransfer: RequestHandler = async (req, res) => {
     batchTitle: body.title,
     clientKey: clientKey(req),
   });
-  const savedBatch = batch ?? (transfers[0]?.batch ? await TransferBatchModel.findById(transfers[0].batch) : null);
-  if (!savedBatch) {
-    // A single row is just a transfer.
-    return void res.status(replayed ? 200 : 201).json({ batch: null, items: await serialize(req, transfers) });
-  }
-  res.status(replayed ? 200 : 201).json({ batch: await serializeBatch(req, savedBatch, transfers) });
+  res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
 };
+
+/** `{ batch }` for several rows; `{ batch: null, items }` when a single row became a plain transfer. */
+export async function describeBulkResult(req: Request, transfers: TransferDocument[], batch: InstanceType<typeof TransferBatchModel> | null) {
+  const savedBatch = batch ?? (transfers[0]?.batch ? await TransferBatchModel.findById(transfers[0].batch) : null);
+  if (!savedBatch) return { batch: null, items: await serialize(req, transfers) };
+  return { batch: await serializeBatch(req, savedBatch, transfers) };
+}
 
 export const approveTransfer: RequestHandler<IdParams> = async (req, res) => {
   const { note: text } = note.parse(req.body ?? {});

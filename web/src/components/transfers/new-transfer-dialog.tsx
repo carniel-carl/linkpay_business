@@ -24,7 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Spinner } from "@/components/ui/spinner"
 import type { AccountWithBalance, Bank, BranchRef, FeeQuote, ResolvedAccount } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
-import { parseNairaToKobo } from "@/lib/transfers"
+import { approvalsNeeded, parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
 
 /** A branch account money can be sent from. */
@@ -150,7 +150,14 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
       return
     }
     const t = result.data
-    if (t.status === "pending_approval") toast.success("Sent for approval. The money is held until someone approves it.")
+    if (t.status === "pending_approval") {
+      const levels = t.approval?.levels.length ?? 1
+      toast.success(
+        levels > 1
+          ? `Sent for approval. It goes through ${levels} levels, and the money is held until the last one approves.`
+          : "Sent for approval. The money is held until someone approves it.",
+      )
+    }
     else if (t.status === "failed") toast.error(`The transfer failed: ${t.failureReason ?? "the bank couldn't complete it"}.`)
     else toast.success(`${formatNaira(t.amountKobo)} is on its way to ${t.recipient.branch?.name ?? t.recipient.accountName}.`)
     setOpen(false)
@@ -342,7 +349,9 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
               </dl>
               {quote.needsApproval && (
                 <p className="rounded-lg bg-warning-subtle px-3 py-2.5 text-sm text-warning-foreground">
-                  This transfer needs a second person to approve it. The money is held until they do.
+                  {(quote.approvalLevels ?? 1) > 1
+                    ? `${approvalsNeeded(quote.approvalLevels)}, one level after another. The money is held until the last one approves.`
+                    : "This transfer needs a second person to approve it. The money is held until they do."}
                 </p>
               )}
             </div>

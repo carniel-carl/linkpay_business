@@ -92,11 +92,26 @@ const settingsInput = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("never") }),
   z.object({ mode: z.literal("always") }),
   z.object({ mode: z.literal("above_threshold"), thresholdKobo: amountKobo }),
+  z.object({
+    mode: z.literal("workflow"),
+    tiers: z
+      .array(
+        z.object({
+          minKobo: z.number().int().min(0),
+          levels: z.array(z.object({ approvers: z.array(id).min(1).max(10) })).min(1).max(3),
+        }),
+      )
+      .min(1)
+      .max(5),
+  }),
 ])
 
 export async function updateApprovalRule(input: z.input<typeof settingsInput>) {
   const approval = settingsInput.parse(input)
   const result = await runAction(() => api<TransferSettings>("/api/transfers/settings", { method: "PATCH", json: { approval } }))
-  if (result.ok) revalidatePath("/transfers")
+  if (result.ok) {
+    revalidatePath("/transfers")
+    revalidatePath("/approvals", "layout")
+  }
   return result
 }

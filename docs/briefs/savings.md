@@ -6,8 +6,8 @@ Product owner's request, 2026-10-21: PiggyVest Business-style savings. Decisions
 | --- | --- |
 | "Pocket" | **Savings pockets**: named pots inside a branch account ("VAT & tax", "Payroll"). Not PiggyVest's "Pay with Pocket" checkout (that needs a consumer wallet LinkPay doesn't have). |
 | Where the money sits | **Set aside inside the branch's own account.** Nothing moves at the bank (no Liquifia calls, no fees). Money in a pocket is taken out of the branch's *available* balance, so transfers can't spend it. Moving it back is instant. |
-| Safelock | **A lock with no interest at launch.** Money can't be taken out until the unlock date. Interest comes later, once the bank partner confirms terms. **Not built yet**; the contract will be added here. |
-| Order | Pockets first (done, backend), then Safelock. |
+| Safelock | **A lock with no interest at launch.** Money can't be taken out until the unlock date, and a lock **can never be broken early** (decided 2026-10-21). Interest comes later, once the bank partner confirms terms. Contract in §6. |
+| Order | Pockets first, then Safelock (backend done 2026-10-21). |
 
 **Backend: Pockets done** (2026-10-21, `backend/tests/pockets.test.ts`, 10 tests). This brief is the contract for the web and mobile apps.
 
@@ -145,6 +145,77 @@ New type `savings.target_reached` (push: yes; Android channel `account`, since `
 - Hide every write when `canManage` is false (or the member lacks `savings.manage`).
 - Mobile: confirm Add money / Withdraw without the passcode. No money leaves the account, so it's like moving between your own pots. Close could ask for it. Your call.
 
-## 6. Coming next: Safelock (not built)
+## 6. Safelock
 
-A lock on part of a branch's available balance until an unlock date, with no interest yet. It will count towards `savedKobo` the same way. It will probably live at `/api/safelocks`. Still to decide with the product owner: the shortest and longest lock, and whether a lock can ever be broken early. This section will be replaced with the contract once it's built.
+**Backend done** 2026-10-21 (`backend/tests/safelocks.test.ts`, 7 tests). `dev:mock --seed` adds four: "Office rent 2027" (head office, 50 days left), "Expansion fund" (head office, 355 days left), "Q3 supplier deposit" (released 5 days ago) and "Shop renovation" (Ikeja store).
+
+### Concepts
+
+- A Safelock locks a **fixed amount** of one branch's available balance until an **unlock date**. As with pockets, nothing moves at the bank. The money stays in the branch's account and leaves `availableKobo`.
+- **It can't be broken early, topped up, shortened or extended.** Only the title can change. There are no routes for anything else, so build no buttons for them. Before creating one, the apps must make this clear and ask the person to confirm.
+- Limits come from `GET /api/safelocks/limits`, so don't hard-code them. Today: **10 to 1,000 days** from today (Lagos), **₦1,000** minimum, ₦100m maximum, 50 running per branch. (The day range and minimum are proposals still to be confirmed; they're in `backend/src/config/safelock.ts`.)
+- On the unlock day (midnight, Lagos time) the money counts as available again straight away. Within 5 minutes the lock shows `status: "released"`, and the branch's team gets `savings.safelock_released`. Reading a lock or the list also releases due ones.
+- No interest yet. `interestRateBps` in the limits is `0`. Don't show interest anywhere.
+
+### Balances on `/api/accounts`
+
+`balance.savedKobo` now includes running Safelocks. The new `balance.lockedKobo` is the Safelock part of it, so pockets are `savedKobo - lockedKobo`. `availableKobo` is unchanged in meaning (`amountKobo - heldKobo - savedKobo`).
+
+### Endpoints: `/api/safelocks`
+
+Reads `accounts.view`, create and rename `savings.manage`, limited to the member's branches.
+
+| Method and path | Body / query | Response |
+| --- | --- | --- |
+| `GET limits` | | `{ minAmountKobo, maxAmountKobo, minDays, maxDays, earliestUnlockOn, latestUnlockOn, maxPerBranch, canBreakEarly: false, interestRateBps: 0 }` |
+| `GET /` | `?branch=<id>&status=locked\|released\|all` (default `locked`) | `{ items: Safelock[], lockedKobo, currency }`. Running ones first (soonest to unlock), then released ones (latest first). `lockedKobo` sums the running ones in the list |
+| `POST /` | `{ branch, title, amountKobo, unlockOn: "YYYY-MM-DD" }`, optional `Idempotency-Key` header | `201` Safelock (`200` on a replay of the same key) |
+| `GET /:id` | | Safelock |
+| `PATCH /:id` | `{ title }` (anything else is a 400) | Safelock. Running locks only |
+
+```ts
+{
+  _id: string;
+  title: string;                 // 1–40 characters
+  status: "locked" | "released";
+  branch: { _id: string; name: string; isHeadOffice: boolean } | null;
+  amountKobo: number;
+  currency: "NGN";
+  lockedOn: string;              // YYYY-MM-DD (Lagos)
+  unlockOn: string;              // YYYY-MM-DD (Lagos)
+  unlockAt: string;              // the moment it unlocks (midnight Lagos), for a countdown
+  totalDays: number;
+  daysLeft: number;              // 0 once released
+  progressBps: number;           // 0..10000, how far through the lock period
+  releasedAt: string | null;
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+  canRename: boolean;            // savings.manage and still locked
+}
+```
+
+| Code | Status | When |
+| --- | --- | --- |
+| `SAFELOCK_TOO_SMALL` | 400 | Below the minimum. `details.minAmountKobo` |
+| `INVALID_UNLOCK_DATE` | 400 | Outside the window. `details: { earliest, latest }` |
+| `INSUFFICIENT_BALANCE` | 422 | More than the branch's available balance. `details: { availableKobo, requiredKobo }` |
+| `SAFELOCK_LIMIT` | 409 | 50 running on the branch |
+| `SAFELOCK_RELEASED` | 409 | Renaming a released lock |
+| `SAFELOCK_NOT_FOUND` | 404 | Unknown, or not on the member's branches |
+| `ACCOUNT_NOT_READY`, `ACCOUNT_BUSY` | 409 | As for pockets |
+
+### Notification
+
+Type `savings.safelock_released` (push: yes; Android channel `account`) goes to everyone who can see that branch's money:
+- title: "Safelock released"
+- body: "<title> has unlocked. ₦X is back in <branch>'s available balance."
+- `link`: `/savings?safelock=<id>`
+- `data`: `{ safelockId, branchId }`
+
+**Web:** `/savings?safelock=<id>` should open that lock. **Mobile:** open it from `data.safelockId`.
+
+### Suggested screens
+
+- **Savings page:** a Safelock section or tab beside Pockets. Show the total locked, cards with the title, amount, unlock date, "N days left" and a time progress bar, and released locks under a filter. Add a "New Safelock" action.
+- **Create:** branch, title, amount (show the branch's available balance), and an unlock date picker limited to `earliestUnlockOn` and `latestUnlockOn` (or "days" presets such as 30 / 90 / 180 / 365). Then a confirmation step: "₦X will be locked until <date>. You can't take it out early." Mobile could ask for the passcode here, since it can't be undone.
+- **Detail:** amount, locked on, unlocks on, countdown, and rename. Never show a withdraw or break button.

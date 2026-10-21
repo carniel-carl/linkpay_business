@@ -14,6 +14,7 @@ export const NOTIFICATION_TYPES = {
   "invoice.paid": { audience: "user", label: "An invoice was paid in full", push: true },
   "invoice.overdue": { audience: "user", label: "An invoice is overdue", push: true },
   "savings.target_reached": { audience: "user", label: "A savings pocket reached its target", push: true },
+  "savings.safelock_released": { audience: "user", label: "A Safelock was released", push: true },
   "kyb.approved": { audience: "user", label: "Your business was approved", push: true },
   "kyb.changes_requested": { audience: "user", label: "Your verification needs changes", push: true },
   "kyb.rejected": { audience: "user", label: "Your verification wasn't approved", push: true },

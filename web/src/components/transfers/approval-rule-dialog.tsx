@@ -1,7 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { ShieldCheck } from "lucide-react"
+import Link from "next/link"
+import { ArrowRight, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 import { updateApprovalRule } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
@@ -27,6 +28,11 @@ const OPTIONS: { mode: ApprovalMode; title: string; description: string }[] = [
   { mode: "never", title: "Only for team members who can't approve", description: "Owners, admins and approvers send straight away." },
   { mode: "above_threshold", title: "From an amount you choose", description: "Transfers at or above it need a second person, whoever sends them." },
   { mode: "always", title: "Every transfer", description: "A second person approves every transfer before it leaves." },
+  {
+    mode: "workflow",
+    title: "Approval levels by amount",
+    description: "Name who approves, in up to 3 levels, with bigger amounts going through more people.",
+  },
 ]
 
 export function ApprovalRuleDialog({ settings }: { settings: TransferSettings }) {
@@ -41,6 +47,8 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
     setError(undefined)
     setThresholdError(undefined)
     let input: Parameters<typeof updateApprovalRule>[0]
+    // Workflows are saved from their own editor.
+    if (mode === "workflow") return
     if (mode === "above_threshold") {
       const kobo = parseNairaToKobo(threshold)
       if (kobo === null || kobo < 100) return setThresholdError("Enter an amount of at least ₦1.")
@@ -116,16 +124,32 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
             {thresholdError && <FieldError>{thresholdError}</FieldError>}
           </Field>
         )}
+        {mode === "workflow" && (
+          <p className="rounded-lg bg-muted px-3 py-2.5 text-sm text-muted-foreground">
+            {settings.approval.mode === "workflow"
+              ? `Your levels are set up for ${settings.approval.tiers.length === 1 ? "one amount band" : `${settings.approval.tiers.length} amount bands`}. Change them on the next page.`
+              : "Choose the amounts and the people on the next page. The current rule stays until you save there."}
+          </p>
+        )}
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline" disabled={busy}>
               Cancel
             </Button>
           </DialogClose>
-          <Button onClick={save} disabled={busy}>
-            {busy && <Spinner />}
-            Save rule
-          </Button>
+          {mode === "workflow" ? (
+            <Button asChild>
+              <Link href="/approvals/setup" onClick={() => setOpen(false)}>
+                {settings.approval.mode === "workflow" ? "Edit levels" : "Set up levels"}
+                <ArrowRight data-icon="inline-end" aria-hidden />
+              </Link>
+            </Button>
+          ) : (
+            <Button onClick={save} disabled={busy}>
+              {busy && <Spinner />}
+              Save rule
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

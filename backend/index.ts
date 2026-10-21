@@ -2,8 +2,10 @@ import { app } from "./src/app";
 import { connectDB, disconnectDB } from "./src/config/db";
 import { env } from "./src/config/env";
 import { RISK_CHECK_INTERVAL_MS } from "./src/config/compliance";
+import { SAFELOCK_RELEASE_INTERVAL_MS } from "./src/config/safelock";
 import { startInvoiceReminders } from "./src/services/invoices";
 import { startRiskChecks } from "./src/services/risk";
+import { startSafelockReleases } from "./src/services/safelocks";
 import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
 
@@ -21,12 +23,15 @@ const stopTransfers = startTransferProcessor(env.liquifia.syncIntervalMs);
 const stopReminders = startInvoiceReminders(15 * 60 * 1000);
 // Automatic risk rules over recent payments and transfers; they raise flags for the compliance team.
 const stopRiskChecks = startRiskChecks(RISK_CHECK_INTERVAL_MS);
+// Releases Safelocks whose unlock day has come and tells the branch's team.
+const stopSafelockReleases = startSafelockReleases(SAFELOCK_RELEASE_INTERVAL_MS);
 
 async function shutdown() {
   stopSync();
   stopTransfers();
   stopReminders();
   stopRiskChecks();
+  stopSafelockReleases();
   server.close();
   await disconnectDB();
   process.exit(0);

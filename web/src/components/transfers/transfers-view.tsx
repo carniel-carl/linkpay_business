@@ -310,8 +310,13 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
     const result = await actOnBatch(batch._id, action)
     setBusy(null)
     if (!result.ok) return toast.error(result.error)
+    const stillWaiting = result.data.statusCounts.pending_approval
     toast.success(
-      action === "approve" ? `Approved. ${waiting} transfers are on the way.` : action === "reject" ? "Rejected. The money is available again." : "Bulk transfer cancelled.",
+      action === "approve"
+        ? stillWaiting > 0
+          ? `Approved at your level. ${stillWaiting} transfers now go to the next approver.`
+          : `Approved. ${waiting} transfers are on the way.`
+        : action === "reject" ? "Rejected. The money is available again." : "Bulk transfer cancelled.",
     )
   }
 

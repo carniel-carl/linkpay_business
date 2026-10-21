@@ -136,10 +136,17 @@ export function useApprovalRule(enabled = true) {
 
 /** One line describing the rule, as on the web. */
 export function describeApprovalRule(rule: ApprovalRule) {
+  if (rule.mode === "workflow" && rule.tiers?.length) {
+    const lowest = rule.tiers[0];
+    const most = Math.max(...rule.tiers.map((t) => t.levels.length));
+    const from = lowest.minKobo > 0 ? `from ${formatNaira(lowest.minKobo)} ` : "";
+    return `Transfers ${from}go through ${most === 1 ? "one approval level" : `up to ${most} approval levels`}, depending on the amount.`;
+  }
   if (rule.mode === "always") return "Every transfer needs a second person's approval.";
   if (rule.mode === "above_threshold" && rule.thresholdKobo !== null) {
     return `Transfers of ${formatNaira(rule.thresholdKobo)} or more need a second person's approval.`;
   }
+  // "never", and any mode this version doesn't know yet.
   return "Only transfers prepared by team members who can't approve need approval.";
 }
 

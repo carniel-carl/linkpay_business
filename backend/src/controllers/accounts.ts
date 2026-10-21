@@ -4,7 +4,7 @@ import { z } from "zod";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { ensureHeadOffice } from "../services/accounts";
 import { liquifia } from "../services/liquifia/client";
-import { savedByAccount } from "../services/savings";
+import { lockedByAccount, savedByAccount } from "../services/savings";
 import { heldByAccount } from "../services/transfers";
 import { branchScope, canAccessBranch } from "../services/team";
 import { HttpError } from "../utils/HttpError";
@@ -37,7 +37,7 @@ export const listAccounts: RequestHandler = async (req, res) => {
   }
 
   const ids = accounts.map((a) => a._id);
-  const [held, saved] = await Promise.all([heldByAccount(ids), savedByAccount(ids)]);
+  const [held, saved, locked] = await Promise.all([heldByAccount(ids), savedByAccount(ids), lockedByAccount(ids)]);
   const withBalances = await Promise.all(
     accounts.map(async (account) => {
       const balance = await liquifia.getVirtualAccountBalance(account.providerAccountId).catch(() => undefined);
@@ -45,14 +45,16 @@ export const listAccounts: RequestHandler = async (req, res) => {
       const amountKobo = balance ? Math.round(balance.balance) : 0;
       const heldKobo = held.get(String(account._id)) ?? 0;
       const savedKobo = saved.get(String(account._id)) ?? 0;
+      const lockedKobo = locked.get(String(account._id)) ?? 0;
       return {
         ...publicFields,
         // Liquifia reports balances in kobo (minor units): a ₦100 deposit comes back as 10000.
         // Passed through as an integer so clients never do float math on money. `heldKobo` is what
-        // transfers waiting for approval (or for Liquifia) hold; `savedKobo` is set aside in pockets;
+        // transfers waiting for approval (or for Liquifia) hold; `savedKobo` is set aside in pockets
+        // and Safelocks (`lockedKobo` is the Safelock part);
         // `availableKobo` is what can be sent.
         balance: balance
-          ? { amountKobo, currency: account.currency, heldKobo, savedKobo, availableKobo: amountKobo - heldKobo - savedKobo }
+          ? { amountKobo, currency: account.currency, heldKobo, savedKobo, lockedKobo, availableKobo: amountKobo - heldKobo - savedKobo }
           : null,
       };
     }),

@@ -3,6 +3,7 @@
 import type { Types } from "mongoose";
 import { BusinessModel, type BusinessDocument } from "../src/models/Business";
 import { POCKET_COLORS, POCKET_ICONS, PocketModel } from "../src/models/Pocket";
+import { SafelockModel } from "../src/models/Safelock";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
 import { UserModel } from "../src/models/User";
@@ -10,6 +11,7 @@ import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { provisionBusinessAccount } from "../src/services/accounts";
 import { addDays, addPayment, createInvoice, sendInvoice, todayInLagos } from "../src/services/invoices";
 import { closePocket, movePocketMoney } from "../src/services/pockets";
+import { startOfLagosDay } from "../src/services/safelocks";
 import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
 import { raiseFlag, suspendBusiness } from "../src/services/compliance";
@@ -116,8 +118,9 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   await syncInboundTransfers();
   const invoices = await seedInvoices(business, owner.id, accounts, liquifia);
   const pockets = await seedPockets(business, owner.id, accounts);
+  const safelocks = await seedSafelocks(business, owner.id, accounts);
   const risky = await seedCompliance(liquifia, apiUrl);
-  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
   console.log(`Compliance demo: ${risky}`);
 }
 
@@ -185,6 +188,33 @@ async function seedPockets(business: BusinessDocument, userId: string, accounts:
   await closePocket(old, userId);
   if (ikeja) await make(ikeja, { name: "Shop rent", icon: "rent", color: "violet", target: { amountKobo: 120_000_00, date: addDays(today, 120) } }, [35_000_00]);
   return ikeja ? 5 : 4;
+}
+
+/** Safelocks: two running on the head office (soon and long), one on Ikeja, and one already released. */
+async function seedSafelocks(business: BusinessDocument, userId: string, accounts: { _id: Types.ObjectId; branch?: Types.ObjectId | null }[]) {
+  const today = todayInLagos();
+  const make = (account: (typeof accounts)[number], title: string, amountKobo: number, lockedDaysAgo: number, unlockOn: string) => {
+    const createdAt = new Date(Date.now() - lockedDaysAgo * 24 * 60 * 60 * 1000);
+    const released = unlockOn <= today;
+    return SafelockModel.create({
+      business: business._id,
+      branch: account.branch!,
+      virtualAccount: account._id,
+      createdBy: userId,
+      title,
+      amountKobo,
+      unlockOn,
+      unlockAt: startOfLagosDay(unlockOn),
+      createdAt,
+      ...(released && { status: "released", releasedAt: startOfLagosDay(unlockOn) }),
+    });
+  };
+  const [head, ikeja] = [accounts[0]!, accounts[1]!];
+  await make(head, "Office rent 2027", 300_000_00, 40, addDays(today, 50));
+  await make(head, "Expansion fund", 150_000_00, 10, addDays(today, 355));
+  await make(head, "Q3 supplier deposit", 80_000_00, 95, addDays(today, -5));
+  if (ikeja) await make(ikeja, "Shop renovation", 40_000_00, 3, addDays(today, 27));
+  return ikeja ? 4 : 3;
 }
 
 /**

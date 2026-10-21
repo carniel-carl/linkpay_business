@@ -148,6 +148,24 @@ export async function pocketTargetReached(
   );
 }
 
+export async function safelockReleased(
+  business: BusinessLike,
+  lock: { _id: Id; title: string; branch: Id; amountKobo: number },
+  branchName: string,
+) {
+  await notifyUsers(
+    await membersWith(business, "accounts.view", { branch: lock.branch }),
+    {
+      type: "savings.safelock_released",
+      title: "Safelock released",
+      body: `${lock.title} has unlocked. ${formatNaira(lock.amountKobo)} is back in ${branchName}'s available balance.`,
+      link: `/savings?safelock=${lock._id}`,
+      data: { safelockId: String(lock._id), branchId: String(lock.branch) },
+    },
+    business,
+  );
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Invoices: the person who created it, plus anyone who manages invoices for that branch.
 // ---------------------------------------------------------------------------------------------------------

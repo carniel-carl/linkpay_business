@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Alert, RefreshControl, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { ConfirmPasscode } from "@/components/security/confirm-passcode";
+import { ApprovalTimeline } from "@/components/transfers/approval-timeline";
 import { moneyOut, recipientName, TransferStatusTag } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
@@ -49,13 +50,20 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
   const [note, setNote] = useState("");
   const [askPasscode, setAskPasscode] = useState(false);
   const name = recipientName(t);
+  const levels = t.approval?.levels.length ?? 0;
+  const current = t.approval?.current ?? null;
+  // Approving the last level sends the money; an earlier one passes it to the next level's approvers.
+  const finalApproval = !current || current >= levels;
 
   function run(kind: "approve" | "reject" | "cancel" | "refresh") {
     action.mutate(
       { id: t._id, action: kind, note: note.trim() || undefined },
       {
         onSuccess: (next) => {
-          if (kind === "approve") Alert.alert("Approved", `${formatNaira(next.amountKobo)} is on its way to ${recipientName(next)}.`);
+          if (kind === "approve" && next.status === "pending_approval") {
+            const total = next.approval?.levels.length ?? levels;
+            Alert.alert("Approved", `Level ${current ?? 1} of ${total} is done. It goes to the level ${next.approval?.current ?? (current ?? 1) + 1} approvers next.`);
+          } else if (kind === "approve") Alert.alert("Approved", `${formatNaira(next.amountKobo)} is on its way to ${recipientName(next)}.`);
           if (kind === "reject") Alert.alert("Rejected", "The money is available again.");
           if (kind === "cancel") Alert.alert("Transfer cancelled", "The money is available again.");
         },
@@ -76,7 +84,9 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
   const banner =
     justSent &&
     (t.status === "pending_approval"
-      ? "Sent for approval. The money is held on the account until someone approves or rejects it."
+      ? levels > 1
+        ? `Sent for approval. It needs ${levels} approvals, one after the other. The money is held on the account until the last one, or until someone rejects it.`
+        : "Sent for approval. The money is held on the account until someone approves or rejects it."
       : t.status === "processing"
         ? "On its way. Most transfers arrive within minutes; this page updates by itself."
         : t.status === "success"
@@ -115,7 +125,7 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
             </Text>
           </View>
         )}
-        {t.decision && (t.status === "rejected" || t.decision.note) && (
+        {!t.approval && t.decision && (t.status === "rejected" || t.decision.note) && (
           <View className="rounded-field bg-muted px-4 py-3">
             <Text className="text-[13px] text-muted-foreground">
               {t.status === "rejected" ? "Rejected" : "Approved"} by {t.decision.by?.name ?? "a team member"} · {formatDateTime(t.decision.at)}
@@ -132,11 +142,13 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
           {t.narration ? <DetailRow label="Narration" value={t.narration} /> : null}
           <DetailRow label="Reference" value={t.reference} copy={t.reference} />
           {t.createdBy ? <DetailRow label="Prepared by" value={t.createdBy.name} /> : null}
-          {t.decision && t.status !== "rejected" && t.status !== "cancelled" ? (
+          {!t.approval && t.decision && t.status !== "rejected" && t.status !== "cancelled" ? (
             <DetailRow label="Approved by" value={`${t.decision.by?.name ?? "A team member"}, ${formatDateTime(t.decision.at)}`} />
           ) : null}
           {t.completedAt ? <DetailRow label="Completed" value={formatDateTime(t.completedAt)} /> : null}
         </DetailList>
+
+        <ApprovalTimeline t={t} />
 
         <DetailList>
           <DetailRow label="Amount" value={formatNaira(t.amountKobo)} />
@@ -150,7 +162,7 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
           <View className="gap-3">
             <TextField label="Note (optional)" value={note} onChangeText={(v) => setNote(v.slice(0, 300))} hint="The person who prepared it sees this." maxLength={300} />
             <Button loading={action.isPending && action.variables?.action === "approve"} disabled={action.isPending} onPress={() => void approve()}>
-              Approve and send
+              {finalApproval ? "Approve and send" : `Approve level ${current} of ${levels}`}
             </Button>
             <Button
               variant="destructive"
@@ -182,7 +194,11 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
           </Button>
         )}
         {t.status === "pending_approval" && !t.canApprove && !t.canCancel && (
-          <Text className="px-1 text-[14px] leading-5 text-muted-foreground">Waiting for someone with approval rights to approve or reject it.</Text>
+          <Text className="px-1 text-[14px] leading-5 text-muted-foreground">
+            {levels > 1 && current
+              ? `Waiting for the level ${current} approvers to approve or reject it.`
+              : "Waiting for someone with approval rights to approve or reject it."}
+          </Text>
         )}
         {t.status === "processing" && (
           <Button variant="outline" loading={action.isPending && action.variables?.action === "refresh"} onPress={() => run("refresh")}>
@@ -193,7 +209,7 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
       {askPasscode && (
         <ConfirmPasscode
           title={`Approve ${formatNaira(t.totalKobo)}?`}
-          subtitle={`Enter your passcode to send it to ${name}.`}
+          subtitle={finalApproval ? `Enter your passcode to send it to ${name}.` : `Enter your passcode to approve level ${current} of ${levels}.`}
           onConfirmed={() => {
             setAskPasscode(false);
             run("approve");

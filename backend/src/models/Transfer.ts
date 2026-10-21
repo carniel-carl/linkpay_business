@@ -45,6 +45,8 @@ const transferSchema = new Schema(
       // Set for internal and LinkPay transfers.
       business: { type: Types.ObjectId, ref: "Business" },
       branch: { type: Types.ObjectId, ref: "Branch" },
+      // The saved beneficiary it was paid to, if any.
+      beneficiary: { type: Types.ObjectId, ref: "Beneficiary" },
     },
     narration: { type: String, trim: true },
     // Ours, unique, sent to Liquifia as the payout reference (shown to support and on receipts).
@@ -115,6 +117,7 @@ transferSchema.index({ createdAt: -1 });
 transferSchema.index({ virtualAccount: 1, status: 1 });
 transferSchema.index({ status: 1, "provider.lastCheckedAt": 1 });
 transferSchema.index({ batch: 1 });
+transferSchema.index({ "recipient.beneficiary": 1, createdAt: -1 });
 transferSchema.index({ business: 1, status: 1, "approval.waitingOn": 1 });
 transferSchema.index(
   { business: 1, createdBy: 1, clientKey: 1 },
@@ -131,6 +134,8 @@ const transferBatchSchema = new Schema(
     business: { type: Types.ObjectId, ref: "Business", required: true, index: true },
     branch: { type: Types.ObjectId, ref: "Branch", required: true },
     title: { type: String, trim: true },
+    // The saved payout list it was run from, if any.
+    payoutList: { type: Types.ObjectId, ref: "PayoutList" },
     createdBy: { type: Types.ObjectId, ref: "User", required: true },
     count: { type: Number, required: true },
     amountKobo: { type: Number, required: true },
