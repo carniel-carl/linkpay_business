@@ -83,6 +83,12 @@ const MESSAGES: Record<string, string> = {
   POCKET_CLOSED: "This pocket is closed, so it can't be changed.",
   POCKET_NOT_FOUND: "We couldn't find that pocket. It may be on a branch you can't see.",
   INVALID_DATES: "Choose a date in the future.",
+  // Safelock
+  SAFELOCK_TOO_SMALL: "That's below the smallest amount you can lock.",
+  INVALID_UNLOCK_DATE: "Choose an unlock date inside the allowed range.",
+  SAFELOCK_LIMIT: "This branch already has 50 running Safelocks. Wait for one to unlock before adding another.",
+  SAFELOCK_RELEASED: "This Safelock has already unlocked, so it can't be renamed.",
+  SAFELOCK_NOT_FOUND: "We couldn't find that Safelock. It may be on a branch you can't see.",
 }
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

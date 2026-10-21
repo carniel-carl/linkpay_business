@@ -60,10 +60,17 @@ export type Account = {
 
 /**
  * `amountKobo` is the bank balance. `heldKobo` is held by transfers waiting for approval (or for the bank),
- * `savedKobo` is set aside in savings pockets, and `availableKobo` is what can be sent
- * (bank balance minus held and saved). The last three are absent from older backends.
+ * `savedKobo` is set aside in savings (pockets and Safelocks; `lockedKobo` is the Safelock part), and
+ * `availableKobo` is what can be sent (bank balance minus held and saved). These are absent from older backends.
  */
-export type Balance = { amountKobo: number; currency: "NGN"; heldKobo?: number; savedKobo?: number; availableKobo?: number }
+export type Balance = {
+  amountKobo: number
+  currency: "NGN"
+  heldKobo?: number
+  savedKobo?: number
+  lockedKobo?: number
+  availableKobo?: number
+}
 
 /** GET /api/accounts. `balance: null` means the balance is temporarily unavailable. */
 export type AccountWithBalance = Account & { balance: Balance | null }
@@ -608,6 +615,7 @@ export type NotificationType =
   | "team.removed"
   | "security.new_sign_in"
   | "savings.target_reached"
+  | "savings.safelock_released"
 
 /** One notification, across all the user's businesses. `link` is a path in this app. */
 export type AppNotification = {
@@ -691,3 +699,49 @@ export type PocketMovement = {
 }
 
 export type PocketActivity = { items: PocketMovement[]; nextBefore: string | null }
+
+// ---- Safelock ----
+
+/**
+ * A fixed amount of a branch's available balance locked until `unlockOn` (a Lagos calendar day). It can't be
+ * broken early, topped up or changed, except for its title. No interest yet.
+ */
+export type Safelock = {
+  _id: string
+  title: string
+  status: "locked" | "released"
+  branch: BranchRef | null
+  amountKobo: number
+  currency: "NGN"
+  /** YYYY-MM-DD (Lagos). */
+  lockedOn: string
+  unlockOn: string
+  /** The moment it unlocks (midnight Lagos). */
+  unlockAt: string
+  totalDays: number
+  /** 0 once released. */
+  daysLeft: number
+  /** 0..10000: how far through the lock period. */
+  progressBps: number
+  releasedAt: string | null
+  createdBy: { _id: string; name: string } | null
+  createdAt: string
+  /** `savings.manage` and still locked. */
+  canRename: boolean
+}
+
+/** GET /api/safelocks. `lockedKobo` sums the running locks in the list. */
+export type SafelockList = { items: Safelock[]; lockedKobo: number; currency: "NGN" }
+
+/** GET /api/safelocks/limits. Dates are YYYY-MM-DD (Lagos). */
+export type SafelockLimits = {
+  minAmountKobo: number
+  maxAmountKobo: number
+  minDays: number
+  maxDays: number
+  earliestUnlockOn: string
+  latestUnlockOn: string
+  maxPerBranch: number
+  canBreakEarly: false
+  interestRateBps: number
+}

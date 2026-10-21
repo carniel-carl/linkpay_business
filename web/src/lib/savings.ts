@@ -71,8 +71,17 @@ export const POCKET_ICON_KEYS = Object.keys(POCKET_ICONS) as PocketIcon[]
 
 export const MAX_POCKETS_PER_BRANCH = 20
 
-/** The page keeps the open/closed tab and the open pocket in the URL (?status=&pocket=). */
-export type SavingsQuery = { status: "active" | "closed"; pocket?: string }
+/**
+ * The page keeps its state in the URL: Pockets (?status=closed&pocket=) or Safelock (?view=safelock&status=released&safelock=).
+ * A `safelock` link (the release notification) opens the Safelock view.
+ */
+export type SavingsQuery = {
+  view: "pockets" | "safelock"
+  status: "active" | "closed"
+  lockStatus: "locked" | "released"
+  pocket?: string
+  safelock?: string
+}
 
 type RawParams = Record<string, string | string[] | undefined>
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)
@@ -80,11 +89,33 @@ const ID = /^[a-f\d]{24}$/i
 
 export function parseSavingsQuery(params: RawParams): SavingsQuery {
   const pocket = one(params.pocket)
+  const safelock = one(params.safelock)
+  const lockId = safelock && ID.test(safelock) ? safelock : undefined
   return {
+    view: one(params.view) === "safelock" || lockId ? "safelock" : "pockets",
     status: one(params.status) === "closed" ? "closed" : "active",
+    lockStatus: one(params.status) === "released" ? "released" : "locked",
     pocket: pocket && ID.test(pocket) ? pocket : undefined,
+    safelock: lockId,
   }
 }
+
+/** "50 days left", "1 day left", "Unlocks today". */
+export function daysLeftLabel(days: number) {
+  if (days <= 0) return "Unlocks today"
+  return days === 1 ? "1 day left" : `${days.toLocaleString("en-NG")} days left`
+}
+
+/** Adds days to a YYYY-MM-DD calendar day. */
+export function addDays(day: string, days: number) {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Whole days from one YYYY-MM-DD to another. */
+export const daysBetween = (from: string, to: string) =>
+  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000)
 
 /** "5% of every payment in" or "₦2,000.00 from every payment in". */
 export function describeAutoSave(autoSave: Pocket["autoSave"]) {

@@ -12,6 +12,7 @@ import {
   describeApprovalRule,
   TRANSFER_TABS,
   useApprovalRule,
+  usePendingApprovalCount,
   useTransfers,
   type TransferTab,
 } from "@/lib/api/transfers";
@@ -46,11 +47,11 @@ export function TransfersList({
   const { colors } = useTheme();
   const approver = can(overview, "transfers.approve");
   const sender = can(overview, "transfers.create");
-  const manager = can(overview, "transfers.manage");
   const tabs = TRANSFER_TABS.filter((t) => t.key !== "awaiting" || approver);
   const tab: TransferTab = wanted && tabs.some((t) => t.key === wanted) ? wanted : "all";
   const list = useTransfers(tab, { q });
   const rule = useApprovalRule();
+  const pending = usePendingApprovalCount().data ?? 0;
   const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
 
   return (
@@ -97,21 +98,26 @@ export function TransfersList({
               </Pressable>
             ))}
           </ScrollView>
-          {rule.data && (
-            <Pressable
-              accessibilityRole={manager ? "button" : undefined}
-              accessibilityHint={manager ? "Change when transfers need approval" : undefined}
-              disabled={!manager}
-              onPress={() => router.push("/payments/approval-rule")}
-              className="mx-4 flex-row items-center gap-3 rounded-field bg-muted px-4 py-3 active:opacity-80"
-            >
-              <Icon ios="checkmark.shield" android="verified_user" size={18} color={colors["muted-foreground"]} />
-              <Text className="flex-1 text-[14px] leading-5 text-muted-foreground">
-                {describeApprovalRule(rule.data)}
-              </Text>
-              {manager && <Text className="text-[14px] font-semibold text-primary">Change</Text>}
-            </Pressable>
-          )}
+          {/* Fund approvals: what's waiting, approved or declined, and the rule. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Fund approvals${pending ? `, ${pending} pending` : ""}`}
+            accessibilityHint={rule.data ? describeApprovalRule(rule.data) : undefined}
+            onPress={() => router.push("/payments/approvals")}
+            className="mx-4 flex-row items-center gap-3 rounded-field bg-muted px-4 py-3 active:opacity-80"
+          >
+            <Icon ios="checkmark.shield" android="verified_user" size={18} color={colors["muted-foreground"]} />
+            <View className="flex-1 gap-0.5">
+              <Text className="text-[14px] font-semibold text-foreground">Fund approvals</Text>
+              {rule.data && <Text className="text-[13px] leading-[18px] text-muted-foreground">{describeApprovalRule(rule.data)}</Text>}
+            </View>
+            {pending > 0 && (
+              <View className="h-6 min-w-6 items-center justify-center rounded-full bg-warning-subtle px-2">
+                <Text className="text-[12px] font-semibold text-warning-foreground">{pending}</Text>
+              </View>
+            )}
+            <Icon ios="chevron.right" android="chevron_right" size={14} color={colors["muted-foreground"]} />
+          </Pressable>
           {list.isError && (
             <View className="mx-4 gap-3">
               <FormError message={friendlyMessage(list.error)} />

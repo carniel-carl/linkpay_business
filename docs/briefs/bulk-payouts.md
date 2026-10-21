@@ -1,0 +1,118 @@
+# Brief: Bulk payout upgrades (beneficiaries and payout lists)
+
+Backend done 2026-10-21 (`backend/tests/payouts.test.ts`, 12 tests). This is the contract for the web and mobile clients. It's modelled on PiggyVest Business's Beneficiaries and Bulk Payout.
+
+The product owner chose two upgrades on 2026-10-21:
+- **Saved beneficiaries:** recipients name-checked once and reused in single and bulk transfers.
+- **Reusable payout lists:** for example "Monthly salaries".
+
+Not chosen for now: approving single rows of a batch, and batches over 200 rows.
+
+Run against the mock with `cd backend && bun run dev:mock --seed`. The demo business has six beneficiaries (four staff, two suppliers) and two lists: "Monthly salaries" (head office, 4 people, ₦700,000) and "Fabric suppliers" (Ikeja store).
+
+## 1. Concepts
+
+- **Beneficiaries** are one address book per business, shared by every member.
+  - Saving one does a name enquiry with the bank and stores the account name. Paying a saved beneficiary later makes **no new name enquiry**, so it's faster, and bulk rows can't fail on the bank lookup.
+  - The business's own branches can't be saved (`BENEFICIARY_OWN_ACCOUNT`); send to them as branches. Accounts of other LinkPay businesses are saved with `onLinkPay: true`.
+  - Only the nickname can change. For a different account, save a new beneficiary.
+  - The limit is 2,000 per business. Deleting one keeps past transfers as they were. It's refused while a payout list uses it.
+- **Payout lists** are saved bulk payouts: beneficiaries, each with an amount and an optional narration, plus an optional default branch to pay from.
+  - **Running** a list creates an ordinary bulk transfer (a batch with `payoutList` set). The approval rules and Fund approvals workflows apply as usual, as do the balance check and `Idempotency-Key`.
+  - A run can use different amounts just this once (`items`), or save them back to the list (`saveItems: true`).
+  - The limit is 100 lists per business, with up to 200 rows each.
+  - A member limited to some branches sees lists for those branches and lists with no branch.
+
+## 2. Endpoints
+
+Approved business. Reads need `accounts.view`; writes and runs need `transfers.create`. Money is kobo.
+
+### `/api/beneficiaries`
+
+| Method and path | Body / query | Response |
+| --- | --- | --- |
+| `GET /` | `?q=&skip=&take=` (take up to 200, default 50). `q` searches the name, nickname, account number and bank | `{ items: Beneficiary[], total, skip, take }`, most recently paid first, then by name |
+| `POST /` | `{ accountNumber, bankUuid, nickname? }` | `201` Beneficiary (after a name enquiry) |
+| `POST /import` | `{ items: [{ accountNumber, bankUuid, nickname? }] }` (1–200) | `200 { created, failed, rows: [{ row, created, beneficiary } \| { row, error, code }] }`. Good rows are saved even when others fail; an already saved account comes back with `created: false` |
+| `GET /:id` | | Beneficiary + `payoutLists: [{ _id, title }]` |
+| `PATCH /:id` | `{ nickname }` (`null` removes it; anything else is a 400) | Beneficiary |
+| `DELETE /:id` | | `204` |
+
+```ts
+type Beneficiary = {
+  _id: string;
+  accountNumber: string;
+  accountName: string;        // as the bank reported it
+  bankName: string | null;
+  bankUuid: string;
+  nickname: string | null;    // up to 60 characters
+  onLinkPay: boolean;
+  lastPaidAt: string | null;  // set when a transfer to it is created
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+};
+```
+
+Payment history for one beneficiary: `GET /api/transfers?beneficiary=<id>`.
+
+### Transfers (changed)
+
+- `POST /api/transfers`: `recipient` can now be `{ type: "beneficiary", beneficiary: id }`. A bank recipient can send `saveBeneficiary: true` to save it while sending.
+- `POST /api/transfers/bulk`: each row is either `{ beneficiary, amountKobo, narration? }` or (as before) `{ accountNumber, bankUuid, amountKobo, narration? }`, and the two can be mixed. `saveBeneficiaries: true` saves the new accounts. Rows are all-or-nothing as before (`INVALID_ROWS`); an unknown beneficiary is `BENEFICIARY_NOT_FOUND` on its row.
+- Every transfer's `recipient` has `beneficiary: id | null`, and every batch has `payoutList: id | null`.
+
+### `/api/payout-lists`
+
+| Method and path | Body | Response |
+| --- | --- | --- |
+| `GET /` | | `{ items: PayoutList[] }` (without `items`), most recently changed first |
+| `POST /` | `{ title, branch?, items: [{ beneficiary, amountKobo, narration? }] }` or `{ title, branch?, fromBatch }` | `201` PayoutList with items. `fromBatch` saves a past bulk transfer as a list, adding its bank recipients to the beneficiaries, so offer "Save as a list" on a batch |
+| `GET /:id` | | PayoutList with items |
+| `PATCH /:id` | `{ title?, branch? (null clears), items? }` (items replace the whole list) | PayoutList with items |
+| `DELETE /:id` | | `204` |
+| `POST /:id/run` | `{ branch?, title?, items?, saveItems? }`, optional `Idempotency-Key` header | `201` like `POST /transfers/bulk`: `{ batch }`, or `{ batch: null, items }` when a single row became a plain transfer. `200` on a replay. The default title is "<list title> (YYYY-MM-DD)" |
+
+```ts
+type PayoutList = {
+  _id: string;
+  title: string;              // 1–80 characters
+  branch: { _id: string; name: string; isHeadOffice: boolean } | null;  // default account to pay from
+  count: number;
+  amountKobo: number;         // before fees; quote with GET /api/transfers/fee per row, or show the batch total after running
+  lastRunAt: string | null;
+  lastBatch: string | null;   // open with GET /api/transfers/batches/:id
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+  updatedAt: string;
+  items?: {                   // on GET /:id, POST and PATCH
+    beneficiary: { _id; accountName; nickname; accountNumber; bankName } | null;
+    amountKobo: number;
+    narration: string | null;
+  }[];
+};
+```
+
+### Error codes
+
+| Code | Status | When |
+| --- | --- | --- |
+| `BENEFICIARY_EXISTS` | 409 | Saving an account that's already saved. `details.beneficiaryId` |
+| `BENEFICIARY_OWN_ACCOUNT` | 400 | One of the business's own branch accounts |
+| `BENEFICIARY_NOT_FOUND` | 404 / 400 | Unknown, or another business's (in a list's items it's a 400) |
+| `BENEFICIARY_IN_USE` | 409 | Deleting one that a payout list uses. `details.payoutLists: [{ _id, title }]` |
+| `BENEFICIARY_LIMIT` | 409 | 2,000 saved |
+| `ACCOUNT_NOT_FOUND`, `INVALID_BANK` | 422 / 400 | The name enquiry failed (as for transfers) |
+| `PAYOUT_LIST_NOT_FOUND` | 404 | |
+| `PAYOUT_LIST_LIMIT` | 409 | 100 lists |
+| `PAYOUT_LIST_EMPTY` | 400 | `fromBatch` on a batch with only own-branch transfers |
+| `BRANCH_REQUIRED` | 400 | Running a list with no default branch and no `branch` in the body |
+
+Running a list can also return everything `POST /transfers/bulk` does: `INSUFFICIENT_BALANCE`, `NO_APPROVER`, `INVALID_ROWS`, `ACCOUNT_BUSY` and so on.
+
+## 3. Suggested screens
+
+- **Beneficiaries page:** a searchable list, "Add beneficiary" (account number and bank with the name shown as the digits land, as in the transfer form, plus a nickname), "Import" (CSV like the bulk transfer upload, showing per-row results), and a detail view with recent payments, the lists it's in, rename and delete.
+- **Send money:** pick from saved beneficiaries above the account number field, and a "Save as beneficiary" checkbox for new accounts.
+- **Bulk payout:** add rows from beneficiaries (multi-select) as well as CSV, "Save new recipients", and "Save as a list" after sending.
+- **Payout lists:** cards with the title, count, total and last run. A list view where amounts are editable inline, with "Pay now" (choose the account, review the total with fees, keep the changes on the list or not), then the batch sheet as usual.
+- Mobile: start with picking a beneficiary in Send money. Lists can come later.

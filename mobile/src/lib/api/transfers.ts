@@ -2,7 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { useBusinessContext } from "@/lib/business-context";
 import { formatNaira } from "@/lib/format";
 import { api } from "./client";
-import type { ApprovalRule, Bank, FeeQuote, ResolvedAccount, Transfer, TransferList, TransferStatus } from "./types";
+import type { ApprovalRule, ApprovalTier, Bank, FeeQuote, ResolvedAccount, Transfer, TransferList, TransferStatus } from "./types";
 
 // /api/transfers. Copy (status and kind labels) matches the web's Transfers page.
 
@@ -59,6 +59,65 @@ export function useAwaitingCount(enabled: boolean) {
     enabled,
     refetchInterval: 60_000,
   });
+}
+
+/** Fund approvals tabs, as on the web (`approval=pending|approved|rejected`). */
+export const APPROVAL_TABS = [
+  { key: "pending", label: "Pending" },
+  { key: "approved", label: "Approved" },
+  { key: "rejected", label: "Declined" },
+] as const;
+export type ApprovalTab = (typeof APPROVAL_TABS)[number]["key"];
+
+/** Transfers that went through approval: waiting at any level, approved and sent, or declined. */
+export function useApprovals(tab: ApprovalTab, q?: string) {
+  const business = useBusinessKey();
+  return useInfiniteQuery({
+    queryKey: [business, "transfers", "approvals", tab, q],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams({ approval: tab, skip: String(pageParam), take: "30" });
+      if (q) params.set("q", q);
+      return api<TransferList>(`/api/transfers?${params}`, { signal });
+    },
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.skip + last.items.length < last.total ? last.skip + last.items.length : undefined),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** How many transfers wait for approval at any level ("Total pending"). */
+export function usePendingApprovalCount(enabled = true) {
+  const business = useBusinessKey();
+  return useQuery({
+    queryKey: [business, "transfers", "pending-count"],
+    queryFn: () => api<TransferList>("/api/transfers?approval=pending&take=1"),
+    select: (d) => d.total,
+    enabled,
+    refetchInterval: 60_000,
+  });
+}
+
+/** Where a transfer stands in its approvals: "Level 1 of 2, waiting for Ada", "Approved by Bola". Copy from the web. */
+export function approvalProgress(t: Transfer) {
+  const levels = t.approval?.levels ?? [];
+  if (t.status === "pending_approval") {
+    const level = levels.find((l) => l.status === "waiting");
+    const who = !level || level.any || !level.approvers.length ? "any approver" : level.approvers.map((a) => a.name).join(", ");
+    return levels.length > 1 ? `Level ${level?.level ?? 1} of ${levels.length}, waiting for ${who}` : `Waiting for ${who}`;
+  }
+  const by = t.decision?.by?.name;
+  if (t.status === "rejected") return by ? `Declined by ${by}` : "Declined";
+  if (t.status === "cancelled") return "Cancelled before approval";
+  if (levels.length > 1) return `All ${levels.length} levels approved`;
+  return by ? `Approved by ${by}` : "Approved";
+}
+
+/** "₦100,000 to ₦999,999.99", or "₦1,000,000 and above" for the top band. Copy from the web. */
+export function tierRange(tiers: Pick<ApprovalTier, "minKobo">[], index: number) {
+  const from = tiers[index].minKobo;
+  const next = tiers[index + 1]?.minKobo;
+  if (next === undefined) return from === 0 ? "Every transfer" : `${formatNaira(from)} and above`;
+  return `${from === 0 ? "Up to" : `${formatNaira(from)} to`} ${formatNaira(next - 1)}`;
 }
 
 export function useTransfer(id: string) {

@@ -4,6 +4,8 @@ import type { Types } from "mongoose";
 import { BusinessModel, type BusinessDocument } from "../src/models/Business";
 import { POCKET_COLORS, POCKET_ICONS, PocketModel } from "../src/models/Pocket";
 import { SafelockModel } from "../src/models/Safelock";
+import { BeneficiaryModel } from "../src/models/Beneficiary";
+import { PayoutListModel } from "../src/models/PayoutList";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
 import { UserModel } from "../src/models/User";
@@ -119,8 +121,9 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   const invoices = await seedInvoices(business, owner.id, accounts, liquifia);
   const pockets = await seedPockets(business, owner.id, accounts);
   const safelocks = await seedSafelocks(business, owner.id, accounts);
+  const payees = await seedBeneficiaries(business, owner.id, accounts, liquifia);
   const risky = await seedCompliance(liquifia, apiUrl);
-  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
   console.log(`Compliance demo: ${risky}`);
 }
 
@@ -215,6 +218,58 @@ async function seedSafelocks(business: BusinessDocument, userId: string, account
   await make(head, "Q3 supplier deposit", 80_000_00, 95, addDays(today, -5));
   if (ikeja) await make(ikeja, "Shop renovation", 40_000_00, 3, addDays(today, 27));
   return ikeja ? 4 : 3;
+}
+
+/** Saved beneficiaries (staff and suppliers) and two payout lists, as if they'd been name-checked. */
+async function seedBeneficiaries(
+  business: BusinessDocument,
+  userId: string,
+  accounts: { _id: Types.ObjectId; branch?: Types.ObjectId | null }[],
+  liquifia: MockLiquifia,
+) {
+  const people = [
+    { accountNumber: "0211000001", accountName: "CHIOMA NWOSU", nickname: "Chioma (store manager)", bank: "gtb", salary: 250_000_00 },
+    { accountNumber: "0211000002", accountName: "IBRAHIM SULE", nickname: "Ibrahim (driver)", bank: "access", salary: 120_000_00 },
+    { accountNumber: "0211000003", accountName: "FUNMI ADEYEMI", nickname: null, bank: "gtb", salary: 180_000_00 },
+    { accountNumber: "0211000004", accountName: "EMEKA OKAFOR", nickname: "Emeka (tailor)", bank: "access", salary: 150_000_00 },
+    { accountNumber: "0211000005", accountName: "KANO TEXTILE MILLS LTD", nickname: "Fabric supplier", bank: "gtb", salary: 0 },
+    { accountNumber: "0211000006", accountName: "LAGOS THREADS & TRIMS", nickname: null, bank: "access", salary: 0 },
+  ];
+  const banks = { gtb: { bankUuid: "BANK-GTB", bankName: "Guaranty Trust Bank" }, access: { bankUuid: "BANK-ACCESS", bankName: "Access Bank" } };
+  const saved: Types.ObjectId[] = [];
+  for (const p of people) {
+    // So name enquiries and payouts in the mock show the same names.
+    liquifia.bankAccounts.set(p.accountNumber, p.accountName);
+    saved.push(
+      (await BeneficiaryModel.create({
+        business: business._id,
+        accountNumber: p.accountNumber,
+        accountName: p.accountName,
+        ...banks[p.bank as keyof typeof banks],
+        nickname: p.nickname ?? undefined,
+        createdBy: userId,
+      }))._id,
+    );
+  }
+  const [head, ikeja] = [accounts[0]!, accounts[1]!];
+  await PayoutListModel.create({
+    business: business._id,
+    title: "Monthly salaries",
+    branch: head.branch,
+    items: people.flatMap((p, i) => (p.salary ? [{ beneficiary: saved[i]!, amountKobo: p.salary, narration: "Salary" }] : [])),
+    createdBy: userId,
+  });
+  await PayoutListModel.create({
+    business: business._id,
+    title: "Fabric suppliers",
+    branch: (ikeja ?? head).branch,
+    items: [
+      { beneficiary: saved[4]!, amountKobo: 420_000_00, narration: "Ankara bales" },
+      { beneficiary: saved[5]!, amountKobo: 65_000_00, narration: "Trims" },
+    ],
+    createdBy: userId,
+  });
+  return `${people.length} beneficiaries and 2 payout lists`;
 }
 
 /**

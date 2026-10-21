@@ -5,7 +5,7 @@ import { z } from "zod"
 import { runAction } from "@/lib/action"
 import type { ActionResult } from "@/lib/action-result"
 import { api } from "@/lib/api/client"
-import type { Pocket, PocketActivity, PocketIcon, PocketMovement } from "@/lib/api/types"
+import type { Pocket, PocketActivity, PocketIcon, PocketMovement, Safelock } from "@/lib/api/types"
 import { POCKET_ICON_KEYS } from "@/lib/savings"
 
 const id = z.string().regex(/^[a-f\d]{24}$/i)
@@ -91,4 +91,27 @@ export async function getPocketActivity(pocketId: string, before?: string) {
   const params = new URLSearchParams({ take: "20" })
   if (before) params.set("before", id.parse(before))
   return runAction(() => api<PocketActivity>(`/api/pockets/${encodeURIComponent(id.parse(pocketId))}/activity?${params}`))
+}
+
+const safelockInput = z.object({ branch: id, title: z.string().trim().min(1).max(40), amountKobo, unlockOn: day, idempotencyKey })
+
+/** Locks money until `unlockOn`. It can't be undone: the form confirms first. */
+export async function createSafelock(input: z.input<typeof safelockInput>) {
+  const { idempotencyKey: key, ...body } = safelockInput.parse(input)
+  const result = await runAction(() =>
+    api<Safelock>("/api/safelocks", { method: "POST", json: body, headers: { "Idempotency-Key": key } }),
+  )
+  if (!result.ok && result.code === "INSUFFICIENT_BALANCE") {
+    return { ...result, error: "That's more than this branch has available. Money held for transfers or already saved can't be locked." }
+  }
+  if (result.ok) refresh()
+  return result
+}
+
+/** The title is the only thing about a Safelock that can change. */
+export async function renameSafelock(safelockId: string, title: string) {
+  const path = `/api/safelocks/${encodeURIComponent(id.parse(safelockId))}`
+  const result = await runAction(() => api<Safelock>(path, { method: "PATCH", json: { title: z.string().trim().min(1).max(40).parse(title) } }))
+  if (result.ok) refresh()
+  return result
 }

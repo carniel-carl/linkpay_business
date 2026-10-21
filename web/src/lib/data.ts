@@ -18,6 +18,9 @@ import type {
   Overview,
   Pocket,
   PocketList,
+  Safelock,
+  SafelockLimits,
+  SafelockList,
   RolesResponse,
   TeamMember,
   TransactionList,
@@ -195,3 +198,16 @@ export const getPockets = (status: "active" | "closed", branchId?: string) => {
 
 /** One pocket, for links to a pocket that isn't in the list on screen (a closed one, or another branch's). */
 export const getPocket = (id: string) => load<Pocket>(`/api/pockets/${encodeURIComponent(id)}`)
+
+/** GET /api/safelocks for a branch (or every branch the member sees). Needs `accounts.view`. */
+export const getSafelocks = (status: "locked" | "released", branchId?: string) => {
+  const params = new URLSearchParams({ status })
+  if (branchId) params.set("branch", branchId)
+  return load<SafelockList>(`/api/safelocks?${params}`)
+}
+
+/** One Safelock, for links (the release notification) to one that isn't in the list on screen. */
+export const getSafelock = (id: string) => load<Safelock>(`/api/safelocks/${encodeURIComponent(id)}`)
+
+/** Amount and date limits for new Safelocks. */
+export const getSafelockLimits = cache(() => load<SafelockLimits>("/api/safelocks/limits"))
