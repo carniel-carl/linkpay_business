@@ -1,5 +1,6 @@
 // Client-side mirrors of the backend's zod schemas (backend/src/controllers/auth.ts), as in web/src/lib/schemas.ts.
 import { z } from "zod";
+import { BUSINESS_TYPES, ID_TYPES, PERSON_ROLES } from "@/lib/kyb";
 
 export const email = z.email("Enter a valid email address.").trim().toLowerCase();
 export const code = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code.");
@@ -28,6 +29,60 @@ export const branchSchema = z.object({
 export const inviteRegisterSchema = signUpSchema.omit({ email: true });
 
 export const passwordSchema = z.object({ password: z.string().min(1, "Enter your password.") });
+
+// ---- Verification (KYB): mirrors web/src/lib/schemas.ts and backend/src/controllers/business.ts ----
+
+export const createBusinessSchema = z.object({
+  name: z.string().trim().min(2, "Enter your business name as registered with CAC."),
+  type: z.enum(BUSINESS_TYPES, "Choose how your business is registered."),
+});
+
+/** Adds https:// when the user leaves it off, so the backend's z.url() accepts it. */
+export function normaliseWebsite(value: string) {
+  const v = value.trim();
+  if (!v) return v;
+  return /^https?:\/\//i.test(v) ? v : `https://${v}`;
+}
+
+export const businessDetailsSchema = z.object({
+  name: z.string().trim().min(2, "Enter your business name."),
+  registrationNumber: z.string().trim().min(1, "Enter your RC or BN number."),
+  tin: z.string().trim().min(1, "Enter your TIN."),
+  industry: z.string().trim().min(1, "Choose your industry."),
+  description: z.string().trim().max(1000, "Keep this under 1,000 characters.").optional(),
+  email: optional(email),
+  phone,
+  website: z
+    .string()
+    .trim()
+    .optional()
+    .refine((v) => !v || z.url().safeParse(normaliseWebsite(v)).success, "Enter a valid web address."),
+  address: z.object({
+    street: z.string().trim().min(1, "Enter the street address."),
+    city: z.string().trim().min(1, "Enter the city."),
+    state: z.string().trim().min(1, "Choose the state."),
+  }),
+});
+export type BusinessDetailsValues = z.infer<typeof businessDetailsSchema>;
+
+export const personSchema = z.object({
+  fullName: z.string().trim().min(2, "Enter their full name as it appears on their ID."),
+  roles: z.array(z.enum(PERSON_ROLES)).min(1, "Choose at least one role."),
+  email: optional(email),
+  phone: optional(phone),
+  ownershipPercent: z
+    .string()
+    .trim()
+    .optional()
+    .refine((v) => !v || (/^\d+(\.\d+)?$/.test(v) && Number(v) >= 0 && Number(v) <= 100), "Enter a number from 0 to 100."),
+  idType: z.enum(ID_TYPES, "Choose the ID they'll upload."),
+  // Required when adding someone. When editing, leave blank to keep the saved BVN.
+  bvn: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || /^\d{11}$/.test(v), "BVN must be 11 digits."),
+});
+export type PersonValues = z.infer<typeof personSchema>;
 
 export const NIGERIAN_STATES = [
   "Abia", "Adamawa", "Akwa Ibom", "Anambra", "Bauchi", "Bayelsa", "Benue", "Borno", "Cross River",

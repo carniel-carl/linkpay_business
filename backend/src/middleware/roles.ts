@@ -2,7 +2,6 @@ import type { RequestHandler } from "express";
 import type { Permission } from "../config/permissions";
 import type { BusinessDocument } from "../models/Business";
 import type { MembershipDocument } from "../models/Membership";
-import { UserModel } from "../models/User";
 import { hasPermission, resolveBusinessContext } from "../services/team";
 import { HttpError } from "../utils/HttpError";
 
@@ -18,13 +17,6 @@ declare global {
 
 const requestedBusinessId = (header: string | string[] | undefined) =>
   (Array.isArray(header) ? header[0] : header)?.trim() || undefined;
-
-/** Use after requireAuth. */
-export const requireAdmin: RequestHandler = async (req, _res, next) => {
-  const user = await UserModel.findById(req.userId).select("role");
-  if (user?.role !== "admin") throw new HttpError(403, "Admin access required", "FORBIDDEN");
-  next();
-};
 
 /**
  * Use after requireAuth on every route that needs a verified business (accounts, branches, team, ...).

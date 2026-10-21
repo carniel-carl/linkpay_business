@@ -6,15 +6,14 @@ import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { ensureHeadOffice } from "../src/services/accounts";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
-import { startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 let adminToken: string;
 
 beforeAll(async () => {
   t = await startTestEnv();
-  const admin = await UserModel.create({ name: "Admin", email: "admin@test.ng", password: "x", emailVerified: true, role: "admin" });
-  adminToken = await signAccessToken(admin.id);
+  adminToken = await signStaffToken();
 });
 afterAll(() => t.stop());
 

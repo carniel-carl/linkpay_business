@@ -56,6 +56,11 @@
   --color-brand-surface: var(--brand-surface);
   --color-brand-surface-foreground: var(--brand-surface-foreground);
   --color-brand-surface-muted: var(--brand-surface-muted);
+  --color-paper: var(--paper);
+  --color-paper-ink: var(--paper-ink);
+  --color-paper-muted: var(--paper-muted);
+  --color-paper-rule: var(--paper-rule);
+  --color-paper-tint: var(--paper-tint);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -92,6 +97,16 @@
   --brand-surface-foreground: oklch(0.26 0.04 252);
   --brand-surface-muted: oklch(0.45 0.03 252);
   --shadow-surface: 0 1px 2px oklch(0.3 0.04 252 / 0.06), 0 12px 32px -16px oklch(0.3 0.04 252 / 0.24);
+
+  /*
+   * Invoice paper: the business's own document, so it stays white with neutral ink in both themes
+   * (like the PDF). Only the business's accent colour (inline, from the API) brands it.
+   */
+  --paper: oklch(1 0 0);
+  --paper-ink: oklch(0.24 0.01 260);
+  --paper-muted: oklch(0.5 0.01 260);
+  --paper-rule: oklch(0.9 0.004 260);
+  --paper-tint: oklch(0.975 0.002 260);
 
   --secondary: oklch(0.948 0.006 250);
   --secondary-foreground: oklch(0.24 0.035 252);

@@ -14,7 +14,6 @@ export type User = {
   name: string
   email: string
   emailVerified: boolean
-  role: "user" | "admin"
   twoFactor?: { enabled: boolean; method: TwoFactorMethod | null }
   createdAt: string
   updatedAt: string
@@ -162,20 +161,6 @@ export type TwoFactorChallenge = {
   twoFactorRequired: true
   method: TwoFactorMethod
   challengeToken: string
-}
-
-export type AdminSummary = {
-  counts: Record<BusinessStatus, number>
-  total: number
-  /** Approved businesses whose bank account setup failed. */
-  accountSetupFailed: number
-}
-
-export type AdminBusinessList = {
-  items: (Business & { owner: Owner })[]
-  total: number
-  skip: number
-  take: number
 }
 
 // ---- Team ----
@@ -364,3 +349,233 @@ export type FeeQuote = { amountKobo: number; feeKobo: number; stampDutyKobo: num
 
 export type ApprovalMode = "never" | "always" | "above_threshold"
 export type TransferSettings = { approval: { mode: ApprovalMode; thresholdKobo: number | null } }
+
+// ---- Invoices ----
+
+/** Stored statuses. "Overdue" isn't one: it's an unpaid invoice past its due date (`overdue`, `displayStatus`). */
+export type InvoiceStatus = "draft" | "open" | "partially_paid" | "paid" | "void"
+export type PaymentMethod = "transfer" | "cash" | "pos" | "cheque" | "other"
+
+export type InvoiceItem = { description: string; quantity: number; unitPriceKobo: number; amountKobo: number }
+
+/** `value` is kobo for "amount" and basis points for "percent" (1000 = 10%). */
+export type InvoiceDiscount = { type: "amount" | "percent"; value: number }
+
+export type InvoiceCustomerDetails = {
+  /** The saved customer this came from, if any. */
+  ref: string | null
+  name: string
+  email: string | null
+  phone: string | null
+  address: string | null
+}
+
+export type InvoicePayment = {
+  _id: string
+  amountKobo: number
+  method: PaymentMethod
+  /** The incoming transfer this payment is, when it is one. */
+  transaction: string | null
+  /** Matched automatically from the transfer's narration. */
+  auto: boolean
+  note: string | null
+  paidAt: string
+  recordedBy: { _id: string; name: string } | null
+}
+
+/** The account the customer pays into: the invoice branch's. */
+export type PayTo = { accountNumber: string; accountName: string | null; bankName: string | null }
+
+/** GET /api/invoices items. Dates are Lagos calendar days, "YYYY-MM-DD". */
+export type InvoiceListItem = {
+  _id: string
+  number: string
+  status: InvoiceStatus
+  displayStatus: InvoiceStatus | "overdue"
+  overdue: boolean
+  daysOverdue: number
+  branch: BranchRef | null
+  customer: InvoiceCustomerDetails
+  issueDate: string
+  dueDate: string
+  currency: "NGN"
+  totalKobo: number
+  paidKobo: number
+  balanceKobo: number
+  issuedAt: string | null
+  lastSentAt: string | null
+  viewedAt: string | null
+  paidAt: string | null
+  createdAt: string
+}
+
+/** GET /api/invoices/:id */
+export type Invoice = InvoiceListItem & {
+  items: InvoiceItem[]
+  subtotalKobo: number
+  discount: InvoiceDiscount | null
+  discountKobo: number
+  /** Basis points (750 = 7.5%), null when there's no VAT. */
+  vatRateBps: number | null
+  vatKobo: number
+  notes: string | null
+  terms: string | null
+  footer: string | null
+  payments: InvoicePayment[]
+  lastSentTo: string | null
+  voidedAt: string | null
+  receiptSentAt: string | null
+  reminders: { enabled: boolean; sent: string[]; lastSentAt: string | null }
+  /** The customer's page, `${WEB_URL}/i/<token>`; null while it's a draft. */
+  publicUrl: string | null
+  payTo: PayTo | null
+  createdBy: { _id: string; name: string } | null
+}
+
+export type InvoiceList = { items: InvoiceListItem[]; total: number; skip: number; take: number }
+
+/** GET /api/invoices/summary */
+export type InvoiceSummary = {
+  outstandingKobo: number
+  overdueKobo: number
+  unpaidCount: number
+  overdueCount: number
+  collectedThisMonthKobo: number
+  counts: Record<InvoiceStatus, number>
+  currency: "NGN"
+}
+
+/** GET /api/invoices/defaults: what a new invoice starts with. */
+export type InvoiceDefaults = {
+  issueDate: string
+  dueDate: string
+  /** Null unless VAT is on by default. */
+  vatRateBps: number | null
+  defaultVatRateBps: number
+  notes: string | null
+  terms: string | null
+  footer: string | null
+  nextNumber: string
+}
+
+/** GET /api/invoices/:id/suggested-payments items: incoming transfers that look like they're for it. */
+export type SuggestedPayment = {
+  _id: string
+  amountKobo: number
+  counterparty: { name?: string; bankName?: string }
+  narration: string | null
+  reference: string | null
+  occurredAt: string
+  /** The amount is exactly what's still owed. */
+  exactAmount: boolean
+}
+
+export type InvoiceCustomer = { _id: string; name: string; email: string | null; phone: string | null; address: string | null }
+
+/** Colours for the business's documents, worked out by the backend from its accent colour. */
+export type BrandPalette = {
+  /** Bands and fills. */
+  accent: string
+  /** Text on `accent`. */
+  onAccent: string
+  /** Accent-coloured text on white, darkened until it's readable. */
+  accentText: string
+}
+
+/** GET /api/branding */
+export type Branding = {
+  logo: { url: string; width: number; height: number } | null
+  accentColor: string | null
+  palette: BrandPalette
+  invoice: {
+    prefix: string
+    defaultDueDays: number
+    vatRateBps: number
+    vatByDefault: boolean
+    notes: string | null
+    terms: string | null
+    footer: string | null
+  }
+}
+
+/** GET /api/public/invoices/:token: what the customer sees, without signing in. */
+export type PublicInvoice = {
+  business: {
+    name: string
+    email: string | null
+    phone: string | null
+    address: string | null
+    logo: { url: string; width: number; height: number } | null
+    palette: BrandPalette
+  }
+  invoice: Pick<
+    Invoice,
+    | "number"
+    | "status"
+    | "displayStatus"
+    | "overdue"
+    | "issueDate"
+    | "dueDate"
+    | "customer"
+    | "items"
+    | "currency"
+    | "subtotalKobo"
+    | "discountKobo"
+    | "vatRateBps"
+    | "vatKobo"
+    | "totalKobo"
+    | "paidKobo"
+    | "balanceKobo"
+    | "paidAt"
+    | "notes"
+    | "terms"
+    | "footer"
+  > & {
+    discountPercentBps: number | null
+    payments: { amountKobo: number; method: PaymentMethod; paidAt: string }[]
+  }
+  /** Only while it's unpaid. */
+  payTo: PayTo | null
+  receiptAvailable: boolean
+}
+
+/** Kinds of in-app notification a business user gets (backend `src/config/notifications.ts`). */
+export type NotificationType =
+  | "transfer.approval_requested"
+  | "transfer.approved"
+  | "transfer.rejected"
+  | "transfer.completed"
+  | "transfer.failed"
+  | "payment.received"
+  | "invoice.viewed"
+  | "invoice.payment_received"
+  | "invoice.paid"
+  | "invoice.overdue"
+  | "kyb.approved"
+  | "kyb.changes_requested"
+  | "kyb.rejected"
+  | "account.ready"
+  | "team.member_joined"
+  | "team.role_changed"
+  | "team.removed"
+  | "security.new_sign_in"
+
+/** One notification, across all the user's businesses. `link` is a path in this app. */
+export type AppNotification = {
+  _id: string
+  type: NotificationType
+  title: string
+  body: string
+  link: string | null
+  /** The business it's about; null for account-wide ones (a new sign-in). */
+  business: { _id: string; name: string | null } | null
+  data: Record<string, unknown>
+  readAt: string | null
+  createdAt: string
+}
+
+/** GET /api/notifications: newest first; pass `nextBefore` as `before` for the next page. */
+export type NotificationPage = { items: AppNotification[]; nextBefore: string | null }
+
+/** GET /api/notifications/unread-count */
+export type UnreadCount = { total: number; byBusiness: Record<string, number> }

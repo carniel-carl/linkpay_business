@@ -3,7 +3,7 @@ import { Platform } from "react-native";
 import { useTheme } from "@/theme/theme";
 
 /**
- * Native tab bar (UITabBar on iOS, Material navigation bar on Android): Home, Payments, Team, More.
+ * Native tab bar (UITabBar on iOS, Material navigation bar on Android): Home, Payments, Invoices, Team, More.
  * iOS keeps its system glass, which follows the app's appearance; Android would otherwise take Material You
  * wallpaper colours, so it gets the app's own.
  */
@@ -27,6 +27,10 @@ export default function AppTabs() {
       <NativeTabs.Trigger name="payments">
         <NativeTabs.Trigger.Label>Payments</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "arrow.down.circle", selected: "arrow.down.circle.fill" }} md="south_west" />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="invoices">
+        <NativeTabs.Trigger.Label>Invoices</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf={{ default: "doc.text", selected: "doc.text.fill" }} md="receipt_long" />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="team">
         <NativeTabs.Trigger.Label>Team</NativeTabs.Trigger.Label>

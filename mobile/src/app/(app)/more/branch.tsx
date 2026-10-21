@@ -1,21 +1,21 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import type { ComponentProps } from "react";
-import { Controller, useForm, useWatch } from "react-hook-form";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { Controller, useForm } from "react-hook-form";
+import { Alert, ScrollView, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import type { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
+import { StateField } from "@/components/ui/state-field";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { useOverview } from "@/lib/api/banking";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { useSaveBranch } from "@/lib/api/team";
 import type { Branch } from "@/lib/api/types";
-import { cn } from "@/lib/cn";
 import { applyError } from "@/lib/forms";
-import { branchSchema, NIGERIAN_STATES } from "@/lib/schemas";
+import { branchSchema } from "@/lib/schemas";
 
 type Values = z.infer<typeof branchSchema>;
 
@@ -119,7 +119,13 @@ function Form({ branch }: { branch?: Branch }) {
         <Text className="text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">Address</Text>
         {text("address.street", "Street", { autoCapitalize: "words" })}
         {text("address.city", "City", { autoCapitalize: "words" })}
-        <StateField control={form.control} setValue={(v) => form.setValue("address.state", v, { shouldDirty: true })} />
+        <Controller
+          name="address.state"
+          control={form.control}
+          render={({ field, fieldState }) => (
+            <StateField value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} error={fieldState.error?.message} />
+          )}
+        />
       </View>
 
       <View className="gap-4">
@@ -136,54 +142,5 @@ function Form({ branch }: { branch?: Branch }) {
         {editing ? "Save changes" : "Add branch"}
       </Button>
     </KeyboardAwareScrollView>
-  );
-}
-
-/** State as a text field with matching states offered underneath, so it ends up spelled as the web's list. */
-function StateField({ control, setValue }: { control: ReturnType<typeof useForm<Values>>["control"]; setValue: (v: string) => void }) {
-  const value = useWatch({ control, name: "address.state" }) ?? "";
-  const query = value.trim().toLowerCase();
-  const exact = NIGERIAN_STATES.some((s) => s.toLowerCase() === query);
-  const matches = query && !exact ? NIGERIAN_STATES.filter((s) => s.toLowerCase().startsWith(query)).slice(0, 6) : [];
-  return (
-    <View className="gap-2">
-      <Controller
-        name="address.state"
-        control={control}
-        render={({ field, fieldState }) => (
-          <TextField
-            label="State"
-            value={field.value ?? ""}
-            onChangeText={field.onChange}
-            onBlur={() => {
-              // Typed in full but in another case: use the list's spelling.
-              const known = NIGERIAN_STATES.find((s) => s.toLowerCase() === (field.value ?? "").trim().toLowerCase());
-              if (known && known !== field.value) setValue(known);
-              field.onBlur();
-            }}
-            error={fieldState.error?.message}
-            autoCapitalize="words"
-            autoComplete="off"
-            textContentType="none"
-            placeholder="Lagos"
-          />
-        )}
-      />
-      {matches.length > 0 && (
-        <View className="flex-row flex-wrap gap-2">
-          {matches.map((s) => (
-            <Pressable
-              key={s}
-              accessibilityRole="button"
-              accessibilityLabel={`Use ${s}`}
-              onPress={() => setValue(s)}
-              className={cn("h-9 justify-center rounded-full border border-input bg-card px-3.5 active:opacity-70")}
-            >
-              <Text className="text-[14px] text-foreground">{s}</Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-    </View>
   );
 }

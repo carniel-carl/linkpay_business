@@ -1,13 +1,21 @@
 import { PageHeader } from "@/components/common/page-header"
 import { SettingsTabs } from "@/components/settings/settings-tabs"
+import { getOverview } from "@/lib/data"
+import { can } from "@/lib/permissions"
 
-export default function SettingsLayout({ children }: LayoutProps<"/settings">) {
+export default async function SettingsLayout({ children }: LayoutProps<"/settings">) {
+  const overview = await getOverview()
+  const showBranding = overview?.business.status === "approved" && can(overview, "invoices.manage")
   return (
     <>
-      <PageHeader title="Settings" description="Your profile and how you sign in." />
+      <PageHeader
+        title="Settings"
+        description={showBranding ? "Your profile, how you sign in, and how your invoices look." : "Your profile and how you sign in."}
+      />
       <div className="surface px-6 pt-3 pb-8 sm:px-9">
-        <SettingsTabs />
-        <div className="mt-8 max-w-2xl">{children}</div>
+        <SettingsTabs showBranding={showBranding} />
+        {/* Forms read best narrow; pages with a preview beside the form (data-wide) use the full width. */}
+        <div className="mt-8 max-w-2xl has-[[data-wide]]:max-w-none">{children}</div>
       </div>
     </>
   )

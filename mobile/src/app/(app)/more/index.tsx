@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Alert, ScrollView, Switch, Text, View } from "react-native";
 import { ListRow, ListSection } from "@/components/ui/list";
 import { FocusStatusBar } from "@/components/ui/status-bar";
-import { useMemberships, useOverview } from "@/lib/api/banking";
+import { can, useMemberships, useOverview } from "@/lib/api/banking";
 import { useAuth } from "@/lib/auth/store";
 import { capitalized, getBiometry, type Biometry } from "@/lib/security/biometrics";
 import { LOCK_AFTER_BACKGROUND_MS, LOCK_AFTER_IDLE_MS } from "@/lib/security/app-lock";
@@ -73,6 +73,14 @@ export default function More() {
           />
           {business.status === "approved" && (
             <ListRow icon={{ ios: "storefront", android: "storefront" }} title="Branches" onPress={() => router.push("/more/branches")} />
+          )}
+          {business.status === "approved" && can(overview.data, "invoices.manage") && (
+            <ListRow
+              icon={{ ios: "paintpalette", android: "palette" }}
+              title="Invoice branding"
+              detail="Logo, colour and invoice defaults"
+              onPress={() => router.push("/more/branding")}
+            />
           )}
           {(memberships.data?.length ?? 0) > 1 && (
             <ListRow icon={{ ios: "arrow.left.arrow.right", android: "swap_horiz" }} title="Switch business" onPress={() => router.push("/more/switch-business")} />

@@ -6,6 +6,7 @@ import { InviteModel, type InviteDocument } from "../models/Invite";
 import { MembershipModel } from "../models/Membership";
 import { UserModel, type UserDocument } from "../models/User";
 import { deviceSchema, signInResponse } from "../services/sessions";
+import { teamMemberJoined } from "../services/notificationEvents";
 import { describeMembership } from "../services/team";
 import { HttpError } from "../utils/HttpError";
 import { branchSummaries, hashInviteToken } from "./team";
@@ -30,6 +31,7 @@ function assertOpen(invite: InviteDocument) {
 /** Joins the business (idempotent if they're somehow already a member) and closes the invite. */
 async function acceptFor(invite: InviteDocument, user: UserDocument) {
   let membership = await MembershipModel.findOne({ business: invite.business, user: user._id });
+  const joined = !membership;
   if (!membership) {
     membership = await MembershipModel.create({
       business: invite.business,
@@ -45,7 +47,8 @@ async function acceptFor(invite: InviteDocument, user: UserDocument) {
   invite.set({ status: "accepted", acceptedBy: user._id, acceptedAt: new Date() });
   await invite.save();
 
-  const business = await BusinessModel.findById(invite.business).select("name status");
+  const business = await BusinessModel.findById(invite.business).select("name status owner");
+  if (joined && business) await teamMemberJoined(business, user, invite.role);
   return { business: { _id: business!.id, name: business!.name, status: business!.status }, membership: describeMembership(membership) };
 }
 

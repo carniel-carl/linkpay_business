@@ -59,7 +59,7 @@ export function ListRow({
         <Icon {...icon} size={19} color={destructive ? colors["destructive-foreground"] : colors.primary} />
       </View>
       <View className="flex-1 gap-0.5">
-        <Text className={cn("text-[15px]", destructive ? "font-medium text-destructive-foreground" : "text-foreground")}>{title}</Text>
+        <Text numberOfLines={2} className={cn("text-[15px]", destructive ? "font-medium text-destructive-foreground" : "text-foreground")}>{title}</Text>
         {detail && <Text className="text-[13px] text-muted-foreground">{detail}</Text>}
       </View>
       {trailing}

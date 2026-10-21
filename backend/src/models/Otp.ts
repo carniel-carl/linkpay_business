@@ -1,6 +1,6 @@
 import { Schema, model } from "mongoose";
 
-export const OTP_PURPOSES = ["verify_email", "login", "two_factor"] as const;
+export const OTP_PURPOSES = ["verify_email", "login", "two_factor", "staff_two_factor"] as const;
 export type OtpPurpose = (typeof OTP_PURPOSES)[number];
 
 const otpSchema = new Schema(

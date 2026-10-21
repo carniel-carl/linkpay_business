@@ -6,6 +6,7 @@ import { BiometricKeyModel, type BiometricRevokeReason } from "../models/Biometr
 import { DEVICE_PLATFORMS, SessionModel, type SessionDocument } from "../models/Session";
 import type { UserDocument } from "../models/User";
 import { HttpError } from "../utils/HttpError";
+import { newDeviceSignIn } from "./notificationEvents";
 import { signAccessToken } from "./tokens";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -84,7 +85,19 @@ export async function signInResponse(req: Request, user: UserDocument, device: D
     expiresAt: new Date(Math.min(now + env.sessionIdleDays * DAY, absoluteExpiresAt.getTime())),
     absoluteExpiresAt,
   });
+  await alertIfNewDevice(user, session);
   return { ...(await tokensFor(session, refreshToken)), user };
+}
+
+/**
+ * Tells the user about a sign-in from a phone they haven't used before. Not for their very first
+ * device (just after sign-up), and not when the same installation signs in again.
+ */
+async function alertIfNewDevice(user: UserDocument, session: SessionDocument) {
+  const others = await SessionModel.find({ user: user._id, _id: { $ne: session._id } }).select("installationId").lean();
+  if (!others.length) return;
+  if (session.installationId && others.some((o) => o.installationId === session.installationId)) return;
+  await newDeviceSignIn(user._id, { name: session.device!.name, platform: session.device!.platform });
 }
 
 const invalidRefresh = () => new HttpError(401, "Your session has ended. Sign in again.", "INVALID_REFRESH_TOKEN");

@@ -81,7 +81,8 @@ export default function Review() {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       useSendDraft.getState().start();
       void qc.invalidateQueries({ queryKey: [business] });
-      router.dismissTo("/payments");
+      // Back from the transfer lands on the Transfers view, where it now shows.
+      router.dismissTo({ pathname: "/payments", params: { view: "transfers" } });
       router.push({ pathname: "/payments/transfer/[id]", params: { id: transfer._id, sent: "1" } });
     } catch (err) {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

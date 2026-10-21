@@ -12,6 +12,7 @@ import { branchScope, describeMembership, ensureOwnerMembership, hasPermission, 
 import { UserModel } from "../models/User";
 import { detectFileType } from "../middleware/upload";
 import { sendBusinessSubmittedEmail } from "../services/email";
+import { kybSubmitted } from "../services/notificationEvents";
 import { buildChecklist } from "../services/kyb";
 import { serializeBranches } from "./branches";
 import { readFile, removeFile, saveFile } from "../services/storage";
@@ -99,8 +100,13 @@ export async function sendBusinessOverview(
     VirtualAccountModel.find({ business: business._id, ...(scope && { branch: { $in: scope } }) }),
     BranchModel.find({ business: business._id, ...(scope && { _id: { $in: scope } }) }).sort({ isHeadOffice: -1, createdAt: 1 }),
   ]);
+  // Staff see who reviewed the business; owners only see the outcome.
+  if (audience === "admin") await business.populate("reviewedBy", "name email");
   const json = business.toJSON() as Record<string, any>;
-  if (audience === "owner") json.liquifia = { accountStatus: business.liquifia?.accountStatus ?? "not_started" };
+  if (audience === "owner") {
+    json.liquifia = { accountStatus: business.liquifia?.accountStatus ?? "not_started" };
+    delete json.reviewedBy;
+  }
 
   // For a branch-limited member the head office's status isn't theirs; use their first branch's.
   if (scope && audience === "owner") {
@@ -271,8 +277,10 @@ export const submitForReview: RequestHandler = async (req, res) => {
     });
   }
 
+  const resubmitted = business.status === "changes_requested";
   business.set({ status: "submitted", submittedAt: new Date(), reviewNote: undefined });
   await business.save();
+  await kybSubmitted(business, resubmitted);
 
   const owner = await UserModel.findById(req.userId);
   if (owner) await sendBusinessSubmittedEmail(owner.email, business.name);

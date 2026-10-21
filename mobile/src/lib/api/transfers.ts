@@ -30,14 +30,16 @@ export const TRANSFER_TABS = [
 ] as const;
 export type TransferTab = (typeof TRANSFER_TABS)[number]["key"];
 
-export function useTransfers(tab: TransferTab, { enabled = true }: { enabled?: boolean } = {}) {
+/** `q` searches the recipient, reference and narration. */
+export function useTransfers(tab: TransferTab, { enabled = true, q }: { enabled?: boolean; q?: string } = {}) {
   const business = useBusinessKey();
   return useInfiniteQuery({
-    queryKey: [business, "transfers", tab],
+    queryKey: [business, "transfers", tab, q],
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({ skip: String(pageParam), take: "30" });
       if (tab === "awaiting") params.set("awaiting", "me");
       else if (tab !== "all") params.set("status", tab);
+      if (q) params.set("q", q);
       return api<TransferList>(`/api/transfers?${params}`, { signal });
     },
     initialPageParam: 0,

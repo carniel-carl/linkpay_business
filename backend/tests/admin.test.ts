@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { BusinessModel, type BusinessStatus } from "../src/models/Business";
 import { UserModel } from "../src/models/User";
 import { signAccessToken } from "../src/services/tokens";
-import { startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 let adminToken: string;
@@ -29,8 +29,7 @@ async function business(name: string, status: BusinessStatus, submittedAt?: Date
 
 beforeAll(async () => {
   t = await startTestEnv();
-  const admin = await UserModel.create({ name: "Admin", email: "admin@test.ng", password: "x", emailVerified: true, role: "admin" });
-  adminToken = await signAccessToken(admin.id);
+  adminToken = await signStaffToken();
 
   await business("Kano Grains Ltd", "submitted", new Date("2026-09-01"));
   await business("Abuja Print House", "submitted", new Date("2026-09-03"), { name: "Chidinma Eze", email: "chidinma@eze.ng" });
@@ -96,7 +95,9 @@ describe("GET /api/admin/summary", () => {
     });
   });
 
-  test("is admin only", async () => {
-    expect((await t.api("GET", "/api/admin/summary", { token: ownerToken })).status).toBe(403);
+  test("is staff only: business tokens are refused", async () => {
+    const res = await t.api("GET", "/api/admin/summary", { token: ownerToken });
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_STAFF_TOKEN");
   });
 });

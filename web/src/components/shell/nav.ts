@@ -28,7 +28,7 @@ export const NAV: NavItem[] = [
   { href: "/accounts", label: "Accounts", icon: Landmark, permission: "accounts.view" },
   { href: "/transactions", label: "Transactions", icon: History, permission: "accounts.view" },
   { href: "/transfers", label: "Transfers", icon: ArrowLeftRight, permission: "accounts.view" },
-  { href: "/invoices", label: "Invoices", icon: ReceiptText, soon: true },
+  { href: "/invoices", label: "Invoices", icon: ReceiptText, permission: "accounts.view" },
   { href: "/branches", label: "Branches", icon: Store },
   { href: "/team", label: "Team", icon: UsersRound },
 ]

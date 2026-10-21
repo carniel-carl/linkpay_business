@@ -6,8 +6,6 @@ const userSchema = new Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true, select: false },
     emailVerified: { type: Boolean, default: false },
-    // "admin" = platform staff who review business verification. Grant with scripts/make-admin.ts.
-    role: { type: String, enum: ["user", "admin"], default: "user" },
     twoFactor: {
       enabled: { type: Boolean, default: false },
       method: { type: String, enum: ["totp", "email", null], default: null },
@@ -22,6 +20,8 @@ const userSchema = new Schema(
       transform: (_doc, ret: Record<string, any>) => {
         delete ret.password;
         delete ret.__v;
+        // Older documents carry a staff `role` until scripts/migrate-staff.ts unsets it.
+        delete ret.role;
         if (ret.twoFactor) {
           delete ret.twoFactor.totpSecret;
           delete ret.twoFactor.pendingTotpSecret;

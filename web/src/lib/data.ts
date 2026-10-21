@@ -5,12 +5,15 @@ import { api } from "@/lib/api/client"
 import { ApiError } from "@/lib/api/errors"
 import { fetchAccounts } from "@/lib/accounts"
 import { getSelectedBranch } from "@/lib/branches"
-import { toApiParams, type AdminListQuery } from "@/lib/admin"
 import type {
-  AdminBusinessList,
-  AdminSummary,
   Branch,
+  Branding,
   Invite,
+  Invoice,
+  InvoiceCustomer,
+  InvoiceDefaults,
+  InvoiceList,
+  InvoiceSummary,
   MembershipSummary,
   Overview,
   RolesResponse,
@@ -21,6 +24,7 @@ import type {
   TransferBatch,
   TransferList,
   TransferSettings,
+  UnreadCount,
   User,
 } from "@/lib/api/types"
 
@@ -48,32 +52,6 @@ export const getOverview = cache(async (): Promise<Overview | null> => {
     onReadError(err)
   }
 })
-
-export async function getAdminBusinesses(query: AdminListQuery) {
-  try {
-    return await api<AdminBusinessList>(`/api/admin/businesses?${toApiParams(query)}`)
-  } catch (err) {
-    onReadError(err)
-  }
-}
-
-/** Status counts for the staff sidebar and the review queue. */
-export const getAdminSummary = cache(async () => {
-  try {
-    return await api<AdminSummary>("/api/admin/summary")
-  } catch (err) {
-    onReadError(err)
-  }
-})
-
-export async function getAdminBusiness(id: string) {
-  try {
-    return await api<Overview>(`/api/admin/businesses/${encodeURIComponent(id)}`)
-  } catch (err) {
-    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
-    onReadError(err)
-  }
-}
 
 /** The branch picked in the sidebar switcher, or null for "All branches". */
 export const getSelected = cache(async () => {
@@ -109,6 +87,16 @@ export const getMemberships = cache(async (): Promise<MembershipSummary[]> => {
   } catch (err) {
     if (err instanceof ApiError && err.sessionExpired) onReadError(err)
     return []
+  }
+})
+
+/** The bell's starting count. The live stream corrects it once connected, so a failure here is just 0. */
+export const getUnreadNotificationCount = cache(async () => {
+  try {
+    return (await api<UnreadCount>("/api/notifications/unread-count")).total
+  } catch (err) {
+    if (err instanceof ApiError && err.sessionExpired) onReadError(err)
+    return 0
   }
 })
 
@@ -161,3 +149,27 @@ export const getAwaitingApprovalCount = cache(async () => {
 })
 
 export const getTransferSettings = cache(() => load<TransferSettings>("/api/transfers/settings"))
+
+/** GET /api/invoices (see lib/invoices.ts for the query). Needs `accounts.view`. */
+export const getInvoices = (params: URLSearchParams) => load<InvoiceList>(`/api/invoices?${params}`)
+
+export const getInvoiceSummary = (params: URLSearchParams) => load<InvoiceSummary>(`/api/invoices/summary?${params}`)
+
+/** One invoice, or null when it doesn't exist or isn't in the member's branches. */
+export async function getInvoice(id: string) {
+  try {
+    return await api<Invoice>(`/api/invoices/${encodeURIComponent(id)}`)
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
+    onReadError(err)
+  }
+}
+
+/** The saved customers for the editor's picker (the first 100, A to Z). */
+export const getInvoiceCustomers = () => load<{ items: InvoiceCustomer[]; total: number }>("/api/invoices/customers?take=100")
+
+/** What a new invoice starts with: dates, VAT, notes and terms from the branding settings, and the next number. */
+export const getInvoiceDefaults = () => load<InvoiceDefaults>("/api/invoices/defaults")
+
+/** How the business's invoices look (logo, accent colour, defaults). */
+export const getBranding = cache(() => load<Branding>("/api/branding"))

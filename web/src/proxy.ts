@@ -7,8 +7,9 @@ const CHALLENGE_COOKIE = "lp_2fa"
 
 const AUTH_ROUTES = ["/sign-in", "/sign-up", "/verify-email"]
 // Open to everyone, signed in or not. Invite links work either way: the page decides what to show.
+// /i/ is a customer's invoice (page, PDF and logo): customers never have an account.
 const PUBLIC_ROUTES = ["/"]
-const PUBLIC_PREFIXES = ["/invite/"]
+const PUBLIC_PREFIXES = ["/invite/", "/i/"]
 const HOME = "/dashboard"
 
 export function proxy(request: NextRequest) {

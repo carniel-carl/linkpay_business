@@ -40,6 +40,12 @@ const light = {
   destructive: "#c52c2a",
   "destructive-foreground": "#b3261e",
   "destructive-subtle": "#ffedea",
+  // Invoice paper: the business's own document, so it stays white with neutral ink in both appearances (web: --paper*).
+  paper: "#ffffff",
+  "paper-ink": "#1c1f24",
+  "paper-muted": "#606369",
+  "paper-rule": "#dcdee1",
+  "paper-tint": "#f6f7f8",
 };
 
 export type TokenName = keyof typeof light;
@@ -79,6 +85,12 @@ const dark: Palette = {
   destructive: "#ffa8a0",
   "destructive-foreground": "#ffa8a0",
   "destructive-subtle": "#5c332f",
+  // Invoice paper: the business's own document, so it stays white with neutral ink in both appearances (web: --paper*).
+  paper: "#ffffff",
+  "paper-ink": "#1c1f24",
+  "paper-muted": "#606369",
+  "paper-rule": "#dcdee1",
+  "paper-tint": "#f6f7f8",
 };
 
 export const palettes = { light, dark } as const;

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { router } from "expo-router";
 import { Linking, Text, View } from "react-native";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -7,6 +8,7 @@ import { can, useOverview } from "@/lib/api/banking";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import type { Overview } from "@/lib/api/types";
 import { SUPPORT_EMAIL } from "@/lib/config";
+import { isOwner } from "@/lib/onboarding";
 import { useTheme } from "@/theme/theme";
 
 export type Gate =
@@ -32,15 +34,17 @@ export function useBankingGate(): Gate {
 
 type Icons = { ios: Parameters<typeof Icon>[0]["ios"]; android: Parameters<typeof Icon>[0]["android"] };
 
-const VERIFY_ON_WEB = "Verification with your CAC documents is coming to the app next. Until then, finish it on the LinkPay Business website.";
-
 /** The copy for each gate short of ready. */
 export function gateCopy(gate: Exclude<Gate, { state: "ready" | "loading" }>): { icon: Icons; title: string; body: string; note?: string } {
   switch (gate.state) {
     case "error":
       return { icon: { ios: "wifi.exclamationmark", android: "wifi_off" }, title: "We couldn't load your business", body: gate.message };
     case "noBusiness":
-      return { icon: { ios: "building.2", android: "store" }, title: "Set up your business", body: VERIFY_ON_WEB };
+      return {
+        icon: { ios: "building.2", android: "store" },
+        title: "Set up your business",
+        body: "Tell us how your business is registered and upload its CAC documents. We open your account once we've verified it. Everything saves as you go.",
+      };
     case "noPermission":
       return {
         icon: { ios: "lock", android: "lock" },
@@ -57,7 +61,12 @@ export function gateCopy(gate: Exclude<Gate, { state: "ready" | "loading" }>): {
         };
       }
       if (status === "changes_requested") {
-        return { icon: { ios: "pencil.and.list.clipboard", android: "edit_note" }, title: "Your verification needs changes", body: VERIFY_ON_WEB, note: reviewNote };
+        return {
+          icon: { ios: "pencil.and.list.clipboard", android: "edit_note" },
+          title: "Your verification needs changes",
+          body: "Our team asked for a few changes. Update them and resubmit; everything else you sent is saved.",
+          note: reviewNote,
+        };
       }
       if (status === "rejected") {
         return {
@@ -67,8 +76,30 @@ export function gateCopy(gate: Exclude<Gate, { state: "ready" | "loading" }>): {
           note: reviewNote,
         };
       }
-      return { icon: { ios: "checklist", android: "checklist" }, title: "Finish verifying your business", body: VERIFY_ON_WEB };
+      const items = gate.overview.checklist.items;
+      const done = items.filter((i) => i.done).length;
+      return {
+        icon: { ios: "checklist", android: "checklist" },
+        title: "Finish verifying your business",
+        body: `${items.length ? `${done} of ${items.length} requirements done. ` : ""}We open your account once we've verified your business.`,
+      };
     }
+  }
+}
+
+/** The way into verification (the onboarding hub) for the owner of a business that isn't approved yet. */
+function verificationAction(gate: Exclude<Gate, { state: "ready" | "loading" }>): { label: string; primary: boolean } | undefined {
+  if (gate.state === "noBusiness") return { label: "Start verification", primary: true };
+  if (gate.state !== "notApproved" || !isOwner(gate.overview)) return undefined;
+  switch (gate.overview.business.status) {
+    case "draft":
+      return { label: "Continue verification", primary: true };
+    case "changes_requested":
+      return { label: "Make changes", primary: true };
+    case "submitted":
+      return { label: "See review status", primary: false };
+    default:
+      return undefined;
   }
 }
 
@@ -76,6 +107,7 @@ export function gateCopy(gate: Exclude<Gate, { state: "ready" | "loading" }>): {
 export function GateMessage({ gate, children }: { gate: Exclude<Gate, { state: "ready" | "loading" }>; children?: ReactNode }) {
   const { colors } = useTheme();
   const copy = gateCopy(gate);
+  const action = verificationAction(gate);
   return (
     <View className="items-start gap-3">
       <View className="h-12 w-12 items-center justify-center rounded-[14px] bg-pop-subtle">
@@ -92,6 +124,11 @@ export function GateMessage({ gate, children }: { gate: Exclude<Gate, { state: "
       {gate.state === "error" && (
         <Button variant="outline" size="md" onPress={gate.retry}>
           Try again
+        </Button>
+      )}
+      {action && (
+        <Button variant={action.primary ? "primary" : "outline"} size="md" onPress={() => router.push("/onboarding")}>
+          {action.label}
         </Button>
       )}
       {gate.state === "notApproved" && gate.overview.business.status === "rejected" && (

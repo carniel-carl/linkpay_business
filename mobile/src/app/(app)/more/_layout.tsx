@@ -15,6 +15,7 @@ export default function MoreLayout() {
       <Stack.Screen name="business" options={{ title: "Business" }} />
       <Stack.Screen name="branches" options={{ title: "Branches" }} />
       <Stack.Screen name="branch" options={{ title: "Branch" }} />
+      <Stack.Screen name="branding" options={{ title: "Invoice branding" }} />
       <Stack.Screen name="switch-business" options={{ title: "Switch business" }} />
       <Stack.Screen name="profile" options={{ title: "Profile" }} />
       <Stack.Screen name="security" options={{ title: "Two-step verification" }} />

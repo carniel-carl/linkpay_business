@@ -1,6 +1,7 @@
 import { app } from "./src/app";
 import { connectDB, disconnectDB } from "./src/config/db";
 import { env } from "./src/config/env";
+import { startInvoiceReminders } from "./src/services/invoices";
 import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
 
@@ -14,10 +15,13 @@ const server = app.listen(env.port, () => {
 const stopSync = startTransactionSync(env.liquifia.syncIntervalMs);
 // Sends approved transfers Liquifia hasn't accepted yet and follows up payouts until they settle.
 const stopTransfers = startTransferProcessor(env.liquifia.syncIntervalMs);
+// Emails invoice reminders (3 days before, on the day, 3 and 10 days after the due date). Each goes once.
+const stopReminders = startInvoiceReminders(15 * 60 * 1000);
 
 async function shutdown() {
   stopSync();
   stopTransfers();
+  stopReminders();
   server.close();
   await disconnectDB();
   process.exit(0);

@@ -1,5 +1,7 @@
+import { router } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display } from "@/components/ui/typography";
@@ -7,6 +9,8 @@ import { useOverview } from "@/lib/api/banking";
 import type { BusinessStatus } from "@/lib/api/types";
 import { SUPPORT_EMAIL } from "@/lib/config";
 import { formatDate } from "@/lib/format";
+import { BUSINESS_TYPE_INFO } from "@/lib/kyb";
+import { EDITABLE, isOwner } from "@/lib/onboarding";
 import { roleLabel } from "@/lib/permissions";
 
 const STATUS: Record<BusinessStatus, string> = {
@@ -17,17 +21,7 @@ const STATUS: Record<BusinessStatus, string> = {
   rejected: "Not approved",
 };
 
-// Labels from web/src/lib/kyb.ts (BUSINESS_TYPE_INFO).
-const TYPES: Record<string, string> = {
-  sole_proprietorship: "Sole proprietorship",
-  partnership: "Partnership",
-  limited_liability_company: "Limited liability company",
-  cooperative_society: "Cooperative society",
-  limited_by_guarantee: "Company limited by guarantee",
-  incorporated_trustees: "Incorporated trustees",
-};
-
-/** The business as verified. Details are locked after approval; changes go through support, as on the web. */
+/** The business as verified. Details are locked after approval (changes go through support, as on the web); before that, the owner continues in verification. */
 export default function BusinessDetails() {
   const overview = useOverview();
   const gate = useBankingGate();
@@ -56,7 +50,7 @@ export default function BusinessDetails() {
         </Text>
       </View>
       <DetailList>
-        {business.type ? <DetailRow label="Registered as" value={TYPES[business.type] ?? business.type} /> : null}
+        {business.type ? <DetailRow label="Registered as" value={BUSINESS_TYPE_INFO[business.type]?.label ?? business.type} /> : null}
         {business.registrationNumber ? <DetailRow label="RC or BN number" value={business.registrationNumber} copy={business.registrationNumber} /> : null}
         {business.tin ? <DetailRow label="TIN" value={business.tin} copy={business.tin} /> : null}
         {business.industry ? <DetailRow label="Industry" value={business.industry} /> : null}
@@ -67,11 +61,15 @@ export default function BusinessDetails() {
         {business.website ? <DetailRow label="Website" value={business.website} /> : null}
         <DetailRow label="Registered address" value={address || "Not added"} />
       </DetailList>
-      <Text className="px-1 text-[13px] leading-[18px] text-muted-foreground">
-        {business.status === "approved"
-          ? `These are the details we verified. To change them, email ${SUPPORT_EMAIL}.`
-          : "Verification with your CAC documents is coming to the app next. Until then, update these on the LinkPay Business website."}
-      </Text>
+      {business.status === "approved" ? (
+        <Text className="px-1 text-[13px] leading-[18px] text-muted-foreground">These are the details we verified. To change them, email {SUPPORT_EMAIL}.</Text>
+      ) : (
+        isOwner(data) && (
+          <Button variant="outline" onPress={() => router.push("/onboarding")}>
+            {EDITABLE.includes(business.status) ? "Continue verification" : "See verification status"}
+          </Button>
+        )
+      )}
     </ScrollView>
   );
 }

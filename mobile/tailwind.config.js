@@ -6,6 +6,7 @@ const names = [
   "secondary", "muted", "muted-foreground", "border", "input", "ring",
   "success", "success-foreground", "success-subtle", "warning", "warning-foreground", "warning-subtle",
   "destructive", "destructive-foreground", "destructive-subtle",
+  "paper", "paper-ink", "paper-muted", "paper-rule", "paper-tint",
 ];
 
 /** @type {import('tailwindcss').Config} */

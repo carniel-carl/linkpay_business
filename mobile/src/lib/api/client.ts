@@ -6,6 +6,8 @@ import { ApiError } from "./errors";
 type Options = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   json?: unknown;
+  /** Multipart body (document uploads). fetch sets the boundary, so no Content-Type here. */
+  form?: FormData;
   /** Sends the session's access token. Default true. */
   auth?: boolean;
   /** Sent as X-Business-Id. Defaults to the business picked in the switcher. */
@@ -22,7 +24,7 @@ async function send(path: string, opts: Options, token?: string) {
   opts.signal?.addEventListener("abort", () => controller.abort());
   try {
     return await fetch(`${API_URL}${path}`, {
-      method: opts.method ?? (opts.json === undefined ? "GET" : "POST"),
+      method: opts.method ?? (opts.json === undefined && !opts.form ? "GET" : "POST"),
       headers: {
         Accept: "application/json",
         ...(opts.json !== undefined && { "Content-Type": "application/json" }),
@@ -30,7 +32,7 @@ async function send(path: string, opts: Options, token?: string) {
         ...(opts.businessId && { "X-Business-Id": opts.businessId }),
         ...opts.headers,
       },
-      body: opts.json === undefined ? undefined : JSON.stringify(opts.json),
+      body: opts.form ?? (opts.json === undefined ? undefined : JSON.stringify(opts.json)),
       signal: controller.signal,
     });
   } catch {
@@ -79,7 +81,7 @@ export async function api<T = unknown>(path: string, opts: Options = {}): Promis
   }
   // Removed from the picked business: forget it, and repeat reads for the default business. Writes are
   // never repeated, since they would act on a different business.
-  if (picked && (res.status === 403 || res.status === 404) && (opts.method ?? (opts.json === undefined ? "GET" : "POST")) === "GET") {
+  if (picked && (res.status === 403 || res.status === 404) && (opts.method ?? (opts.json === undefined && !opts.form ? "GET" : "POST")) === "GET") {
     const body = await res.clone().json().catch(() => ({}));
     if (body?.code === "NOT_A_MEMBER" || body?.code === "INVALID_BUSINESS_ID") {
       useBusinessContext.getState().setBusinessId(undefined);

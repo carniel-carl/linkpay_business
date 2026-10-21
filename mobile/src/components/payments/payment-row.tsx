@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Figure } from "@/components/ui/typography";
 import type { Transaction } from "@/lib/api/types";
@@ -6,7 +7,16 @@ import { formatNairaShort, formatTime, initials } from "@/lib/format";
 import { StatusTag } from "./status-tag";
 
 /** One payment: payer squircle, name, bank and time, the amount. Only non-successful statuses get a tag. */
-export function PaymentRow({ tx, onPress, showBranch }: { tx: Transaction; onPress: () => void; showBranch?: boolean }) {
+export const PaymentRow = memo(function PaymentRow({
+  tx,
+  onPress,
+  showBranch,
+}: {
+  tx: Transaction;
+  /** Stable across renders (the row is memoised); gets the payment back. */
+  onPress: (tx: Transaction) => void;
+  showBranch?: boolean;
+}) {
   const name = tx.counterparty.name || "Unknown payer";
   const credit = tx.direction === "credit";
   const settled = tx.status === "success";
@@ -16,7 +26,7 @@ export function PaymentRow({ tx, onPress, showBranch }: { tx: Transaction; onPre
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${name}, ${amount}, ${meta}${settled ? "" : `, ${tx.status}`}`}
-      onPress={onPress}
+      onPress={() => onPress(tx)}
       className="flex-row items-center gap-3 px-4 py-3.5 active:bg-muted"
     >
       <View className="h-[38px] w-[38px] items-center justify-center rounded-[12px] bg-pop-subtle">
@@ -44,7 +54,7 @@ export function PaymentRow({ tx, onPress, showBranch }: { tx: Transaction; onPre
       </Figure>
     </Pressable>
   );
-}
+});
 
 /** Placeholder rows shaped like PaymentRow. */
 export function PaymentRowSkeleton() {

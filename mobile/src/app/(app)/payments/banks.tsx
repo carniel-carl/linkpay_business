@@ -7,8 +7,12 @@ import { Icon } from "@/components/ui/icon";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { friendlyMessage } from "@/lib/api/errors";
 import { useBanks } from "@/lib/api/transfers";
+import type { Bank } from "@/lib/api/types";
+import { LIST_PERFORMANCE } from "@/lib/list";
 import { useSendDraft } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
+
+const bankKey = (b: Bank) => b.uuid;
 
 /** Every bank the payout partner supports, searchable. Choosing one goes back to the form. */
 export default function Banks() {
@@ -38,7 +42,8 @@ export default function Banks() {
         contentInsetAdjustmentBehavior="automatic"
         keyboardShouldPersistTaps="handled"
         data={list}
-        keyExtractor={(b) => b.uuid}
+        keyExtractor={bankKey}
+        {...LIST_PERFORMANCE}
         contentContainerClassName="pb-12"
         ListHeaderComponent={
           <View className="px-4 pt-2">

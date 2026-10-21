@@ -1,14 +1,21 @@
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { Logo } from "@/components/brand/logo"
+import { NotificationBell } from "@/components/notifications/notification-bell"
+import { NotificationsProvider } from "@/components/notifications/notifications-provider"
 import { ProgressRail } from "@/components/onboarding/progress-rail"
 import { UserMenu } from "@/components/shell/user-menu"
 import { Button } from "@/components/ui/button"
-import { getMe, getOverview } from "@/lib/data"
+import { getMe, getMemberships, getOverview, getUnreadNotificationCount } from "@/lib/data"
 import { EDITABLE, stepStates } from "@/lib/onboarding"
 
 export default async function OnboardingLayout({ children }: LayoutProps<"/">) {
-  const [user, overview] = await Promise.all([getMe(), getOverview()])
+  const [user, overview, memberships, unread] = await Promise.all([
+    getMe(),
+    getOverview(),
+    getMemberships(),
+    getUnreadNotificationCount(),
+  ])
   // Onboarding is the owner's job. Team members of someone else's business never land here.
   if (overview?.membership && overview.membership.role !== "owner") redirect("/dashboard")
   const steps = stepStates(overview)
@@ -17,7 +24,7 @@ export default async function OnboardingLayout({ children }: LayoutProps<"/">) {
   const done = items.filter((i) => i.done).length
   const pct = items.length ? Math.round((done / items.length) * 100) : 0
 
-  return (
+  const page = (
     <div className="min-h-dvh overflow-x-clip">
       <header className="sticky top-0 z-header bg-brand-surface text-brand-surface-foreground">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 md:px-8">
@@ -38,6 +45,7 @@ export default async function OnboardingLayout({ children }: LayoutProps<"/">) {
                 <Link href="/dashboard">Save and exit</Link>
               </Button>
             )}
+            {overview && <NotificationBell />}
             <UserMenu user={user} showSettings={!!overview} tone="ink" />
           </div>
         </div>
@@ -81,5 +89,13 @@ export default async function OnboardingLayout({ children }: LayoutProps<"/">) {
         </div>
       </div>
     </div>
+  )
+
+  // Live notifications once the business exists, so the verification decision shows up here straight away.
+  if (!overview) return page
+  return (
+    <NotificationsProvider initialUnread={unread} businessId={overview.business._id} showBusiness={memberships.length > 1}>
+      {page}
+    </NotificationsProvider>
   )
 }

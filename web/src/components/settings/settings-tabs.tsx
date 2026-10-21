@@ -8,6 +8,9 @@ const TABS = [
   { key: "/settings/security", href: "/settings/security", label: "Security" },
 ]
 
-export function SettingsTabs() {
-  return <NavTabs label="Settings sections" items={TABS} current={usePathname()} />
+const BRANDING = { key: "/settings/branding", href: "/settings/branding", label: "Invoice branding" }
+
+/** Invoice branding is the business's, so only members who manage invoices see it. */
+export function SettingsTabs({ showBranding = false }: { showBranding?: boolean }) {
+  return <NavTabs label="Settings sections" items={showBranding ? [...TABS, BRANDING] : TABS} current={usePathname()} />
 }

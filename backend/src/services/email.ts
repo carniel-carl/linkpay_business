@@ -1,10 +1,19 @@
 import { env } from "../config/env";
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
 export interface EmailMessage {
   to: string;
   subject: string;
   text: string;
   html?: string;
+  /** Replies go here instead of the sending address (e.g. invoices reply to the business). */
+  replyTo?: string;
+  attachments?: EmailAttachment[];
 }
 
 export interface EmailProvider {
@@ -13,8 +22,9 @@ export interface EmailProvider {
 
 // Default provider until a real email service is wired in: prints emails to the console.
 const consoleProvider: EmailProvider = {
-  async send({ to, subject, text }) {
-    console.log(`\n📧 Email to ${to}\nSubject: ${subject}\n\n${text}\n`);
+  async send({ to, subject, text, attachments }) {
+    const files = attachments?.length ? `\nAttachments: ${attachments.map((a) => `${a.filename} (${a.content.length} bytes)`).join(", ")}\n` : "";
+    console.log(`\n📧 Email to ${to}\nSubject: ${subject}\n\n${text}\n${files}`);
   },
 };
 
@@ -91,6 +101,18 @@ export const sendTeamInviteEmail = (
       `<p><a href="${link}">Accept the invite</a></p><p>This link expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`,
   });
 
+export const sendStaffInviteEmail = (to: string, { inviterName, roleLabel, link }: { inviterName: string; roleLabel: string; link: string }) =>
+  sendEmail({
+    to,
+    subject: `${inviterName} invited you to the ${env.appName} admin console`,
+    text:
+      `${inviterName} has invited you to join the ${env.appName} admin console as ${roleLabel}.\n\n` +
+      `Set up your staff account: ${link}\n\nThis link expires in 7 days. If you weren't expecting it, you can ignore this email.`,
+    html:
+      `<p>${inviterName} has invited you to join the ${env.appName} admin console as <strong>${roleLabel}</strong>.</p>` +
+      `<p><a href="${link}">Set up your staff account</a></p><p>This link expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`,
+  });
+
 /** ₦12,345.67 */
 export const formatNaira = (kobo: number) =>
   `₦${(kobo / 100).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -127,4 +149,119 @@ export const sendTransferFailedEmail = (to: string, opts: { amountKobo: number; 
       `Your transfer of ${formatNaira(opts.amountKobo)} to ${opts.recipientName} didn't go through` +
       (opts.reason ? `: ${opts.reason}.` : ".") +
       ` Any money taken from the account is returned.`,
+  });
+
+// ---------------------------------------------------------------------------------------------------------
+// Invoices. Customer emails come from the business (its name, accent colour and logo, replies to its email).
+// ---------------------------------------------------------------------------------------------------------
+
+export type InvoiceBrand = { businessName: string; replyTo?: string; accent: string; onAccent: string; logoUrl?: string | null };
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/** "2026-10-20" → "20 Oct 2026" */
+export const formatDay = (day: string) =>
+  new Date(`${day}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+/** A simple branded email: logo or name on the accent band, paragraphs, one button. */
+function brandedHtml(brand: InvoiceBrand, paragraphs: string[], button?: { label: string; href: string }) {
+  const name = escapeHtml(brand.businessName);
+  const header = brand.logoUrl
+    ? `<img src="${escapeHtml(brand.logoUrl)}" alt="${name}" style="max-height:48px;max-width:200px;display:block">`
+    : `<div style="font-size:18px;font-weight:600;color:${brand.accent}">${name}</div>`;
+  const body = paragraphs.map((p) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#1F2937">${p}</p>`).join("");
+  const cta = button
+    ? `<p style="margin:24px 0"><a href="${escapeHtml(button.href)}" style="background:${brand.accent};color:${brand.onAccent};padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">${escapeHtml(button.label)}</a></p>`
+    : "";
+  return (
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px">` +
+    `<div style="border-top:4px solid ${brand.accent};padding-top:20px;margin-bottom:24px">${header}</div>${body}${cta}` +
+    `<p style="margin:32px 0 0;font-size:12px;color:#6B7280">Sent by ${name} using ${env.appName}.</p></div>`
+  );
+}
+
+export const sendInvoiceEmail = (
+  to: string,
+  opts: { brand: InvoiceBrand; number: string; totalKobo: number; balanceKobo: number; dueDate: string; link: string; message?: string; attachment: EmailAttachment },
+) => {
+  const { brand } = opts;
+  const due = `${formatNaira(opts.balanceKobo)} due by ${formatDay(opts.dueDate)}`;
+  return sendEmail({
+    to,
+    replyTo: brand.replyTo,
+    subject: `Invoice ${opts.number} from ${brand.businessName}`,
+    text:
+      (opts.message ? `${opts.message}\n\n` : "") +
+      `${brand.businessName} has sent you invoice ${opts.number} for ${formatNaira(opts.totalKobo)}: ${due}.\n\n` +
+      `View and pay: ${opts.link}\n\nThe invoice is attached as a PDF.`,
+    html: brandedHtml(
+      brand,
+      [
+        ...(opts.message ? [escapeHtml(opts.message).replace(/\n/g, "<br>")] : []),
+        `${escapeHtml(brand.businessName)} has sent you invoice <strong>${escapeHtml(opts.number)}</strong> for ${formatNaira(opts.totalKobo)}.`,
+        `<strong>${due}</strong>. The invoice is attached as a PDF.`,
+      ],
+      { label: "View invoice", href: opts.link },
+    ),
+    attachments: [opts.attachment],
+  });
+};
+
+export const sendInvoiceReminderEmail = (
+  to: string,
+  opts: { brand: InvoiceBrand; number: string; balanceKobo: number; dueDate: string; tone: "upcoming" | "due_today" | "overdue"; link: string; attachment: EmailAttachment },
+) => {
+  const { brand } = opts;
+  const amount = formatNaira(opts.balanceKobo);
+  const copy: Record<typeof opts.tone, [subject: string, line: string]> = {
+    upcoming: [`Reminder: invoice ${opts.number} is due ${formatDay(opts.dueDate)}`, `${amount} on invoice ${opts.number} is due on ${formatDay(opts.dueDate)}.`],
+    due_today: [`Invoice ${opts.number} is due today`, `${amount} on invoice ${opts.number} is due today.`],
+    overdue: [`Invoice ${opts.number} is overdue`, `${amount} on invoice ${opts.number} was due on ${formatDay(opts.dueDate)} and is still unpaid.`],
+  };
+  const [subject, line] = copy[opts.tone];
+  return sendEmail({
+    to,
+    replyTo: brand.replyTo,
+    subject: `${subject} (${brand.businessName})`,
+    text: `${line}\n\nView and pay: ${opts.link}\n\nIf you've already paid, thank you, and please ignore this reminder.`,
+    html: brandedHtml(brand, [escapeHtml(line), "If you've already paid, thank you, and please ignore this reminder."], { label: "View invoice", href: opts.link }),
+    attachments: [opts.attachment],
+  });
+};
+
+export const sendInvoicePaymentReceivedEmail = (
+  to: string,
+  opts: { brand: InvoiceBrand; number: string; amountKobo: number; balanceKobo: number; link: string },
+) => {
+  const line = `${opts.brand.businessName} received ${formatNaira(opts.amountKobo)} towards invoice ${opts.number}. ${formatNaira(opts.balanceKobo)} is still due.`;
+  return sendEmail({
+    to,
+    replyTo: opts.brand.replyTo,
+    subject: `Payment received for invoice ${opts.number}`,
+    text: `${line}\n\nView the invoice: ${opts.link}`,
+    html: brandedHtml(opts.brand, [escapeHtml(line)], { label: "View invoice", href: opts.link }),
+  });
+};
+
+export const sendInvoiceReceiptEmail = (
+  to: string,
+  opts: { brand: InvoiceBrand; number: string; paidKobo: number; link: string; attachment: EmailAttachment },
+) => {
+  const line = `Thank you. ${opts.brand.businessName} has received ${formatNaira(opts.paidKobo)}, and invoice ${opts.number} is paid in full.`;
+  return sendEmail({
+    to,
+    replyTo: opts.brand.replyTo,
+    subject: `Receipt for invoice ${opts.number} from ${opts.brand.businessName}`,
+    text: `${line}\n\nYour receipt is attached. View it online: ${opts.link}`,
+    html: brandedHtml(opts.brand, [escapeHtml(line), "Your receipt is attached."], { label: "View receipt", href: opts.link }),
+    attachments: [opts.attachment],
+  });
+};
+
+/** To the team member who created the invoice. */
+export const sendInvoicePaidNotice = (to: string, opts: { number: string; customerName: string; paidKobo: number; invoiceId: string }) =>
+  sendEmail({
+    to,
+    subject: `Paid: invoice ${opts.number} (${formatNaira(opts.paidKobo)})`,
+    text: `${opts.customerName} has paid invoice ${opts.number} in full (${formatNaira(opts.paidKobo)}). We've sent them a receipt.\n\nView it: ${env.webUrl}/invoices/${opts.invoiceId}`,
   });

@@ -1,9 +1,11 @@
 import * as Haptics from "expo-haptics";
+import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import Animated, { FadeInLeft, FadeInRight } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Logo } from "@/components/brand/logo";
 import { BranchDeck } from "@/components/home/branch-deck";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { PaymentRow, PaymentRowSkeleton } from "@/components/payments/payment-row";
@@ -12,31 +14,49 @@ import { FormError } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display } from "@/components/ui/typography";
-import { branchCards, can, useAccounts, useMemberships, useTransactions, useTransactionSummary, type BranchCard } from "@/lib/api/banking";
+import {
+  branchCards,
+  can,
+  useAccounts,
+  useMemberships,
+  useTransactions,
+  useTransactionSummary,
+  type BranchCard,
+} from "@/lib/api/banking";
+import { useBranding, useLogoSource } from "@/lib/api/branding";
+import { useUnreadCount } from "@/lib/api/notifications";
+import type { Transaction } from "@/lib/api/types";
 import { friendlyMessage } from "@/lib/api/errors";
 import { useAwaitingCount } from "@/lib/api/transfers";
 import { useAuth } from "@/lib/auth/store";
 import { useBusinessContext } from "@/lib/business-context";
-import { formatNaira, initials } from "@/lib/format";
+import { formatNaira } from "@/lib/format";
 import { usePaymentFilters } from "@/lib/payment-filters";
 import { queryClient } from "@/lib/query";
 import { useSendDraft } from "@/lib/send-draft";
 import { shareAccount } from "@/lib/share";
 import { useTheme } from "@/theme/theme";
 
+/** Defined once, so memoised rows keep the same handler. */
+const openPayment = (tx: Transaction) => router.push(`/payment/${tx._id}`);
+
 /** How far the deck (or the state card) rises over the band's lower edge. */
 const OVERLAP = 120;
 
 function greeting() {
-  const hour = Number(new Intl.DateTimeFormat("en-NG", { hour: "numeric", hourCycle: "h23", timeZone: "Africa/Lagos" }).format(new Date()));
+  const hour = Number(
+    new Intl.DateTimeFormat("en-NG", { hour: "numeric", hourCycle: "h23", timeZone: "Africa/Lagos" }).format(
+      new Date(),
+    ),
+  );
   return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 }
 
 /**
- * Home is the branch deck: the band with the business and a greeting, the deck overlapping its lower
- * edge, then the money that came in today for the card in view. The band is the web dashboard's
- * `brand-surface` (pale in light, deep navy in dark). The greeting and business row stays fixed at the
- * top (behind the status bar too); the title, deck and list scroll beneath it.
+ * Home is the branch deck. A quiet fixed row carries only the LinkPay Business logo and the bell (behind the
+ * status bar too). Below it the band, the web dashboard's `brand-surface` (pale in light, deep navy in
+ * dark), holds a greeting and the business in view as the title (its own logo beside it when uploaded; tap
+ * to switch). The deck overlaps the band's lower edge, then the money that came in today for the card in view.
  */
 export default function Home() {
   const insets = useSafeAreaInsets();
@@ -51,9 +71,15 @@ export default function Home() {
   // The card in view, and which way the last swipe went (the list below slides in from that side).
   const [{ active, direction }, setView] = useState({ active: 0, direction: 1 });
   const card: BranchCard | undefined = cards[Math.min(active, cards.length - 1)];
-  const business = gate.state === "ready" || gate.state === "notApproved" || gate.state === "noPermission" ? gate.overview.business : undefined;
+  const business =
+    gate.state === "ready" || gate.state === "notApproved" || gate.state === "noPermission"
+      ? gate.overview.business
+      : undefined;
   const switchable = (memberships.data?.length ?? 0) > 1;
   const [refreshing, setRefreshing] = useState(false);
+  // The business's own logo (Invoice branding), when it has one.
+  const branding = useBranding(ready);
+  const logo = useLogoSource(branding.data?.logo);
 
   async function refresh() {
     setRefreshing(true);
@@ -69,46 +95,34 @@ export default function Home() {
   return (
     <View className="flex-1 bg-background" collapsable={false}>
       <FocusStatusBar />
-      {/* Fixed: never scrolls. */}
-      <View style={{ paddingTop: insets.top + 12 }} className="z-10 bg-brand-surface px-5 pb-3">
-        <Pressable
-          accessibilityRole={switchable ? "button" : undefined}
-          accessibilityHint={switchable ? "Switch to another business" : undefined}
-          disabled={!switchable}
-          onPress={() => router.push("/business")}
-          className="flex-row items-center gap-3 self-start active:opacity-70"
-        >
-          <View className="h-9 w-9 items-center justify-center rounded-[11px] bg-pop">
-            <Text maxFontSizeMultiplier={1.2} className="font-display text-[15px] text-pop-foreground">
-              {business ? initials(business.name) : (profile?.firstName[0] ?? "")}
-            </Text>
-          </View>
-          <View className="shrink">
-            <Text className="text-[13px] text-brand-surface-muted">
-              {greeting()}
-              {profile ? `, ${profile.firstName}` : ""}
-            </Text>
-            <View className="flex-row items-center gap-1">
-              <Text numberOfLines={1} className="shrink text-[15px] font-semibold text-brand-surface-foreground">
-                {business?.name ?? "LinkPay Business"}
-              </Text>
-              {switchable && <Icon ios="chevron.down" android="expand_more" size={13} color={colors["brand-surface-muted"]} />}
-            </View>
-          </View>
-        </Pressable>
+      {/* Fixed: never scrolls. Only LinkPay's mark and the bell, so the business can lead below. */}
+      <View
+        style={{ paddingTop: insets.top + 6 }}
+        className="z-10 flex-row items-center justify-between bg-brand-surface pb-1 pl-5 pr-2"
+      >
+        <Logo tone="surface" size={28} />
+        <NotificationBell />
       </View>
       <ScrollView
         className="flex-1"
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={colors["brand-surface-muted"]} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void refresh()}
+            tintColor={colors["brand-surface-muted"]}
+          />
+        }
       >
         {/* Pulling down shows more band, not paper. */}
         <View pointerEvents="none" className="absolute inset-x-0 -top-[1000px] h-[1000px] bg-brand-surface" />
-        <View style={{ paddingBottom: OVERLAP + 28 }} className="bg-brand-surface px-5 pt-4">
-          <Display size={30} className="text-brand-surface-foreground">
-            {cards.length === 1 ? "Your account" : "Your branches"}
-          </Display>
+        <View style={{ paddingBottom: OVERLAP + 28 }} className="gap-1.5 bg-brand-surface px-5 pt-5">
+          <Text className="text-[14px] text-brand-surface-muted">
+            {greeting()}
+            {profile ? `, ${profile.firstName}` : ""}
+          </Text>
+          <BusinessTitle name={business?.name} logo={logo} switchable={switchable} />
         </View>
 
         {ready && cards.length > 0 ? (
@@ -144,11 +158,72 @@ export default function Home() {
           </View>
         ) : (
           <View style={{ boxShadow: shadows.raised, marginTop: -OVERLAP }} className="mx-5 rounded-[22px] bg-card p-5">
-            {gate.state === "loading" || (ready && cards.length === 0) ? <CardSkeleton /> : gate.state !== "ready" && <GateMessage gate={gate} />}
+            {gate.state === "loading" || (ready && cards.length === 0) ? (
+              <CardSkeleton />
+            ) : (
+              gate.state !== "ready" && <GateMessage gate={gate} />
+            )}
           </View>
         )}
       </ScrollView>
     </View>
+  );
+}
+
+/**
+ * The bell: a plain glyph on the band, with a small dot while anything is unread across the person's
+ * businesses. The count itself lives on the Notifications screen. 44pt touch target.
+ */
+function NotificationBell() {
+  const { colors } = useTheme();
+  const unread = useUnreadCount().data?.total ?? 0;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={unread ? `Notifications, ${unread} unread` : "Notifications"}
+      onPress={() => router.push("/notifications")}
+      className="h-11 w-11 items-center justify-center rounded-full active:bg-brand-surface-muted/15"
+    >
+      <Icon ios="bell" android="notifications" size={21} color={colors["brand-surface-foreground"]} />
+      {unread > 0 && (
+        <View className="absolute right-[11px] top-[10px] h-[9px] w-[9px] rounded-full border-[1.5px] border-brand-surface bg-destructive" />
+      )}
+    </Pressable>
+  );
+}
+
+/**
+ * The business in view is the page title: its own logo beside it when one is uploaded (Invoice branding),
+ * two lines at most for long names, and a tap opens the switcher when there's more than one business.
+ */
+function BusinessTitle({
+  name,
+  logo,
+  switchable,
+}: {
+  name?: string;
+  logo?: ReturnType<typeof useLogoSource>;
+  switchable: boolean;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      accessibilityRole={switchable ? "button" : "header"}
+      accessibilityLabel={switchable ? `${name}. Switch business` : (name ?? "Welcome")}
+      disabled={!switchable}
+      onPress={() => router.push("/business")}
+      className="flex-row items-center gap-3 self-start active:opacity-70"
+    >
+      {name && logo && (
+        <View className="h-9 w-9 items-center justify-center overflow-hidden rounded-[10px] bg-paper">
+          <Image source={logo} contentFit="contain" style={{ width: 28, height: 28 }} accessible={false} />
+        </View>
+      )}
+      <Display size={26} numberOfLines={2} ellipsizeMode="tail" className="shrink text-brand-surface-foreground">
+        {name ?? "Welcome"}
+      </Display>
+      {switchable && <Icon ios="chevron.down" android="expand_more" size={15} color={colors["brand-surface-muted"]} />}
+    </Pressable>
   );
 }
 
@@ -204,7 +279,7 @@ function MoneyInToday({ card, direction }: { card: BranchCard; direction: number
             items.map((tx, i) => (
               <View key={tx._id}>
                 {i > 0 && <View className="ml-[66px] h-px bg-border" />}
-                <PaymentRow tx={tx} onPress={() => router.push(`/payment/${tx._id}`)} />
+                <PaymentRow tx={tx} onPress={openPayment} />
               </View>
             ))
           )}
@@ -224,10 +299,15 @@ function AwaitingApproval({ enabled }: { enabled: boolean }) {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      onPress={() => router.push({ pathname: "/payments/transfers", params: { tab: "awaiting" } })}
+      onPress={() => router.navigate({ pathname: "/payments", params: { view: "transfers", tab: "awaiting" } })}
       className="mx-5 flex-row items-center gap-3 rounded-field bg-warning-subtle px-4 py-3 active:opacity-80"
     >
-      <Icon ios="clock.badge.exclamationmark" android="pending_actions" size={20} color={colors["warning-foreground"]} />
+      <Icon
+        ios="clock.badge.exclamationmark"
+        android="pending_actions"
+        size={20}
+        color={colors["warning-foreground"]}
+      />
       <Text className="flex-1 text-[15px] font-medium text-warning-foreground">{label}</Text>
       <Icon ios="chevron.right" android="chevron_right" size={15} color={colors["warning-foreground"]} />
     </Pressable>

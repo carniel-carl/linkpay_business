@@ -5,6 +5,7 @@ import { UserModel } from "../models/User";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { decrypt } from "../utils/crypto";
 import { liquifia, LiquifiaError, newIdempotencyKey, type LiquifiaCustomerInput } from "./liquifia/client";
+import { accountReady, accountSetupFailed } from "./notificationEvents";
 
 // Liquifia gives one NGN account per customer, so the head office uses the business's customer and
 // every other branch gets a customer of its own.
@@ -164,10 +165,12 @@ export async function provisionBranchAccount(branchId: unknown) {
       providerData: va,
     });
     await setStatus("active");
+    await accountReady(business, branch, account.accountNumber);
     return account;
   } catch (err) {
     const message = err instanceof LiquifiaError ? `${err.status} ${err.code}: ${err.message}` : String(err);
     await setStatus("failed", message);
+    await accountSetupFailed(business, branch);
     throw err;
   }
 }

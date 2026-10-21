@@ -1,4 +1,5 @@
 // Shapes returned by the backend (see docs/IMPLEMENTATION.md, section 4). Mirrors web/src/lib/api/types.ts.
+import type { BusinessType, DocumentType, IdType, PersonRole } from "@/lib/kyb";
 
 export type TwoFactorMethod = "totp" | "email";
 
@@ -54,19 +55,53 @@ export type Branch = BranchRef & {
 export type Business = {
   _id: string;
   name: string;
-  type?: string;
+  type: BusinessType;
   registrationNumber?: string;
   tin?: string;
   industry?: string;
+  description?: string;
   email?: string;
   phone?: string;
   website?: string;
   address?: Address;
+  /** Empty for members below admin. */
+  people: Person[];
   status: BusinessStatus;
   reviewNote?: string;
+  submittedAt?: string;
   reviewedAt?: string;
   liquifia?: { accountStatus: AccountSetupStatus };
 };
+
+// ---- Verification (KYB) ----
+
+/** A principal on the business. The BVN itself is never returned, only its last 4 digits. */
+export type Person = {
+  _id: string;
+  fullName: string;
+  roles: PersonRole[];
+  email?: string;
+  phone?: string;
+  ownershipPercent?: number;
+  idType?: IdType;
+  bvnLast4?: string;
+};
+
+export type KybDocument = {
+  _id: string;
+  type: DocumentType;
+  /** Set on government_id uploads: whose ID it is. */
+  person?: string;
+  originalName: string;
+  mimeType: "application/pdf" | "image/png" | "image/jpeg";
+  size: number;
+  status: "uploaded" | "accepted" | "rejected";
+  rejectionReason?: string;
+  createdAt: string;
+};
+
+/** Keys: `field:<name>`, `document:<type>`, `people:principal`, `person:<id>:bvn|idType|government_id`. */
+export type ChecklistItem = { key: string; label: string; done: boolean; rejectionReason?: string };
 
 export type Permission =
   | "accounts.view"
@@ -81,7 +116,15 @@ export type Permission =
 export type Membership = { _id: string; role: string; permissions: Permission[]; branches: string[] | null };
 
 /** GET /api/business: the member's view of the business. Branches are head office first. */
-export type Overview = { business: Business; branches: Branch[]; membership?: Membership };
+export type Overview = {
+  business: Business;
+  /** Empty for members below admin. */
+  documents: KybDocument[];
+  branches: Branch[];
+  /** What verification still needs, for the business's type. Empty items for members below admin. */
+  checklist: { complete: boolean; items: ChecklistItem[] };
+  membership?: Membership;
+};
 
 /** GET /api/memberships, for the business switcher. */
 export type MembershipSummary = {
@@ -231,3 +274,174 @@ export type ResolvedAccount = { accountNumber: string; accountName: string; bank
 export type FeeQuote = { amountKobo: number; feeKobo: number; stampDutyKobo: number; totalKobo: number; needsApproval: boolean };
 
 export type ApprovalRule = { mode: "never" | "always" | "above_threshold"; thresholdKobo: number | null };
+
+// ---- Invoices (/api/invoices; shapes from backend/src/controllers/invoices.ts) ----
+
+/** Stored statuses. "Overdue" isn't one: it's an unpaid invoice past its due date (`overdue`). */
+export type InvoiceStatus = "draft" | "open" | "partially_paid" | "paid" | "void";
+export type PaymentMethod = "transfer" | "cash" | "pos" | "cheque" | "other";
+
+export type InvoiceItem = { description: string; quantity: number; unitPriceKobo: number; amountKobo: number };
+
+/** As the API returns and accepts it. */
+export type InvoiceDiscount = { type: "amount"; amountKobo: number } | { type: "percent"; percentBps: number };
+
+export type InvoiceCustomerDetails = {
+  /** The saved customer this came from, if any. */
+  ref: string | null;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+};
+
+export type InvoicePayment = {
+  _id: string;
+  amountKobo: number;
+  method: PaymentMethod;
+  /** The incoming payment this is, when it's one of ours. */
+  transaction: string | null;
+  /** Matched by itself from the transfer's narration. */
+  auto: boolean;
+  note: string | null;
+  paidAt: string;
+  recordedBy: { _id: string; name: string } | null;
+};
+
+/** The account the customer pays into: the invoice branch's. */
+export type PayTo = { accountNumber: string; accountName: string | null; bankName: string | null };
+
+/** GET /api/invoices items. Dates are Lagos calendar days, "YYYY-MM-DD". */
+export type InvoiceListItem = {
+  _id: string;
+  number: string;
+  status: InvoiceStatus;
+  displayStatus: InvoiceStatus | "overdue";
+  overdue: boolean;
+  daysOverdue: number;
+  branch: BranchRef | null;
+  customer: InvoiceCustomerDetails;
+  issueDate: string;
+  dueDate: string;
+  currency: "NGN";
+  totalKobo: number;
+  paidKobo: number;
+  balanceKobo: number;
+  issuedAt: string | null;
+  lastSentAt: string | null;
+  viewedAt: string | null;
+  paidAt: string | null;
+  createdAt: string;
+};
+
+/** GET /api/invoices/:id */
+export type Invoice = InvoiceListItem & {
+  items: InvoiceItem[];
+  subtotalKobo: number;
+  discount: InvoiceDiscount | null;
+  discountKobo: number;
+  /** Basis points (750 = 7.5%), null when there's no VAT. */
+  vatRateBps: number | null;
+  vatKobo: number;
+  notes: string | null;
+  terms: string | null;
+  footer: string | null;
+  payments: InvoicePayment[];
+  lastSentTo: string | null;
+  voidedAt: string | null;
+  receiptSentAt: string | null;
+  reminders: { enabled: boolean; sent: string[]; lastSentAt: string | null };
+  /** The customer's page; null while it's a draft. */
+  publicUrl: string | null;
+  payTo: PayTo | null;
+  createdBy: { _id: string; name: string } | null;
+};
+
+export type InvoiceList = { items: InvoiceListItem[]; total: number; skip: number; take: number };
+
+/** GET /api/invoices/summary */
+export type InvoiceSummary = {
+  outstandingKobo: number;
+  overdueKobo: number;
+  unpaidCount: number;
+  overdueCount: number;
+  collectedThisMonthKobo: number;
+  counts: Record<InvoiceStatus, number>;
+  currency: "NGN";
+};
+
+/** GET /api/invoices/defaults: what a new invoice starts with. */
+export type InvoiceDefaults = {
+  issueDate: string;
+  dueDate: string;
+  /** Null unless VAT is on by default. */
+  vatRateBps: number | null;
+  defaultVatRateBps: number;
+  notes: string | null;
+  terms: string | null;
+  footer: string | null;
+  nextNumber: string;
+};
+
+/** GET /api/invoices/:id/suggested-payments items: incoming payments that look like they're for it. */
+export type SuggestedPayment = {
+  _id: string;
+  amountKobo: number;
+  counterparty: { name: string | null; bankName: string | null };
+  narration: string | null;
+  reference: string | null;
+  occurredAt: string;
+  /** The amount is exactly what's still owed. */
+  exactAmount: boolean;
+};
+
+/** The business's saved customers (GET /api/invoices/customers). */
+export type InvoiceCustomer = { _id: string; name: string; email?: string | null; phone?: string | null; address?: string | null };
+export type InvoiceCustomerList = { items: InvoiceCustomer[]; total: number; skip: number; take: number };
+
+/** Colours for the business's documents, worked out by the backend from its accent colour. */
+export type BrandPalette = {
+  /** Bands and fills. */
+  accent: string;
+  /** Text on `accent`. */
+  onAccent: string;
+  /** Accent-coloured text on white, darkened until it's readable. */
+  accentText: string;
+};
+
+/** GET /api/branding */
+export type Branding = {
+  /** `url` is an API path ("/api/branding/logo?v=…") that needs the session. */
+  logo: { url: string; width: number; height: number } | null;
+  accentColor: string | null;
+  palette: BrandPalette;
+  invoice: {
+    prefix: string;
+    defaultDueDays: number;
+    vatRateBps: number;
+    vatByDefault: boolean;
+    notes: string | null;
+    terms: string | null;
+    footer: string | null;
+  };
+};
+
+// ---- Notifications (/api/notifications; contract in docs/briefs/notifications.md) ----
+
+/** One notification. `link` is a web path; the app routes from `type` and `data`. */
+export type AppNotification = {
+  _id: string;
+  type: string;
+  title: string;
+  body: string;
+  link: string | null;
+  /** Null for account-level ones (security). */
+  business: { _id: string; name: string | null } | null;
+  /** Ids for opening the right screen: transferIds, batchId, invoiceId, transactionId, branchId, businessId, userId. */
+  data: Record<string, unknown>;
+  readAt: string | null;
+  createdAt: string;
+};
+
+export type NotificationList = { items: AppNotification[]; nextBefore: string | null };
+export type UnreadCount = { total: number; byBusiness: Record<string, number> };

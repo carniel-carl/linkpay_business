@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useTheme } from "next-themes"
-import { LogOut, Monitor, Moon, Settings, ShieldCheck, Sun } from "lucide-react"
+import { LogOut, Monitor, Moon, Settings, Sun } from "lucide-react"
 import { signOut } from "@/app/(auth)/actions"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -28,7 +28,7 @@ export function UserMenu({
   showSettings = true,
   tone = "paper",
 }: {
-  user: Pick<User, "name" | "email" | "role">
+  user: Pick<User, "name" | "email">
   showSettings?: boolean
   /** "ink" when the trigger sits on the dark brand surface. */
   tone?: "paper" | "ink"
@@ -68,14 +68,6 @@ export function UserMenu({
               <Link href="/settings">
                 <Settings aria-hidden />
                 Settings
-              </Link>
-            </DropdownMenuItem>
-          )}
-          {user.role === "admin" && (
-            <DropdownMenuItem asChild>
-              <Link href="/admin">
-                <ShieldCheck aria-hidden />
-                Review queue
               </Link>
             </DropdownMenuItem>
           )}

@@ -10,6 +10,7 @@ import {
   sendBusinessRejectedEmail,
 } from "../services/email";
 import { provisionBranchAccount, provisionBusinessAccount } from "../services/accounts";
+import { kybDecided } from "../services/notificationEvents";
 import { syncInboundTransfers } from "../services/transactions";
 import { HttpError } from "../utils/HttpError";
 import { findBranch } from "./branches";
@@ -111,9 +112,10 @@ export const downloadBusinessDocument: RequestHandler<DocParams> = async (req, r
 export const approveBusiness: RequestHandler<IdParams> = async (req, res) => {
   const business = await findSubmittedBusiness(req.params.id);
 
-  business.set({ status: "approved", reviewedAt: new Date(), reviewedBy: req.userId, reviewNote: undefined });
+  business.set({ status: "approved", reviewedAt: new Date(), reviewedBy: req.staffId, reviewNote: undefined });
   await business.save();
   await KybDocumentModel.updateMany({ business: business._id }, { status: "accepted", $unset: { rejectionReason: 1 } });
+  await kybDecided(business, "approved");
 
   // Approval stands even if Liquifia is down; the failure is recorded on the business and an
   // admin can retry with POST /businesses/:id/provision-account.
@@ -163,11 +165,12 @@ export const requestChanges: RequestHandler<IdParams> = async (req, res) => {
     if (!updated) throw new HttpError(400, `Document ${id} does not belong to this business`);
   }
 
-  business.set({ status: "changes_requested", reviewNote: body.note, reviewedAt: new Date(), reviewedBy: req.userId });
+  business.set({ status: "changes_requested", reviewNote: body.note, reviewedAt: new Date(), reviewedBy: req.staffId });
   await business.save();
 
   const email = await ownerEmail(business.owner);
   if (email) await sendBusinessChangesRequestedEmail(email, business.name, body.note);
+  await kybDecided(business, "changes_requested", body.note);
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 
@@ -175,11 +178,12 @@ export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ reason: z.string().trim().min(1) }).parse(req.body);
   const business = await findSubmittedBusiness(req.params.id);
 
-  business.set({ status: "rejected", reviewNote: body.reason, reviewedAt: new Date(), reviewedBy: req.userId });
+  business.set({ status: "rejected", reviewNote: body.reason, reviewedAt: new Date(), reviewedBy: req.staffId });
   await business.save();
 
   const email = await ownerEmail(business.owner);
   if (email) await sendBusinessRejectedEmail(email, business.name, body.reason);
+  await kybDecided(business, "rejected", body.reason);
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 

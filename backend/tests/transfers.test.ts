@@ -9,7 +9,7 @@ import { setEmailProvider, type EmailMessage } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
 import { processOpenTransfers } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
-import { startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 let adminToken: string;
@@ -18,8 +18,7 @@ const outbox: EmailMessage[] = [];
 beforeAll(async () => {
   t = await startTestEnv();
   setEmailProvider({ send: async (m) => void outbox.push(m) });
-  const admin = await UserModel.create({ name: "Staff", email: "staff@test.ng", password: "x", emailVerified: true, role: "admin" });
-  adminToken = await signAccessToken(admin.id);
+  adminToken = await signStaffToken();
 });
 afterAll(() => t.stop());
 beforeEach(() => {

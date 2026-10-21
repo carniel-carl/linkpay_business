@@ -10,6 +10,7 @@ import { InviteModel, type InviteDocument } from "../models/Invite";
 import { MembershipModel, type MembershipDocument } from "../models/Membership";
 import { UserModel } from "../models/User";
 import { sendTeamInviteEmail } from "../services/email";
+import { teamMemberRemoved, teamRoleChanged } from "../services/notificationEvents";
 import { ensureOwnerMembership } from "../services/team";
 import { HttpError } from "../utils/HttpError";
 
@@ -136,12 +137,14 @@ export const updateMember: RequestHandler<IdParams> = async (req, res) => {
   assertCanManage(req.membership!, member, body.role);
 
   const role = body.role ?? member.role;
+  const roleChanged = role !== member.role;
   const branches =
     body.branches !== undefined || body.role !== undefined
       ? await resolveBranches(req.business!._id, role, body.branches ?? member.branches.map(String))
       : member.branches;
   member.set({ role, branches });
   await member.save();
+  if (roleChanged) await teamRoleChanged(req.business!, member.user, role);
   res.json(await serializeMember(member, req.userId!));
 };
 
@@ -149,6 +152,7 @@ export const removeMember: RequestHandler<IdParams> = async (req, res) => {
   const member = await findMember(req.business!._id, req.params.id);
   assertCanManage(req.membership!, member);
   await member.deleteOne();
+  await teamMemberRemoved(req.business!, member.user);
   res.status(204).end();
 };
 

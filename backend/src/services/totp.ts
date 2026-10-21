@@ -1,12 +1,12 @@
 import { Secret, TOTP } from "otpauth";
 import { env } from "../config/env";
 
-const build = (email: string, secret: Secret) =>
-  new TOTP({ issuer: env.appName, label: email, algorithm: "SHA1", digits: 6, period: 30, secret });
+const build = (email: string, secret: Secret, issuer = env.appName) =>
+  new TOTP({ issuer, label: email, algorithm: "SHA1", digits: 6, period: 30, secret });
 
-export function generateTotpSecret(email: string) {
+export function generateTotpSecret(email: string, issuer?: string) {
   const secret = new Secret({ size: 20 });
-  return { secret: secret.base32, otpauthUrl: build(email, secret).toString() };
+  return { secret: secret.base32, otpauthUrl: build(email, secret, issuer).toString() };
 }
 
 export function verifyTotp(email: string, base32Secret: string, code: string): boolean {

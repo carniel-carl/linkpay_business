@@ -1,6 +1,9 @@
+import { BusinessModel } from "../models/Business";
 import { TransactionModel, type TransactionStatus } from "../models/Transaction";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { liquifia, type LiquifiaInboundTransfer } from "./liquifia/client";
+import { matchInvoicePayments } from "./invoices";
+import { paymentReceived } from "./notificationEvents";
 
 const PAGE_SIZE = 100;
 // Safety cap per run. The API's sort order isn't documented, so each run reads every page up to this.
@@ -36,11 +39,13 @@ async function upsertInboundTransfer(transfer: LiquifiaInboundTransfer, accounts
 
   const amountKobo = parseKobo(transfer.amount);
   const feeKobo = parseKobo(transfer.fee ?? "0");
-  const result = await TransactionModel.updateOne(
+  const status = mapStatus(transfer.latest_status);
+  // The document as it was before (null when this is a new payment), to tell when it first succeeds.
+  const before = await TransactionModel.findOneAndUpdate(
     { providerTransactionId: transfer.id },
     {
       $set: {
-        status: mapStatus(transfer.latest_status),
+        status,
         feeKobo,
         netKobo: amountKobo - feeKobo,
         providerData: transfer,
@@ -64,13 +69,35 @@ async function upsertInboundTransfer(transfer: LiquifiaInboundTransfer, accounts
         occurredAt: new Date(transfer.created_at),
       },
     },
-    { upsert: true },
-  );
-  return result.upsertedCount > 0 ? ("created" as const) : ("updated" as const);
+    { upsert: true, returnDocument: "before", projection: { status: 1 } },
+  ).lean();
+  if (status === "success" && before?.status !== "success") await notifyPaymentReceived(transfer.id, account.business);
+  return before ? ("updated" as const) : ("created" as const);
 }
 
-/** Pulls incoming transfers from Liquifia and records any new ones or status changes. Safe to run repeatedly. */
+/** Tells the team about money in, once: when the payment is first seen as successful. */
+async function notifyPaymentReceived(providerTransactionId: string, businessId: unknown) {
+  const [tx, business] = await Promise.all([
+    TransactionModel.findOne({ providerTransactionId }).select("branch amountKobo counterparty").lean(),
+    BusinessModel.findById(businessId).select("name owner"),
+  ]);
+  if (tx && business) await paymentReceived(business, tx);
+}
+
+/**
+ * Pulls incoming transfers from Liquifia and records any new ones or status changes, then links new
+ * payments to the invoices their narration mentions. Safe to run repeatedly.
+ */
 export async function syncInboundTransfers() {
+  const counts = await pullInboundTransfers();
+  const invoices = await matchInvoicePayments().catch((err) => {
+    console.error("Matching payments to invoices failed:", err);
+    return { checked: 0, matched: 0 };
+  });
+  return { ...counts, invoicesMatched: invoices.matched };
+}
+
+async function pullInboundTransfers() {
   const accounts = new Map(
     (await VirtualAccountModel.find().select("providerAccountId business branch")).map((a) => [a.providerAccountId, a]),
   );

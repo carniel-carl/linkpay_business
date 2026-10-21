@@ -17,7 +17,17 @@ export const env = {
   appName: process.env.APP_NAME ?? "LinkPay",
   // Public URL of the web app, used in emailed links (team invites).
   webUrl: (process.env.WEB_URL ?? "http://localhost:3000").replace(/\/$/, ""),
+  // Public URL of the admin console (admin/), used in staff invite links.
+  adminAppUrl: (process.env.ADMIN_APP_URL ?? "http://localhost:3001").replace(/\/$/, ""),
+  // Phone pushes: "expo" sends through Expo's push service; anything else prints them to the console.
+  pushProvider: process.env.PUSH_PROVIDER ?? "console",
+  // Optional Expo access token, if "enhanced push security" is turned on for the Expo project.
+  expoAccessToken: process.env.EXPO_ACCESS_TOKEN,
   jwtSecret: required("JWT_SECRET"),
+  // Signs staff (admin console) tokens. Separate from JWT_SECRET so neither side can verify the other's tokens.
+  staffJwtSecret:
+    process.env.STAFF_JWT_SECRET ??
+    (process.env.NODE_ENV === "production" ? required("STAFF_JWT_SECRET") : "dev-staff-jwt-secret-not-for-production"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   // Device sessions (mobile): short access tokens, refreshed with a rotating refresh token.
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL ?? "15m",

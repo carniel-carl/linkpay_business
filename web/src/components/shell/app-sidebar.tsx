@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Lock, ShieldCheck } from "lucide-react"
+import { Lock } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -26,7 +26,6 @@ import { Logo } from "@/components/brand/logo"
 
 type Props = {
   approved: boolean
-  isAdmin: boolean
   businessName: string
   headOfficeCity?: string
   branches: SwitcherBranch[]
@@ -41,7 +40,6 @@ type Props = {
 
 export function AppSidebar({
   approved,
-  isAdmin,
   businessName,
   headOfficeCity,
   branches,
@@ -77,19 +75,6 @@ export function AppSidebar({
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {isAdmin && (
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-sidebar-foreground/85">Staff</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <NavLink
-                  item={{ href: "/admin", label: "Review queue", icon: ShieldCheck, openBeforeApproval: true }}
-                  approved={approved}
-                />
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
       </SidebarContent>
       <SidebarFooter className="gap-3 pb-3">
         <SidebarMenu>

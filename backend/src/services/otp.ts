@@ -3,7 +3,7 @@ import { OtpModel, type OtpPurpose } from "../models/Otp";
 import { HttpError } from "../utils/HttpError";
 
 const OTP_TTL_MS = 10 * 60 * 1000;
-const RESEND_COOLDOWN_MS = 60 * 1000;
+export const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_ATTEMPTS = 5;
 
 const hash = (code: string) => createHash("sha256").update(code).digest("hex");
@@ -15,7 +15,10 @@ export async function createOtp(email: string, purpose: OtpPurpose): Promise<str
     purpose,
     createdAt: { $gt: new Date(Date.now() - RESEND_COOLDOWN_MS) },
   });
-  if (recent) throw new HttpError(429, "Please wait before requesting another code", "OTP_COOLDOWN");
+  if (recent) {
+    const retryAt = new Date(recent.createdAt.getTime() + RESEND_COOLDOWN_MS).toISOString();
+    throw new HttpError(429, "Please wait before requesting another code", "OTP_COOLDOWN", { retryAt });
+  }
 
   const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
   await OtpModel.deleteMany({ email, purpose });

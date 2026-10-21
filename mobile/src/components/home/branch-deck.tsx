@@ -1,9 +1,11 @@
 import * as Haptics from "expo-haptics";
 import { useRef } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { BalanceToggle } from "@/components/ui/balance-toggle";
 import { Button } from "@/components/ui/button";
 import { Figure } from "@/components/ui/typography";
 import type { BranchCard } from "@/lib/api/banking";
+import { HIDDEN_AMOUNT, useBalanceVisibility } from "@/lib/balance-visibility";
 import { cn } from "@/lib/cn";
 import { formatAccountNumber, formatNaira, nairaParts } from "@/lib/format";
 import { useTheme } from "@/theme/theme";
@@ -108,13 +110,14 @@ function Card({
   const available = balance ? (balance.availableKobo ?? balance.amountKobo) : undefined;
   const parts = available !== undefined ? nairaParts(available) : undefined;
   const held = balance?.heldKobo ?? 0;
+  const hidden = useBalanceVisibility((s) => s.hidden);
 
   return (
     <Pressable
       accessibilityRole={account ? "button" : undefined}
       accessibilityLabel={[
         branch.name,
-        available !== undefined ? `Available balance ${formatNaira(available)}` : undefined,
+        available !== undefined ? (hidden ? "Available balance hidden" : `Available balance ${formatNaira(available)}`) : undefined,
         number ? `Account number ${number.split("").join(" ")}` : undefined,
       ]
         .filter(Boolean)
@@ -136,9 +139,16 @@ function Card({
 
       {number ? (
         <>
-          <Text className="mt-[18px] text-[13px] text-muted-foreground">Available balance</Text>
-          <View className="mt-1 min-h-[42px] justify-center">
-            {parts ? (
+          <View className="mt-[14px] flex-row items-center gap-1.5">
+            <Text className="text-[13px] text-muted-foreground">Available balance</Text>
+            <BalanceToggle />
+          </View>
+          <View className="min-h-[42px] justify-center">
+            {parts && hidden ? (
+              <Figure size={38} numberOfLines={1} style={{ letterSpacing: -0.5 }}>
+                {HIDDEN_AMOUNT}
+              </Figure>
+            ) : parts ? (
               <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                 <Figure size={38} style={{ letterSpacing: -1.3 }}>
                   {parts.whole}
@@ -153,7 +163,7 @@ function Card({
               <Text className="text-[15px] text-muted-foreground">Balance unavailable right now. Pull down to try again.</Text>
             )}
           </View>
-          {held > 0 && <Text className="text-[13px] text-muted-foreground">{formatNaira(held)} held for transfers</Text>}
+          {held > 0 && !hidden && <Text className="text-[13px] text-muted-foreground">{formatNaira(held)} held for transfers</Text>}
           <View className="mt-[18px] flex-row items-center justify-between gap-3 border-t border-border pt-3.5">
             <View className="shrink">
               <Text className="text-[12px] text-muted-foreground">Account number</Text>

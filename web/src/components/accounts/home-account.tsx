@@ -1,7 +1,7 @@
 "use client"
 
 import { useSyncExternalStore } from "react"
-import { ArrowDownLeft, Landmark, PartyPopper, RotateCw, X } from "lucide-react"
+import { ArrowDownLeft, Landmark, RotateCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Spinner } from "@/components/ui/spinner"
@@ -220,34 +220,27 @@ function WelcomeBanner({ businessId, account }: { businessId: string; account: A
 
   return (
     <section
-      aria-label="Your account is ready"
-      className="surface flex items-start gap-4 border-l-4 border-l-primary p-5 sm:items-center sm:p-6"
+      aria-labelledby="welcome-title"
+      className="surface grid gap-x-8 gap-y-5 p-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-8"
     >
-      <span className="grid size-10 shrink-0 place-items-center rounded-[12px] bg-pop text-pop-foreground">
-        <PartyPopper className="size-5" aria-hidden />
-      </span>
-      <div className="grid min-w-0 flex-1 gap-1">
-        <p className="font-display text-base font-semibold tracking-[-0.01em]">Your business account is ready</p>
-        <p className="text-sm text-muted-foreground">
-          Share{" "}
-          <span className="font-mono font-medium text-foreground">{account.accountNumber}</span>
-          {account.bankName ? ` (${account.bankName})` : ""} with customers to start receiving payments.
+      <div className="grid min-w-0 gap-2">
+        <p className="flex items-center gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+          <span className="size-1.5 rounded-full bg-success ring-4 ring-success-subtle" aria-hidden />
+          Account open
+        </p>
+        <h2 id="welcome-title" className="type-display text-[1.625rem] text-balance sm:text-[1.875rem]">
+          Your business account is ready
+        </h2>
+        <p className="max-w-[56ch] text-[15px] leading-relaxed text-pretty text-muted-foreground">
+          Give customers your account number,{" "}
+          <span className="font-mono font-medium tracking-[0.04em] text-foreground">{account.accountNumber}</span>
+          {account.bankName ? ` at ${account.bankName}` : ""}. Money they send lands in the balance below straight away.
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        <CopyButton
-          value={shareText(account)}
-          message="Account details copied"
-          label="Share account details"
-          variant="ghost"
-          className="hidden sm:inline-flex"
-        >
-          Share
-        </CopyButton>
-        <Button variant="ghost" size="icon-sm" onClick={dismiss} aria-label="Dismiss">
-          <X />
-        </Button>
-      </div>
+      {/* Sharing lives on the account card just below, so the note only needs closing. */}
+      <Button variant="outline" className="w-fit" onClick={dismiss}>
+        Got it
+      </Button>
     </section>
   )
 }

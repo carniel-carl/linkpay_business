@@ -15,6 +15,10 @@ const transactionSchema = new Schema(
     type: { type: String, enum: TRANSACTION_TYPES, required: true },
     // The transfer a payout belongs to.
     transfer: { type: Types.ObjectId, ref: "Transfer" },
+    // Incoming payments: the invoice this pays (matched from the narration or linked by hand).
+    invoice: { type: Types.ObjectId, ref: "Invoice" },
+    // When the invoice matcher last looked at this payment; it looks once (see services/invoices.ts).
+    invoiceCheckedAt: { type: Date },
     direction: { type: String, enum: ["credit", "debit"], required: true },
     // Integers in kobo.
     amountKobo: { type: Number, required: true },
@@ -48,6 +52,7 @@ const transactionSchema = new Schema(
 
 transactionSchema.index({ business: 1, occurredAt: -1 });
 transactionSchema.index({ branch: 1, occurredAt: -1 });
+transactionSchema.index({ direction: 1, status: 1, invoiceCheckedAt: 1 });
 
 export type Transaction = InferSchemaType<typeof transactionSchema>;
 export type TransactionDocument = HydratedDocument<Transaction>;

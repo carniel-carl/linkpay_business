@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Figure } from "@/components/ui/typography";
 import { STATUS_LABELS } from "@/lib/api/transfers";
@@ -32,7 +33,7 @@ export function recipientName(t: Transfer) {
 }
 
 /** One transfer: recipient, branch and when, the amount, and its status. */
-export function TransferRow({ transfer: t, onPress }: { transfer: Transfer; onPress: () => void }) {
+export const TransferRow = memo(function TransferRow({ transfer: t, onPress }: { transfer: Transfer; onPress: (t: Transfer) => void }) {
   const name = recipientName(t);
   const meta = [t.branch?.name, t.createdBy?.name && `by ${t.createdBy.name}`, timeAgo(t.createdAt)].filter(Boolean).join(" · ");
   const dead = t.status === "failed" || t.status === "rejected" || t.status === "cancelled";
@@ -40,7 +41,7 @@ export function TransferRow({ transfer: t, onPress }: { transfer: Transfer; onPr
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${name}, ${formatNaira(t.amountKobo)}, ${STATUS_LABELS[t.status]}, ${meta}`}
-      onPress={onPress}
+      onPress={() => onPress(t)}
       className="flex-row items-center gap-3 px-4 py-3.5 active:bg-muted"
     >
       <View className="h-[38px] w-[38px] items-center justify-center rounded-[12px] bg-brand-subtle">
@@ -62,4 +63,4 @@ export function TransferRow({ transfer: t, onPress }: { transfer: Transfer; onPr
       </Figure>
     </Pressable>
   );
-}
+});

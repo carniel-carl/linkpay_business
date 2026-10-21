@@ -16,6 +16,7 @@ import { VirtualAccountModel } from "../models/VirtualAccount";
 import { HttpError } from "../utils/HttpError";
 import { sendTransferAwaitingApprovalEmail, sendTransferFailedEmail, sendTransferRejectedEmail } from "./email";
 import { liquifia, LiquifiaError, newIdempotencyKey, toKobo, toNaira, type LiquifiaBank } from "./liquifia/client";
+import { transferApprovalRequested, transferSettled, transfersDecided } from "./notificationEvents";
 import { canAccessBranch, hasPermission, permissionsFor } from "./team";
 
 // ---------------------------------------------------------------------------------------------------------
@@ -369,6 +370,13 @@ export async function decideTransfers(opts: {
     if (updated) decided.push(updated);
   }
 
+  if (decided.length) {
+    const [business, decider] = await Promise.all([
+      BusinessModel.findById(decided[0]!.business).select("name"),
+      UserModel.findById(userId).select("name"),
+    ]);
+    if (business) await transfersDecided(business, decided, decision, decider?.name ?? "A team member", note);
+  }
   if (decision === "approve") {
     for (const transfer of decided) await submitTransfer(transfer);
   } else if (decided.length) {
@@ -439,7 +447,7 @@ export async function submitTransfer(transfer: TransferDocument) {
     if (isDefinitiveRejection(err)) {
       transfer.set({ status: "failed", failureReason: failureMessage(err), completedAt: new Date(), "provider.lastError": String(err) });
       await transfer.save();
-      notifyFailed(transfer).catch((e) => console.error("Couldn't email the failure:", e));
+      await notifyFailed(transfer).catch((e) => console.error("Couldn't email the failure:", e));
       return transfer;
     }
     // Unknown outcome: keep holding the money and retry with the same key (processOpenTransfers).
@@ -501,7 +509,8 @@ async function applyPayoutStatus(transfer: TransferDocument, providerStatus: str
   if (transfer.provider?.payoutId) {
     await TransactionModel.updateOne({ providerTransactionId: transfer.provider.payoutId }, { status: mapTransactionStatus(transfer.status) });
   }
-  if (wasOpen && transfer.status === "failed") notifyFailed(transfer).catch((e) => console.error("Couldn't email the failure:", e));
+  if (wasOpen && transfer.status === "failed") await notifyFailed(transfer).catch((e) => console.error("Couldn't email the failure:", e));
+  if (wasOpen && transfer.status === "success") await transferSettled(transfer);
   return transfer;
 }
 
@@ -580,6 +589,7 @@ async function notifyApprovers(
       path: batchId ? `/transfers?batch=${batchId}` : `/transfers?transfer=${transfers[0]!.id}`,
     });
   }
+  await transferApprovalRequested(business, approverIds, creator?.name ?? "A team member", transfers);
 }
 
 async function notifyRejected(transfers: TransferDocument[], note?: string) {
@@ -595,10 +605,12 @@ async function notifyRejected(transfers: TransferDocument[], note?: string) {
 
 async function notifyFailed(transfer: TransferDocument) {
   const creator = await UserModel.findById(transfer.createdBy).select("email");
-  if (!creator) return;
-  await sendTransferFailedEmail(creator.email, {
-    amountKobo: transfer.amountKobo,
-    recipientName: transfer.recipient!.accountName,
-    reason: transfer.failureReason ?? undefined,
-  });
+  if (creator) {
+    await sendTransferFailedEmail(creator.email, {
+      amountKobo: transfer.amountKobo,
+      recipientName: transfer.recipient!.accountName,
+      reason: transfer.failureReason ?? undefined,
+    });
+  }
+  await transferSettled(transfer);
 }

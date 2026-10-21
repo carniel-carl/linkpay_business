@@ -44,6 +44,11 @@ const MESSAGES: Record<string, string> = {
   ACCOUNT_BUSY: "Another transfer from this account is going through. Try again in a moment.",
   INVALID_BANK: "Choose a bank from the list.",
   BUSINESS_REQUIRED: "Set up your business first.",
+  BUSINESS_EXISTS: "This account already has a business.",
+  KYB_INCOMPLETE: "A few requirements are still missing.",
+  UNSUPPORTED_FILE_TYPE: "Upload a PDF, or a photo of the document.",
+  FILE_REQUIRED: "Choose a file to upload.",
+  LIMIT_FILE_SIZE: "That file is over 5 MB. Upload a smaller file, or take a photo of the page instead.",
   BUSINESS_LOCKED: "Your business is under review, so it can't be edited right now.",
   ACCOUNT_NOT_READY: "Your business account is still being set up.",
   BRANCH_NAME_TAKEN: "You already have a branch with this name. Choose another.",
@@ -59,6 +64,13 @@ const MESSAGES: Record<string, string> = {
   CANNOT_MODIFY_SELF: "You can't change your own access. Ask the owner or another admin.",
   OWNER_CANNOT_LEAVE: "The owner can't leave the business.",
   INVALID_BRANCH: "One of those branches isn't part of this business. Refresh and try again.",
+  INVOICE_NOT_FOUND: "We couldn't find that invoice. It may have been deleted.",
+  INVOICE_EMPTY: "Add at least one item before sending.",
+  CUSTOMER_EMAIL_REQUIRED: "Add the customer's email address, or share the link instead.",
+  CUSTOMER_NOT_FOUND: "That customer was removed. Choose another or add them again.",
+  PAYMENT_TOO_LARGE: "That's more than the balance due.",
+  TRANSACTION_ALREADY_LINKED: "That payment is already linked to another invoice.",
+  INVALID_DATES: "The due date can't be before the issue date.",
 };
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

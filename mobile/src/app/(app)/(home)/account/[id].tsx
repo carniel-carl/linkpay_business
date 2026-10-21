@@ -1,10 +1,12 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
+import { BalanceToggle } from "@/components/ui/balance-toggle";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display, Figure } from "@/components/ui/typography";
 import { useAccounts } from "@/lib/api/banking";
+import { HIDDEN_AMOUNT, useBalanceVisibility } from "@/lib/balance-visibility";
 import { formatAccountNumber, nairaParts } from "@/lib/format";
 import { usePaymentFilters } from "@/lib/payment-filters";
 import { shareAccount } from "@/lib/share";
@@ -15,6 +17,7 @@ export default function AccountDetails() {
   const accounts = useAccounts(true);
   const setFilters = usePaymentFilters((s) => s.setFilters);
   const account = accounts.data?.find((a) => a._id === id);
+  const hidden = useBalanceVisibility((s) => s.hidden);
 
   if (!account) {
     return (
@@ -40,8 +43,15 @@ export default function AccountDetails() {
       <View className="gap-1 px-1">
         <Text className="text-[13px] font-semibold text-muted-foreground">{account.branch.isHeadOffice ? "Head office" : "Branch"}</Text>
         <Display size={28}>{account.branch.name}</Display>
-        <Text className="pt-3 text-[13px] text-muted-foreground">Available balance</Text>
-        {parts ? (
+        <View className="flex-row items-center gap-1.5 pt-3">
+          <Text className="text-[13px] text-muted-foreground">Available balance</Text>
+          <BalanceToggle />
+        </View>
+        {parts && hidden ? (
+          <Figure size={32} accessibilityLabel="Balance hidden">
+            {HIDDEN_AMOUNT}
+          </Figure>
+        ) : parts ? (
           <Text>
             <Figure size={32}>{parts.whole}</Figure>
             <Figure size={18} className="text-muted-foreground">

@@ -67,6 +67,14 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "cameraPermission": "LinkPay Business uses the camera to photograph your business documents and ID for verification.",
+          "photosPermission": "LinkPay Business uses your photos to upload business documents and ID for verification.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-font",
         {
           "fonts": [

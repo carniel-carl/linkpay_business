@@ -57,7 +57,7 @@ const businessSchema = new Schema(
     reviewNote: { type: String },
     submittedAt: { type: Date },
     reviewedAt: { type: Date },
-    reviewedBy: { type: Types.ObjectId, ref: "User" },
+    reviewedBy: { type: Types.ObjectId, ref: "Staff" },
 
     // The business's Liquifia customer, started on approval. accountStatus/lastError mirror the head
     // office branch's account (see Branch.liquifia), which is what clients show as "your account".
@@ -79,6 +79,30 @@ const businessSchema = new Schema(
       mode: { type: String, enum: ["never", "always", "above_threshold"], default: "never" },
       thresholdKobo: { type: Number, min: 0 },
     },
+
+    // How the business's invoices and receipts look (see services/branding.ts). Set under Settings.
+    branding: {
+      // Normalised to a PNG on upload (any SVG is rasterised), so only a safe image is ever served.
+      logo: {
+        key: { type: String },
+        width: { type: Number },
+        height: { type: Number },
+        updatedAt: { type: Date },
+      },
+      accentColor: { type: String }, // #RRGGBB
+      invoice: {
+        prefix: { type: String, default: "INV" },
+        defaultDueDays: { type: Number, default: 14 },
+        // Basis points: 750 = 7.5%. `vatByDefault` ticks VAT on new invoices.
+        vatRateBps: { type: Number, default: 750 },
+        vatByDefault: { type: Boolean, default: false },
+        notes: { type: String, trim: true },
+        terms: { type: String, trim: true },
+        footer: { type: String, trim: true },
+      },
+    },
+    // Last invoice number issued (incremented atomically when an invoice is created).
+    invoiceSeq: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

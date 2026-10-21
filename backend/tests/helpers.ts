@@ -2,10 +2,16 @@ import type { Server } from "node:http";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { env } from "../src/config/env";
+import type { Request } from "express";
+import type { StaffRole } from "../src/config/staffPermissions";
+import { StaffModel } from "../src/models/Staff";
+import { startStaffSession } from "../src/services/staffAuth";
 import { startMockLiquifia, type MockLiquifia } from "./mockLiquifia";
 
 export type TestEnv = {
   liquifia: MockLiquifia;
+  /** The app's base URL, for requests `api()` can't make (multipart uploads, binary responses). */
+  url: string;
   /** Calls the API; `token` becomes a Bearer header. */
   api: (
     method: string,
@@ -49,6 +55,7 @@ export async function startTestEnv(): Promise<TestEnv> {
 
   return {
     liquifia,
+    url: `http://127.0.0.1:${port}`,
     api,
     stop: async () => {
       server.close();
@@ -57,4 +64,12 @@ export async function startTestEnv(): Promise<TestEnv> {
       await mongo.stop();
     },
   };
+}
+
+/** A staff access token (admin console) for `email`, creating the staff member with `role` on first use. */
+export async function signStaffToken(email = "staff@test.ng", role: StaffRole = "super_admin") {
+  const staff =
+    (await StaffModel.findOne({ email })) ?? (await StaffModel.create({ name: "Staff", email, role, password: "x" }));
+  const req = { ip: "127.0.0.1", get: () => "bun-test" } as unknown as Request;
+  return (await startStaffSession(req, staff)).accessToken;
 }

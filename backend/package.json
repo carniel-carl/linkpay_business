@@ -8,6 +8,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.2.0",
+    "@types/pdfkit": "^0.17.6",
     "mongodb-memory-server": "^11.3.0"
   },
   "peerDependencies": {
@@ -21,6 +22,8 @@
     "mongoose": "^9.10.2",
     "multer": "^2.4.0",
     "otpauth": "^9.5.2",
+    "pdfkit": "^0.20.2",
+    "sharp": "^0.35.5",
     "zod": "^4.6.5"
   },
   "scripts": {
@@ -28,6 +31,8 @@
     "start": "bun index.ts",
     "check": "bun scripts/check-connections.ts",
     "migrate:branches": "bun scripts/migrate-branches.ts",
+    "migrate:staff": "bun scripts/migrate-staff.ts",
+    "staff": "bun scripts/staff.ts",
     "dev:mock": "bun --env-file=/dev/null scripts/dev-mock.ts"
   }
 }
