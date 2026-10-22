@@ -572,7 +572,7 @@ export function LinkEditor({
             />
             {v.mode === "test" && (
               <p className="rounded-lg bg-muted/70 px-3 py-2.5 text-sm text-muted-foreground">
-                Customers see placeholder bank details and a button to simulate the payment. Test payments aren&apos;t counted in your totals.
+                Customers see placeholder bank details and a button to simulate the payment. Test payments show apart from real money and are cleared when you go live.
               </p>
             )}
           </Section>

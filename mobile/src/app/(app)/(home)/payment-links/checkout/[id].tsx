@@ -126,6 +126,8 @@ export default function CheckoutScreen() {
 function SimulatePayment({ checkout: c }: { checkout: LinkCheckout }) {
   const change = usePaymentLinkChange();
   const [outcome, setOutcome] = useState<"paid" | "underpaid">();
+  // Whatever arrives on a donation link is a full donation, so there's no part payment to try.
+  const donation = !!c.donor;
 
   function simulate(next: "paid" | "underpaid") {
     setOutcome(next);
@@ -135,7 +137,7 @@ function SimulatePayment({ checkout: c }: { checkout: LinkCheckout }) {
         onSuccess: () => {
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           Alert.alert(
-            next === "paid" ? "Test payment received" : "Test part payment received",
+            next === "underpaid" ? "Test part payment received" : donation ? "Test gift received" : "Test payment received",
             next === "paid" ? "We've emailed a test receipt. No money moved." : "No money moved.",
           );
         },
@@ -147,18 +149,21 @@ function SimulatePayment({ checkout: c }: { checkout: LinkCheckout }) {
   return (
     <View className="gap-3">
       <View className="gap-1 px-1">
-        <Display size={20}>Simulate the payment</Display>
+        <Display size={20}>{donation ? "Simulate the gift" : "Simulate the payment"}</Display>
         <Text className="text-[14px] leading-[20px] text-muted-foreground">
-          Marks this test checkout as paid, as if {c.payer.name}&apos;s transfer had arrived. A part payment sends half the price.
+          Marks this test checkout as paid, as if {c.payer.name}&apos;s transfer had arrived.
+          {donation ? " It shows on the fundraiser's page and in its total until the link goes live." : " A part payment sends half the price."}
         </Text>
       </View>
       <FormError message={change.error ? friendlyMessage(change.error) : undefined} />
       <Button icon={{ ios: "flask", android: "science" }} loading={change.isPending && outcome === "paid"} disabled={change.isPending} onPress={() => simulate("paid")}>
-        Simulate payment
+        {donation ? "Simulate gift" : "Simulate payment"}
       </Button>
-      <Button variant="outline" loading={change.isPending && outcome === "underpaid"} disabled={change.isPending} onPress={() => simulate("underpaid")}>
-        Simulate part payment
-      </Button>
+      {!donation && (
+        <Button variant="outline" loading={change.isPending && outcome === "underpaid"} disabled={change.isPending} onPress={() => simulate("underpaid")}>
+          Simulate part payment
+        </Button>
+      )}
     </View>
   );
 }

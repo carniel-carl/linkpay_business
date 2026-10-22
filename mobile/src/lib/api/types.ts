@@ -604,7 +604,10 @@ export type PaymentLinkUnavailableReason = "taken_down" | "inactive" | "expired"
 /** "donation": a fundraiser (donor chooses, optional goal, public donor list). Contract: docs/briefs/donations.md. */
 export type PaymentLinkKind = "payment" | "donation";
 
-/** A fundraiser's figures. Raised includes the few kobo that tell transfers apart; test payments never count. */
+/**
+ * A fundraiser's figures. Raised includes the few kobo that tell transfers apart. While the link is in test
+ * mode, raised and the count include its simulated gifts, and `testKobo` is that part.
+ */
 export type DonationProgress = {
   goalKobo: number | null;
   raisedKobo: number;
@@ -612,6 +615,7 @@ export type DonationProgress = {
   /** Floor of raised / goal, can pass 100; null without a goal. */
   percent: number | null;
   lastDonationAt: string | null;
+  testKobo?: number;
 };
 export type CheckoutStatus = "pending" | "expired" | "paid" | "underpaid";
 /** "test": placeholder bank details and simulated payments, never counted in totals (brief §6). */
@@ -648,10 +652,12 @@ export type PaymentLink = {
   allowedOrigins: string[];
   expiresAt: string | null;
   maxPayments: number | null;
-  /** Live payments only. */
+  /** Real payments only. */
   paymentsCount: number;
   collectedKobo: number;
   lastPaidAt: string | null;
+  /** Simulated payments while the link is in test mode (never in the totals above); null when live. Going live clears them. */
+  test: { collectedKobo: number; paymentsCount: number } | null;
   available: boolean;
   unavailableReason: PaymentLinkUnavailableReason | null;
   createdBy: { _id: string; name: string } | null;
@@ -666,6 +672,8 @@ export type PaymentLinkSummary = {
   collectedKobo: number;
   paymentsCount: number;
   last30Days: { collectedKobo: number; paymentsCount: number };
+  /** Simulated payments on links that are in test mode (never in the totals above). */
+  test?: { collectedKobo: number; paymentsCount: number };
 };
 
 /** GET /api/payment-links/:id/embed */

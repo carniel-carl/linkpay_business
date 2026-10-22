@@ -4,6 +4,7 @@ import { getPublicInvoice, getPublicInvoiceLogo, getPublicInvoicePdf } from "../
 import {
   getPublicCheckout,
   getPublicDonations,
+  streamPublicLinkEvents,
   getPublicPaymentLink,
   getPublicPaymentLinkImage,
   getPublicPaymentLinkLogo,
@@ -54,6 +55,7 @@ const reportLimit = rateLimit({
 
 publicRouter.get("/pay/:slug", getPublicPaymentLink);
 publicRouter.get("/pay/:slug/donations", getPublicDonations);
+publicRouter.get("/pay/:slug/events", streamPublicLinkEvents);
 publicRouter.post("/pay/:slug/reports", reportLimit, reportPublicLink);
 publicRouter.get("/pay/:slug/logo", getPublicPaymentLinkLogo);
 publicRouter.get("/pay/:slug/images/:imageId", getPublicPaymentLinkImage);

@@ -156,6 +156,52 @@ describe("donation links", () => {
     expect((await t.api("GET", `/api/public/pay/${plain.body.slug}/donations`)).status).toBe(404);
     expect((await t.api("GET", `/api/public/pay/${plain.body.slug}`)).body.donation).toBeNull();
   });
+
+  test("in test mode a simulated gift shows on the page and counts there, never in the link's totals; it vanishes once live", async () => {
+    const { owner, branch, va } = await setup();
+    const link = await fundraiser(owner.token, branch);
+    const real = await donate(link.slug, va, 1, 10_000_00);
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "test" } })).status).toBe(200);
+
+    const start = await t.api("POST", `/api/public/pay/${link.slug}/checkouts`, {
+      body: { name: "Tester", email: "tester@example.com", amountKobo: 5_000_00, message: "Trying it out" },
+    });
+    expect(start.body.mode).toBe("test");
+    expect((await t.api("POST", `/api/public/checkouts/${start.body.token}/simulate`, { body: { outcome: "paid" } })).status).toBe(200);
+
+    const page = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
+    expect(page.donation).toMatchObject({ raisedKobo: real.amountKobo + start.body.amountKobo, donationsCount: 2, testKobo: start.body.amountKobo });
+    expect(page.donation.recent.items[0]).toMatchObject({ name: "Tester", message: "Trying it out", test: true });
+    expect(page.donation.recent.items[1]).toMatchObject({ test: false });
+    const feed = (await t.api("GET", `/api/public/pay/${link.slug}/donations?sort=top`)).body;
+    expect(feed.progress.testKobo).toBe(start.body.amountKobo);
+    // The dashboard shows it the same way, beside the real money; collected and the summary's totals never count it.
+    const own = (await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body;
+    expect(own.donation).toMatchObject({ raisedKobo: real.amountKobo + start.body.amountKobo, donationsCount: 2, testKobo: start.body.amountKobo });
+    expect(own).toMatchObject({ collectedKobo: real.amountKobo, paymentsCount: 1, test: { collectedKobo: start.body.amountKobo, paymentsCount: 1 } });
+    const listed = (await t.api("GET", "/api/payment-links?kind=donation", { token: owner.token })).body.items.find((l: any) => l._id === link._id);
+    expect(listed.test).toEqual({ collectedKobo: start.body.amountKobo, paymentsCount: 1 });
+    const summary = (await t.api("GET", "/api/payment-links/summary", { token: owner.token })).body;
+    expect(summary).toMatchObject({ collectedKobo: real.amountKobo, paymentsCount: 1, test: { collectedKobo: start.body.amountKobo, paymentsCount: 1 } });
+    const tests = (id: string) => t.api("GET", `/api/payment-links/checkouts?link=${id}&mode=test&status=all`, { token: owner.token })
+    expect((await tests(link._id)).body.total).toBe(1);
+    expect((await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&mode=live&status=all`, { token: owner.token })).body.total).toBe(1);
+
+    // Live again: the test gift is gone from the page and the figures.
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "live" } })).status).toBe(200);
+    const live = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
+    expect(live.donation).toMatchObject({ raisedKobo: real.amountKobo, donationsCount: 1, testKobo: 0 });
+    expect(live.donation.recent.items).toHaveLength(1);
+    const ownLive = (await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body;
+    expect(ownLive).toMatchObject({ collectedKobo: real.amountKobo, test: null, donation: { raisedKobo: real.amountKobo, testKobo: 0 } });
+    // Going live cleared the test table; back in test mode it starts empty.
+    expect((await tests(link._id)).body.total).toBe(0);
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "test" } })).status).toBe(200);
+    expect((await tests(link._id)).body.total).toBe(0);
+    const again = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
+    expect(again.donation).toMatchObject({ raisedKobo: real.amountKobo, testKobo: 0 });
+    expect((await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body.test).toEqual({ collectedKobo: 0, paymentsCount: 0 });
+  });
 });
 
 describe("reports", () => {
@@ -258,5 +304,65 @@ describe("reports", () => {
     expect((await t.api("POST", `/api/admin/payment-links/${link._id}/take-down`, { token: finance.token, body: { note: "x" } })).status).toBe(401);
     expect((await t.api("POST", `/api/admin/payment-links/${link._id}/take-down`, { token: supportToken, body: { note: "x" } })).status).toBe(403);
     expect(await CheckoutModel.countDocuments({ link: link._id })).toBe(0);
+  });
+});
+
+describe("live updates on the public page", () => {
+  /** Opens a link's event stream and collects event names. */
+  async function listen(slug: string) {
+    const abort = new AbortController();
+    const res = await fetch(`${t.url}/api/public/pay/${slug}/events`, { signal: abort.signal });
+    const names: string[] = [];
+    let raw = "";
+    let all = "";
+    if (res.ok) {
+      (async () => {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true });
+            raw += text;
+            all += text;
+            for (const m of raw.matchAll(/^event: (\w+)$/gm)) names.push(m[1]!);
+            raw = raw.slice(raw.lastIndexOf("\n\n") + 2);
+          }
+        } catch {}
+      })();
+    }
+    const waitFor = async (name: string, count = 1) => {
+      const until = Date.now() + 3000;
+      while (Date.now() < until && names.filter((n) => n === name).length < count) await Bun.sleep(10);
+      return names.filter((n) => n === name).length;
+    };
+    return { res, names, text: () => all, waitFor, close: () => abort.abort() };
+  }
+
+  test("the page hears when the link changes and when a payment lands, and nothing about who paid", async () => {
+    const { owner, branch } = await setup();
+    const link = await fundraiser(owner.token, branch);
+    const stream = await listen(link.slug);
+    expect(stream.res.status).toBe(200);
+    expect(stream.res.headers.get("content-type")).toStartWith("text/event-stream");
+    expect(await stream.waitFor("ready")).toBe(1);
+
+    // Switching to test mode (and back) is a link change.
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "test" } })).status).toBe(200);
+    expect(await stream.waitFor("link")).toBe(1);
+
+    // A simulated gift is a payment.
+    const start = await t.api("POST", `/api/public/pay/${link.slug}/checkouts`, { body: { name: "Secret Donor", email: "secret@example.com", amountKobo: 5_000_00 } });
+    await t.api("POST", `/api/public/checkouts/${start.body.token}/simulate`, { body: { outcome: "paid" } });
+    expect(await stream.waitFor("paid")).toBe(1);
+
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "live" } })).status).toBe(200);
+    expect(await stream.waitFor("link", 2)).toBe(2);
+    for (const secret of ["Secret Donor", "secret@example.com", start.body.token, start.body.reference]) expect(stream.text()).not.toContain(secret);
+    stream.close();
+
+    // Unknown links have no stream.
+    expect((await fetch(`${t.url}/api/public/pay/nosuchlink/events`)).status).toBe(404);
   });
 });

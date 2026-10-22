@@ -27,7 +27,7 @@ const MODE_COPY: Record<PaymentMode, { title: string; description: string; actio
   live: {
     title: "Take real payments?",
     description:
-      "New customers see your branch's real account and their transfers are matched as usual. The link, QR code and embed code stay the same. Test payments made so far stay in the list as tests.",
+      "New customers see your branch's real account and their transfers are matched as usual. The link, QR code and embed code stay the same. Test payments made so far are cleared from the link's lists, totals and page.",
     action: "Go live",
     done: "Your payment link is live. New payments are real.",
   },
@@ -91,7 +91,7 @@ export function TestModeBanner({ link }: { link: PaymentLink }) {
       <AlertTitle className="font-semibold">This link is in test mode</AlertTitle>
       <AlertDescription className="text-warning-foreground">
         Customers see placeholder bank details and can simulate the payment, so you can try the page and your website&apos;s pay button.
-        No money moves, and test payments aren&apos;t counted in the totals.
+        No money moves. Test payments show apart from real ones and are cleared when you go live.
       </AlertDescription>
       {link.canManage && (
         <Button size="sm" onClick={() => mode.ask("live")} className="col-start-2 mt-2.5 justify-self-start">

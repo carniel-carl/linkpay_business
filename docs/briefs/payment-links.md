@@ -92,6 +92,7 @@ Limits are in `config/paymentLinks.ts`: ₦100 to ₦100m per payment, 5 questio
 | Route | Notes |
 | --- | --- |
 | `GET pay/:slug` | `{ business: { name, logo: { url, width, height } \| null, palette }, link: { slug, title, description, amountKobo, minAmountKobo, maxAmountKobo, currency, phone, customFields, images: [{ _id, url, width, height }] }, embed: { allowedOrigins }, mode, available, unavailableReason }`. 404 `PAYMENT_LINK_NOT_FOUND` for unknown slugs and for suspended or banned businesses. With a fixed price, `minAmountKobo` and `maxAmountKobo` are null |
+| `GET pay/:slug/events` | **Live updates** (Server-Sent Events, 2026-10-22): `ready` once connected, then `link` when the link changes (mode, status, details or pictures, taken down or restored, a donation hidden or shown, sold out, deleted) and `paid` when a payment lands. Data is always `{}`: no payer, amount or token travels on it, so the page re-fetches through the routes above (`link` → reload the page and the donor list; `paid` → pull in donations and re-check your own checkout). `retry: 5000`, a `: ping` every 20 s, recycled after 30 min (the browser reconnects; after a reconnect, reload once). At most 20 open per IP (`429 TOO_MANY_STREAMS`). In-process bus (`src/services/linkStream.ts`); with several backend instances, swap in Redis with `setLinkBus`. Web relays it at `/api/pay/[slug]/events`; polling stays as the fallback, slower while it's open |
 | `GET pay/:slug/images/:imageId` | One of the link's pictures (WebP, cached for a week, `immutable`: URLs carry `?v=`). Only pictures attached to that link. The web proxies it at `/pay/<slug>/images/<id>` |
 | `GET pay/:slug/logo` | The business's logo image. The web proxies it at `/pay/<slug>/logo` |
 | `POST pay/:slug/checkouts` | Limited to 20 per 10 minutes per IP (`429 TOO_MANY_CHECKOUTS`). Body below. 201 with a new `PublicCheckout`; 200 when the payer's open checkout is reused |
@@ -196,11 +197,12 @@ Liquifia has no test keys (open question 2), so test mode is ours. Every link ha
   - are never matched to a real transfer, aren't offered suggestions, and can't be linked by hand (`CHECKOUT_IS_TEST`);
   - are paid only by a **simulated payment**: `POST /api/public/checkouts/<token>/simulate` (the pay page's buttons) or `POST /api/payment-links/checkouts/<id>/simulate` (`payments.manage`). `outcome: "paid"` pays the exact amount; `"underpaid"` pays half the price. `matchedBy` is `"simulated"` and `transaction` is null. A pending checkout past its time can still be simulated, like a late transfer;
   - still send the `payment_link.paid` notification, titled "... (test)" with `data.mode: "test"`, and the payer's receipt, with the subject starting "[Test] " and a line saying no money was sent;
-  - never count towards the link's `paymentsCount` / `collectedKobo`, its `maxPayments` limit, the summary, or donation totals and donor lists.
+  - never count towards the link's `paymentsCount` / `collectedKobo`, its `maxPayments` limit, or the summary's totals. While the link is in test mode they are reported **beside** the real figures (product owner, 2026-10-22): `test: { collectedKobo, paymentsCount }` on the link (null when live) and on the summary (links in test mode only); a fundraiser's donation progress and public donor list include them (see `docs/briefs/donations.md`, Test gifts).
 - **Polling** a test checkout doesn't pull transfers from Liquifia.
 - **The redirect** of a paid test checkout also carries `mode=test`.
 - **A test link needs no open account**, so `account_not_ready` never applies to it.
 - **Switching** is `PATCH { mode }` either way, at any time. The slug and the embed code stay the same, so a website wired up in test mode works once the link goes live. A payer's open test checkout is never handed back on a live link (or the other way round).
+- **Going live clears the test payments** (product owner, 2026-10-22): the link's test checkouts get `testClearedAt` and leave every list (`GET /checkouts`), test figure and the public page. They're kept, not deleted, so `GET /checkouts/:id` (an old notification) still opens one. Switching back to test starts with an empty test table.
 - **Deleting:** test checkouts don't stop a link being deleted (they're deleted with it). Any live checkout still does (`PAYMENT_LINK_IN_USE`).
 - **Filters:** `GET /api/payment-links?mode=live|test|all` and `GET /api/payment-links/checkouts?mode=live|test|all` (default `all`).
 - **Seed:** `dev:mock --seed` adds "Website checkout (testing)" in test mode, with one simulated payment and one waiting.
@@ -211,7 +213,8 @@ Liquifia has no test keys (open question 2), so test mode is ours. Every link ha
 - Test links and test checkouts carry a dashed "Test" tag.
 - A test link's page has a test-mode banner with "Go live". Its menu (mobile: the actions list) offers "Go live" or "Switch to test mode", each with a confirmation.
 - A pending test checkout shows "Simulate payment" and "Simulate part payment" where a live one shows "Link a payment".
-- The all-links payments view asks for `mode=live`, like the totals. A link's own page lists its test payments too, tagged.
+- The all-links payments view asks for `mode=live`, like the totals. While a link is in test mode its own page splits its payments (and a fundraiser's donors) into **Test** and **Real** tabs (`?mode=test|live`, test first); live, it shows only real ones. Lists show "+ ₦X in test" under a test link's collected figure; the summary adds a line for test payments.
+- Donation links offer only "Simulate the gift" (any amount that arrives is a whole donation).
 - The pay page shows a "Test mode" strip on every step, the placeholder details, and the two simulate buttons under them. The paid screen says "Test payment received".
 - The embed panel and `embed.js` say to fulfil only `mode: "live"`. The checkout object passed to `embed.js` callbacks includes `mode`.
 

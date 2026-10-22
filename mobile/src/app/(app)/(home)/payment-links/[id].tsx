@@ -9,6 +9,7 @@ import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FormError } from "@/components/ui/form-error";
 import { HeaderButton } from "@/components/ui/header-button";
 import { ListRow, ListSection } from "@/components/ui/list";
+import { Segmented } from "@/components/ui/segmented";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display, Figure } from "@/components/ui/typography";
 import { friendlyMessage } from "@/lib/api/errors";
@@ -61,7 +62,10 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
   const change = usePaymentLinkChange();
   const embed = usePaymentLinkEmbed(l._id);
   const [tab, setTab] = useState<CheckoutTab>("received");
-  const checkouts = useLinkCheckouts(l._id, tab);
+  // In test mode the page splits its test payments from its real ones (test first); live, only real ones show.
+  const [shownMode, setShownMode] = useState<PaymentMode>("test");
+  const listMode: PaymentMode = l.mode === "test" ? shownMode : "live";
+  const checkouts = useLinkCheckouts(l._id, tab, true, listMode);
   const items = useMemo(() => checkouts.data?.pages.flatMap((p) => p.items) ?? [], [checkouts.data]);
   const active = l.status === "active";
   const donation = l.kind === "donation";
@@ -222,10 +226,16 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
             </View>
             <DonationBar link={l} height={8} />
             <Text className="text-[13px] text-muted-foreground">
-              {paymentsLabel(l)}
+              {l.donation.donationsCount === 1 ? "1 donation" : `${l.donation.donationsCount} donations`}
               {l.donation.lastDonationAt ? `, the latest ${formatDateTime(l.donation.lastDonationAt)}` : ""}
-              {l.mode === "test" ? ". Live donations only." : ""}
             </Text>
+            {l.mode === "test" && (
+              <Text className="rounded-[12px] bg-warning-subtle px-3.5 py-2.5 text-[13px] leading-[18px] text-warning-foreground">
+                {l.donation.testKobo
+                  ? `Includes ${formatNaira(l.donation.testKobo)} in test gifts. They come off when the link goes live and never reach your balance.`
+                  : "Test gifts you simulate count here and on the page until the link goes live. They never reach your balance."}
+              </Text>
+            )}
           </View>
         ) : (
           <View style={{ boxShadow: shadows.surface }} className="gap-1 rounded-surface bg-card px-5 py-4">
@@ -234,8 +244,13 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
             <Text className="text-[13px] text-muted-foreground">
               {paymentsLabel(l)}
               {l.lastPaidAt ? `, the latest ${formatDateTime(l.lastPaidAt)}` : ""}
-              {l.mode === "test" ? ". Live payments only." : ""}
             </Text>
+            {!!l.test?.collectedKobo && (
+              <Text className="text-[13px] text-warning-foreground">
+                Plus {formatNaira(l.test.collectedKobo)} in test payments ({l.test.paymentsCount}), not real money. They come off when the link
+                goes live.
+              </Text>
+            )}
           </View>
         )}
 
@@ -277,6 +292,17 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
               </Text>
             )}
           </View>
+          {l.mode === "test" && (
+            <Segmented
+              label={donation ? "Test or real gifts" : "Test or real payments"}
+              segments={[
+                { key: "test", label: `Test ${donation ? "gifts" : "payments"} · ${l.test?.paymentsCount ?? 0}` },
+                { key: "live", label: `Real ${donation ? "gifts" : "payments"} · ${l.paymentsCount}` },
+              ]}
+              value={shownMode}
+              onChange={setShownMode}
+            />
+          )}
           <View className="-mx-4">
             <Pills tabs={CHECKOUT_TABS} value={tab} onChange={setTab} />
           </View>
@@ -288,6 +314,8 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
             <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
               {tab !== "received"
                 ? "Nothing here right now."
+                : listMode === "test"
+                  ? `No test ${donation ? "gifts" : "payments"} yet. Open the page, start one and simulate it.`
                 : donation
                   ? "No donations yet. Share the link. Donations show here as they land."
                   : "Nobody has paid yet. Payments show here as soon as the transfer lands."}

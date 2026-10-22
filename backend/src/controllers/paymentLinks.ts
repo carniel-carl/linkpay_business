@@ -17,7 +17,7 @@ import {
   type PaymentLinkDocument,
 } from "../models/PaymentLink";
 import { UserModel } from "../models/User";
-import { donationProgress } from "../services/donations";
+import { progressWithTestGifts, testTotals } from "../services/donations";
 import { deleteLinkImages, describeImage, resolveLinkImages, sendLinkImage, setLinkImages, uploadLinkImage } from "../services/paymentLinkImages";
 import {
   checkoutStatus,
@@ -31,6 +31,7 @@ import {
   unavailableReason,
 } from "../services/paymentLinks";
 import { branchScope, canAccessBranch, hasPermission } from "../services/team";
+import { publishLinkEvent } from "../services/linkStream";
 import { HttpError } from "../utils/HttpError";
 
 type IdParams = { id: string };
@@ -107,14 +108,16 @@ function checkExpiry(expiresAt: Date | null | undefined) {
 // ---------------------------------------------------------------------------------------------------------
 
 async function serializeLinks(req: Request, links: PaymentLinkDocument[]) {
-  const [users, branches, reasons, pictures] = await Promise.all([
+  const [users, branches, reasons, pictures, tests] = await Promise.all([
     UserModel.find({ _id: { $in: links.map((l) => l.createdBy) } }).select("name"),
     BranchModel.find({ _id: { $in: links.map((l) => l.branch) } }).select("name isHeadOffice"),
     Promise.all(links.map((l) => unavailableReason(l))),
     PaymentLinkImageModel.find({ _id: { $in: links.flatMap((l) => l.images ?? []) } }),
+    testTotals(links.filter((l) => l.mode === "test").map((l) => l._id)),
   ]);
   const canManage = hasPermission(req.membership!, "payments.manage");
   return links.map((l, i) => {
+    const t = tests.get(l.id);
     const u = users.find((x) => x._id.equals(l.createdBy));
     const b = branches.find((x) => x._id.equals(l.branch));
     return {
@@ -128,9 +131,10 @@ async function serializeLinks(req: Request, links: PaymentLinkDocument[]) {
       // null = the payer chooses the amount (at least minAmountKobo, if set).
       amountKobo: l.amountKobo ?? null,
       minAmountKobo: l.minAmountKobo ?? null,
-      // Donation links: the goal, quick picks and progress (raised = collectedKobo). null on payment links.
+      // Donation links: the goal, quick picks and progress (raised = collectedKobo, plus the test gifts while in
+      // test mode, `testKobo` of it, as the public page shows). null on payment links.
       donation:
-        l.kind === "donation" ? { ...donationProgress(l), suggestedAmountsKobo: l.suggestedAmountsKobo ?? [] } : null,
+        l.kind === "donation" ? { ...progressWithTestGifts(l, t), suggestedAmountsKobo: l.suggestedAmountsKobo ?? [] } : null,
       // Set when LinkPay staff took the link down; it can't be turned back on until they restore it.
       takenDown: l.takenDown?.at ? { at: l.takenDown.at } : null,
       currency: "NGN",
@@ -150,6 +154,8 @@ async function serializeLinks(req: Request, links: PaymentLinkDocument[]) {
       paymentsCount: l.paymentsCount,
       collectedKobo: l.collectedKobo,
       lastPaidAt: l.lastPaidAt ?? null,
+      // While in test mode: what the simulated payments came to, shown beside the real figures. null when live.
+      test: l.mode === "test" ? { collectedKobo: t?.kobo ?? 0, paymentsCount: t?.count ?? 0 } : null,
       // Whether the public page takes new payments right now, and if not, why.
       available: !reasons[i],
       unavailableReason: reasons[i],
@@ -272,7 +278,7 @@ export const listPaymentLinks: RequestHandler = async (req, res) => {
 
 /**
  * Totals for the member's branches (or one branch): links by status, and money collected all time and in the
- * last 30 days. Test payments are never counted.
+ * last 30 days. Test payments are never counted in those; `test` is what links in test mode have simulated.
  */
 export const getPaymentLinksSummary: RequestHandler = async (req, res) => {
   const query = z.object({ branch: objectId.optional() }).parse(req.query);
@@ -287,11 +293,14 @@ export const getPaymentLinksSummary: RequestHandler = async (req, res) => {
     ]),
   ]);
   const count = (status: string) => byStatus.find((s) => s._id === status)?.count ?? 0;
+  const testLinks = await PaymentLinkModel.find({ ...base, mode: "test" }).select("_id");
+  const tests = [...(await testTotals(testLinks.map((l) => l._id))).values()];
   res.json({
     links: { active: count("active"), inactive: count("inactive") },
     collectedKobo: allTime[0]?.kobo ?? 0,
     paymentsCount: allTime[0]?.count ?? 0,
     last30Days: { collectedKobo: recent[0]?.kobo ?? 0, paymentsCount: recent[0]?.count ?? 0 },
+    test: { collectedKobo: tests.reduce((n, t) => n + t.kobo, 0), paymentsCount: tests.reduce((n, t) => n + t.count, 0) },
     currency: "NGN",
   });
 };
@@ -431,7 +440,10 @@ export const updatePaymentLink: RequestHandler<IdParams> = async (req, res) => {
   if (body.title) link.title = body.title;
   if (body.phone) link.phone = body.phone;
   if (body.status) link.status = body.status;
+  // Going live clears the test payments: they leave the test table, the totals and the public page.
+  const goingLive = body.mode === "live" && link.mode === "test";
   if (body.mode) link.mode = body.mode;
+  if (goingLive) await CheckoutModel.updateMany({ link: link._id, mode: "test", testClearedAt: { $exists: false } }, { testClearedAt: new Date() });
   if (body.allowedOrigins !== undefined) link.set("allowedOrigins", body.allowedOrigins ?? []);
   link.set("amountKobo", fixed ?? undefined);
   link.set("minAmountKobo", min ?? undefined);
@@ -444,6 +456,8 @@ export const updatePaymentLink: RequestHandler<IdParams> = async (req, res) => {
   await link.save();
   // The list replaces the saved one; pictures left out are deleted. null or [] clears.
   if (body.images !== undefined) await setLinkImages(link, pictures);
+  // Open pages reload: live or test, on or off, the details and pictures.
+  publishLinkEvent(link._id, "link");
   res.json((await serializeLinks(req, [link]))[0]);
 };
 
@@ -457,6 +471,7 @@ export const deletePaymentLink: RequestHandler<IdParams> = async (req, res) => {
   await CheckoutModel.deleteMany({ link: link._id, mode: "test" });
   await link.deleteOne();
   await deleteLinkImages(link._id);
+  publishLinkEvent(link._id, "link");
   res.status(204).end();
 };
 
@@ -529,6 +544,8 @@ export const listCheckouts: RequestHandler = async (req, res) => {
     // Checkouts from before embedding have no source: they came from the page.
     ...(query.source && (query.source === "page" ? { source: { $ne: "embed" } } : { source: "embed" })),
     ...modeFilter(query.mode),
+    // Test payments cleared when their link went live are gone from the lists.
+    testClearedAt: { $exists: false },
     ...(re && { $or: [{ "payer.name": re }, { "payer.email": re }, { reference: re }, { clientReference: re }] }),
   };
   const [items, total] = await Promise.all([

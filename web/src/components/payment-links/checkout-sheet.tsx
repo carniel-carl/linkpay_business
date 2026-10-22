@@ -55,7 +55,9 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
               : received
                 ? `Received ${formatDateTime(c.paidAt ?? undefined)}.`
                 : c.mode === "test"
-                  ? "A test payment: no money moves. Simulate the transfer below to see what happens when one arrives."
+                  ? c.donor
+                    ? "A test gift: no money moves. Simulate it below to see it land on the fundraiser's page."
+                    : "A test payment: no money moves. Simulate the transfer below to see what happens when one arrives."
                   : c.status === "expired"
                     ? "Their time to pay ran out with nothing matched. A late transfer can still be linked below."
                     : `Waiting for their transfer until ${formatDateTime(c.expiresAt)}.`}
@@ -172,6 +174,8 @@ function Row({ label, children }: { label: React.ReactNode; children: React.Reac
 function SimulatePayment({ checkout }: { checkout: LinkCheckout }) {
   const [busy, setBusy] = useState<"paid" | "underpaid" | null>(null)
   const [error, setError] = useState<string>()
+  // A donation checkout: any amount that arrives is a whole gift, so there's no part payment to try.
+  const donation = !!checkout.donor
 
   async function simulate(outcome: "paid" | "underpaid") {
     setBusy(outcome)
@@ -179,29 +183,39 @@ function SimulatePayment({ checkout }: { checkout: LinkCheckout }) {
     const result = await simulateCheckout(checkout._id, outcome, checkout.link?._id)
     setBusy(null)
     if (!result.ok) return setError(result.error)
-    toast.success(outcome === "paid" ? "Test payment received. We've emailed a test receipt." : "Test part payment received.")
+    toast.success(
+      donation
+        ? "Test gift received. It shows on the fundraiser's page until the link goes live."
+        : outcome === "paid"
+          ? "Test payment received. We've emailed a test receipt."
+          : "Test part payment received.",
+    )
   }
 
   return (
     <section aria-labelledby="simulate-title" className="grid gap-4 p-6">
       <div className="grid gap-1">
         <h3 id="simulate-title" className="text-sm font-medium">
-          Simulate the payment
+          {donation ? "Simulate the gift" : "Simulate the payment"}
         </h3>
         <p className="text-sm text-muted-foreground">
-          Marks this test checkout as paid, as if {checkout.payer.name}&apos;s transfer had arrived. A part payment sends half the price.
+          {donation
+            ? `Marks this test gift as received, as if ${checkout.payer.name}'s transfer had arrived. It shows on the fundraiser's page until the link goes live.`
+            : `Marks this test checkout as paid, as if ${checkout.payer.name}'s transfer had arrived. A part payment sends half the price.`}
         </p>
       </div>
       <FormError message={error} />
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => simulate("paid")} disabled={!!busy}>
           {busy === "paid" ? <Spinner /> : <FlaskConical data-icon="inline-start" aria-hidden />}
-          Simulate payment
+          {donation ? "Simulate the gift" : "Simulate payment"}
         </Button>
-        <Button variant="outline" onClick={() => simulate("underpaid")} disabled={!!busy}>
-          {busy === "underpaid" && <Spinner />}
-          Simulate part payment
-        </Button>
+        {!donation && (
+          <Button variant="outline" onClick={() => simulate("underpaid")} disabled={!!busy}>
+            {busy === "underpaid" && <Spinner />}
+            Simulate part payment
+          </Button>
+        )}
       </div>
     </section>
   )

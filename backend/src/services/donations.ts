@@ -16,6 +16,7 @@ import {
 import { HttpError } from "../utils/HttpError";
 import { audit, type Actor } from "./audit";
 import { raiseFlag } from "./compliance";
+import { publishLinkEvent } from "./linkStream";
 import { linkReported, paymentLinkModerated } from "./notificationEvents";
 
 type StaffActor = Actor & { type: "staff" };
@@ -27,11 +28,15 @@ type StaffActor = Actor & { type: "staff" };
 export const DONATION_SORTS = ["recent", "top"] as const;
 export type DonationSort = (typeof DONATION_SORTS)[number];
 
-/** Real donations that arrived and that staff haven't hidden (test-mode payments never show). */
-const shownDonations = (linkId: Types.ObjectId): Record<string, unknown> => ({
-  link: linkId,
+/**
+ * Donations that arrived and that staff haven't hidden. Test-mode payments show only while the link itself is
+ * in test mode, so the business can see a simulated gift land; they vanish once it goes live.
+ */
+const shownDonations = (link: Pick<PaymentLinkDocument, "_id" | "mode">): Record<string, unknown> => ({
+  link: link._id,
   status: { $in: ["paid", "underpaid"] },
-  mode: { $ne: "test" },
+  ...(link.mode !== "test" && { mode: { $ne: "test" } }),
+  testClearedAt: { $exists: false },
   "hidden.at": { $exists: false },
 });
 
@@ -53,6 +58,8 @@ export function describePublicDonation(c: CheckoutDocument) {
     amountKobo: c.paidKobo ?? 0,
     message: c.donor?.message ?? null,
     paidAt: c.paidAt ?? null,
+    // A simulated gift, shown while the link is in test mode.
+    test: c.mode === "test",
   };
 }
 
@@ -62,7 +69,7 @@ export function describePublicDonation(c: CheckoutDocument) {
  */
 export async function listPublicDonations(link: PaymentLinkDocument, opts: { sort: DonationSort; before?: string; take: number }) {
   const field = opts.sort === "top" ? "paidKobo" : "paidAt";
-  const filter: Record<string, unknown> = shownDonations(link._id);
+  const filter: Record<string, unknown> = shownDonations(link);
   if (opts.before) {
     const { value, id } = decodeCursor(opts.before);
     const v = field === "paidAt" ? new Date(value) : value;
@@ -94,6 +101,44 @@ export function donationProgress(link: PaymentLinkDocument) {
   };
 }
 
+/** Simulated payments per link (test checkouts that were "paid"), keyed by link id. */
+export async function testTotals(linkIds: Types.ObjectId[]) {
+  const totals = new Map<string, { kobo: number; count: number; last: Date | null }>();
+  if (!linkIds.length) return totals;
+  const rows = await CheckoutModel.aggregate<{ _id: Types.ObjectId; kobo: number; count: number; last: Date | null }>([
+    { $match: { link: { $in: linkIds }, mode: "test", status: { $in: ["paid", "underpaid"] }, testClearedAt: { $exists: false } } },
+    { $group: { _id: "$link", kobo: { $sum: "$paidKobo" }, count: { $sum: 1 }, last: { $max: "$paidAt" } } },
+  ]);
+  for (const r of rows) totals.set(String(r._id), { kobo: r.kobo, count: r.count, last: r.last });
+  return totals;
+}
+
+/**
+ * A fundraiser's figures with its test gifts counted, while the link is in test mode (`testKobo` says how much
+ * of `raisedKobo` is test money). Live, they're the link's own totals and `testKobo` is 0. Used by the public
+ * page and the dashboard, so both show the same; real totals (`collectedKobo`) and balances never include them.
+ */
+export function progressWithTestGifts(link: PaymentLinkDocument, test: { kobo: number; count: number; last: Date | null } | undefined) {
+  const live = donationProgress(link);
+  if (link.mode !== "test" || !test) return { ...live, testKobo: 0 };
+  const raisedKobo = live.raisedKobo + test.kobo;
+  const last = [live.lastDonationAt, test.last].filter((d): d is Date => !!d).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+  return {
+    ...live,
+    raisedKobo,
+    donationsCount: live.donationsCount + test.count,
+    percent: live.goalKobo ? Math.floor((raisedKobo / live.goalKobo) * 100) : null,
+    lastDonationAt: last,
+    testKobo: test.kobo,
+  };
+}
+
+/** The figures the public page shows (see `progressWithTestGifts`). */
+export async function publicDonationProgress(link: PaymentLinkDocument) {
+  if (link.mode !== "test") return progressWithTestGifts(link, undefined);
+  return progressWithTestGifts(link, (await testTotals([link._id])).get(link.id));
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Reports from the public
 // ---------------------------------------------------------------------------------------------------------
@@ -110,7 +155,7 @@ export async function reportLink(link: PaymentLinkDocument, input: NewLinkReport
   let checkout: CheckoutDocument | null = null;
   if (input.donationId) {
     checkout = Types.ObjectId.isValid(input.donationId)
-      ? await CheckoutModel.findOne({ _id: input.donationId, ...shownDonations(link._id) })
+      ? await CheckoutModel.findOne({ _id: input.donationId, ...shownDonations(link) })
       : null;
     if (!checkout) throw new HttpError(404, "That donation isn't on this page", "DONATION_NOT_FOUND");
   }
@@ -141,6 +186,7 @@ export async function takeDownLink(actor: StaffActor, link: PaymentLinkDocument,
   if (link.takenDown?.at) return link;
   link.set("takenDown", { at: new Date(), by: actor.staff, note });
   await link.save();
+  publishLinkEvent(link._id, "link");
   await audit(actor, {
     action: "payment_link.taken_down",
     business: link.business,
@@ -157,6 +203,7 @@ export async function restoreLink(actor: StaffActor, link: PaymentLinkDocument, 
   if (!link.takenDown?.at) throw new HttpError(409, "This link isn't taken down", "PAYMENT_LINK_NOT_TAKEN_DOWN");
   link.set("takenDown", undefined);
   await link.save();
+  publishLinkEvent(link._id, "link");
   await audit(actor, {
     action: "payment_link.restored",
     business: link.business,
@@ -174,6 +221,7 @@ export async function setDonationHidden(actor: StaffActor, checkout: CheckoutDoc
   if (hidden === !!checkout.hidden?.at) return checkout;
   checkout.set("hidden", hidden ? { at: new Date(), by: actor.staff, note } : undefined);
   await checkout.save();
+  publishLinkEvent(checkout.link, "link");
   const who = checkout.donor?.anonymous ? "an anonymous donor" : checkout.payer!.name;
   await audit(actor, {
     action: hidden ? "donation.hidden" : "donation.shown",

@@ -19,6 +19,7 @@ Product decisions made here (open question 21 in IMPLEMENTATION.md):
   - `suggestedAmountsKobo` (up to 4, sorted smallest first, each at least the minimum) are the quick picks on the page.
   - Neither is allowed on a payment link (`400 NOT_A_DONATION_LINK`).
 - **Raised** is the link's `collectedKobo` and **donations** is its `paymentsCount`. Both include the 1–99 kobo each checkout adds for matching, and both exclude test-mode payments.
+- **Test gifts** (product owner, 2026-10-22): while the link is in test mode, the public page also lists its simulated gifts (`test: true`) and counts them in its figures (`testKobo` says how much of `raisedKobo` is test money), so the business can watch a gift land. They never reach the link's own totals, the dashboard or a balance, and they leave the public page the moment the link goes live. A simulated part payment on a donation link is still a whole gift (the pay page offers only "Simulate the gift").
 - A matched donation is always `paid` at the amount that arrived (never `underpaid`).
   - The receipt email says "Donation received".
   - `payment_link.paid` is titled "New donation" and names the donor even when they're anonymous on the page.
@@ -49,7 +50,7 @@ Both go to the creator and everyone with `payments.manage` on the branch. `link`
 | Route | Notes |
 | --- | --- |
 | `GET pay/:slug` | Adds `link.kind`, and `donation: { goalKobo, raisedKobo, donationsCount, percent, lastDonationAt, suggestedAmountsKobo, recent: { items: Donation[], nextBefore } } \| null` (the first 20 donors, newest first). A taken-down link still answers, with `available: false, unavailableReason: "taken_down"` |
-| `GET pay/:slug/donations?sort=recent\|top&before=&take=` | `{ items: Donation[], nextBefore: string \| null, progress }`. `take` is 1–50 (default 20). `top` is largest first. Pass the previous `nextBefore` as `before`. Payment links return `404 NOT_A_DONATION_LINK`. **Live updates:** poll page one every 15 s and merge by `_id`. `progress` has the same shape as `donation` without `recent` |
+| `GET pay/:slug/donations?sort=recent\|top&before=&take=` | `{ items: Donation[], nextBefore: string \| null, progress }`. `take` is 1–50 (default 20). `top` is largest first. Pass the previous `nextBefore` as `before`. Payment links return `404 NOT_A_DONATION_LINK`. Public `progress` (here and on `GET pay/:slug`) adds `testKobo` (0 when live; see Test gifts in §1). **Live updates:** listen to `GET pay/:slug/events` (see `docs/briefs/payment-links.md` §4) and fetch page one on `paid`, or poll it every 15 s (60 s while the stream is open), merging by `_id`. `progress` has the same shape as `donation` without `recent` |
 | `POST pay/:slug/checkouts` | Adds `anonymous?: boolean`, `message?: string` (≤ 280). Both are ignored on payment links |
 | `POST pay/:slug/reports` | `{ reason, details?, donationId?, name?, email? }` → `201 { received: true }`. Limited to 5 an hour per IP (`429 TOO_MANY_REPORTS`). `reason: "other"` needs `details` of 10+ characters. A `donationId` that isn't shown on the page → `404 DONATION_NOT_FOUND` |
 | `PublicCheckout` | Adds `link.kind` and `donor: { anonymous, message } \| null` |
@@ -57,10 +58,10 @@ Both go to the creator and everyone with `payments.manage` on the branch. `link`
 `Donation` (public):
 
 ```ts
-{ _id, name: string | null /* null when anonymous */, anonymous: boolean, amountKobo, message: string | null, paidAt }
+{ _id, name: string | null /* null when anonymous */, anonymous: boolean, amountKobo, message: string | null, paidAt, test: boolean /* a simulated gift, listed only while the link is in test mode */ }
 ```
 
-The public API never returns emails. Hidden donations and test payments never show.
+The public API never returns emails. Hidden donations never show; test payments show only while the link is in test mode.
 
 Report reasons (`LINK_REPORT_REASONS`; the labels are the form's wording):
 - `fraud`: It's a scam or the money won't go where it says

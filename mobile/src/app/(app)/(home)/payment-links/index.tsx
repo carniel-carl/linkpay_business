@@ -175,6 +175,11 @@ function Summary({ summary, failed }: { summary?: PaymentLinkSummary; failed: bo
         <Text className="text-[13px] text-muted-foreground">
           {summary ? (summary.paymentsCount === 1 ? "1 payment in all" : `${summary.paymentsCount} payments in all`) : " "}
         </Text>
+        {!!summary?.test?.collectedKobo && (
+          <Text className="text-[13px] leading-[18px] text-warning-foreground">
+            Plus {formatNaira(summary.test.collectedKobo)} in test payments on links in test mode, not real money.
+          </Text>
+        )}
       </View>
       {summary && (
         <View className="flex-row gap-6 border-t border-border pt-3">

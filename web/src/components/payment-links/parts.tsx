@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/common/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import type { CheckoutStatus, LinkCheckout, PaymentLink, PaymentMode } from "@/lib/api/types"
+import { formatNaira } from "@/lib/format"
 import { CHECKOUT_STATUS_LABELS, linkStateLabel, originLabel } from "@/lib/payment-links"
 import { cn } from "@/lib/utils"
 
@@ -56,9 +57,19 @@ export function DonationBar({ link, className }: { link: Pick<PaymentLink, "dona
         aria-valuenow={Math.round(pct)}
         className="h-1.5 w-20 overflow-hidden rounded-full bg-muted"
       >
-        <span className="block h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+        <span className="block h-full rounded-full bg-(--fund-progress)" style={{ width: `${pct}%` }} />
       </span>
       <span className="text-xs text-muted-foreground figure">{d.percent}%</span>
+    </span>
+  )
+}
+
+/** "+ ₦5,000 in test" under a test-mode link's collected figure: simulated payments, never real money. */
+export function TestTotal({ test, className }: { test: PaymentLink["test"]; className?: string }) {
+  if (!test?.collectedKobo) return null
+  return (
+    <span className={cn("inline-flex items-center gap-1 text-xs whitespace-nowrap text-warning-foreground", className)}>
+      <FlaskConical className="size-3" aria-hidden />+ <span className="figure">{formatNaira(test.collectedKobo)}</span> in test
     </span>
   )
 }

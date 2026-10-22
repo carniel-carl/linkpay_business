@@ -156,7 +156,7 @@ describe("test mode", () => {
     expect(refused.body.code).toBe("CHECKOUT_IS_LIVE");
   });
 
-  test("going live keeps the slug; new checkouts are live and the old test checkout isn't handed back", async () => {
+  test("going live keeps the slug and clears the test payments; new checkouts are live and the old test checkout isn't handed back", async () => {
     const { owner, headOfficeId, headVa } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 12_000_00, mode: "test" });
     const testCheckout = (await start(link.slug)).body;
@@ -176,9 +176,12 @@ describe("test mode", () => {
     await receive(headVa, live.body.amountKobo);
     expect((await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body).toMatchObject({ paymentsCount: 1, collectedKobo: live.body.amountKobo });
 
-    // Filters.
-    const tests = (await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&mode=test`, { token: owner.token })).body;
-    expect(tests.items.map((c: any) => c.mode)).toEqual(["test"]);
+    // Filters. Going live cleared the link's test payments from the lists (the checkout itself still opens).
+    const tests = (await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&mode=test&status=all`, { token: owner.token })).body;
+    expect(tests.items).toEqual([]);
+    const cleared = await CheckoutModel.findOne({ token: testCheckout.token });
+    expect(cleared?.testClearedAt).toBeInstanceOf(Date);
+    expect((await t.api("GET", `/api/payment-links/checkouts/${cleared!.id}`, { token: owner.token })).status).toBe(200);
     const lives = (await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&mode=live`, { token: owner.token })).body;
     expect(lives.items.map((c: any) => c.mode)).toEqual(["live"]);
     await createLink(owner.token, { branch: headOfficeId, title: "Trial", mode: "test" });

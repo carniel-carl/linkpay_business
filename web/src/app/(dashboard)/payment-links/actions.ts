@@ -82,8 +82,14 @@ export async function deletePaymentLink(linkId: string) {
 }
 
 /** A donation link's donors, newest first, a page at a time (the detail page's virtualized list). */
-export async function loadLinkDonors(linkId: string, skip: number) {
-  const params = new URLSearchParams({ link: id.parse(linkId), status: "received", skip: String(Math.max(0, Math.floor(skip))), take: "50" })
+export async function loadLinkDonors(linkId: string, skip: number, mode: "live" | "test" = "live") {
+  const params = new URLSearchParams({
+    link: id.parse(linkId),
+    status: "received",
+    mode: mode === "test" ? "test" : "live",
+    skip: String(Math.max(0, Math.floor(skip))),
+    take: "50",
+  })
   return runAction(() => api<LinkCheckoutList>(`/api/payment-links/checkouts?${params}`))
 }
 

@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner"
 import type { LinkCheckout, LinkCheckoutList } from "@/lib/api/types"
 import { formatNaira, initials, timeAgo } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { TestBadge } from "./parts"
 
 const ROW_ESTIMATE = 72
 const PREFETCH_ROWS = 8
@@ -19,7 +20,7 @@ const PREFETCH_ROWS = 8
  * when the donor is anonymous on the page), messages, and donations LinkPay took off the page. Only the rows
  * on screen are drawn; more load as you scroll. A row opens the payment's sheet.
  */
-export function DonorsPanel({ linkId, initial }: { linkId: string; initial: LinkCheckoutList }) {
+export function DonorsPanel({ linkId, initial, mode = "live" }: { linkId: string; initial: LinkCheckoutList; mode?: "live" | "test" }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -33,7 +34,7 @@ export function DonorsPanel({ linkId, initial }: { linkId: string; initial: Link
   const loadMore = useCallback(async () => {
     if (loading || !hasMore) return
     setLoading(true)
-    const result = await loadLinkDonors(linkId, items.length)
+    const result = await loadLinkDonors(linkId, items.length, mode)
     setLoading(false)
     if (!result.ok) return setError(true)
     setError(false)
@@ -42,7 +43,7 @@ export function DonorsPanel({ linkId, initial }: { linkId: string; initial: Link
       const known = new Set(current.map((c) => c._id))
       return [...current, ...result.data.items.filter((c) => !known.has(c._id))]
     })
-  }, [hasMore, items.length, linkId, loading])
+  }, [hasMore, items.length, linkId, loading, mode])
 
   const count = items.length + (hasMore ? 1 : 0)
   const virtualizer = useVirtualizer({
@@ -132,6 +133,7 @@ function DonorRow({ checkout: c, onOpen }: { checkout: LinkCheckout; onOpen: () 
         <span className="flex items-baseline justify-between gap-3">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate font-medium">{c.payer.name}</span>
+            <TestBadge mode={c.mode} className="shrink-0" />
             {anonymous && (
               <Badge variant="muted" className="shrink-0">
                 Anonymous on the page

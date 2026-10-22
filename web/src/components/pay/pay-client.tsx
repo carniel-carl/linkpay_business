@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { ArrowLeft, ArrowRight, CalendarX2, Check, CircleAlert, CircleSlash, Clock, FlaskConical, Landmark, X } from "lucide-react"
+import { ArrowLeft, ArrowRight, CalendarX2, Check, CircleAlert, CircleSlash, Clock, FlaskConical, Landmark, RotateCcw, X } from "lucide-react"
 import { CopyButton } from "@/components/accounts/copy-button"
 import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ import { formatDateTime, formatNaira } from "@/lib/format"
 import { countdown, publicLinkImageSrc } from "@/lib/payment-links"
 import { koboToInput, parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
+import { useLinkEvents } from "./use-link-events"
 import {
   DonateBar,
   DonorOptions,
@@ -170,7 +171,24 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
   }
 
   // Donation links: the live progress and donor list, and the report form (about the page or one donation).
-  const feed = useDonationFeed(data.link.slug, data.donation)
+  // Live updates from the link's stream: when the link changes (live or test, on or off, its details), reload
+  // the page's data and the donor list; when a payment lands, pull in donations and re-check this payer's own
+  // checkout now instead of at the next poll. Polling stays as the safety net, slower while the stream is open.
+  const [streaming, setStreaming] = useState(false)
+  const [nudge, setNudge] = useState(0)
+  const feed = useDonationFeed(data.link.slug, data.donation, streaming)
+  useLinkEvents(data.link.slug, {
+    onLink: () => {
+      router.refresh()
+      feed?.reload()
+      setNudge((n) => n + 1)
+    },
+    onPaid: () => {
+      feed?.refresh()
+      setNudge((n) => n + 1)
+    },
+    onConnected: setStreaming,
+  })
   const [report, setReport] = useState<{ donation: PublicDonation | null } | null>(null)
   const refreshFeed = feed?.refresh
 
@@ -218,14 +236,28 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
   const { business, link } = data
   const vars = brandVars(business.palette)
   const images = (link.images ?? []).map((img) => ({ src: publicLinkImageSrc(link.slug, img), width: img.width, height: img.height }))
-  const step: PayStep = !checkout ? (data.available ? 0 : -1) : checkout.status === "paid" ? 2 : 1
+  // The checkout the card shows. A test checkout that isn't paid yet stops counting once the link goes live
+  // (going live clears test payments), so the card starts over for a real one. Anything else carries on: a live
+  // checkout can still be paid whatever the link does, and a paid one keeps its thank-you and reference.
+  const inProgress = !!checkout && (checkout.status === "pending" || checkout.status === "expired")
+  const current = inProgress && checkout!.mode === "test" && data.mode === "live" ? null : checkout
+  const step: PayStep = !current ? (data.available ? 0 : -1) : current.status === "paid" ? 2 : 1
   const giftStep: GiftStep = step === 2 ? 3 : step === 1 ? 2 : onDetails ? 1 : 0
-  // A checkout keeps the mode it started in, even if the link has switched since.
-  const testMode = (checkout?.mode ?? data.mode) === "test"
+  // A transfer in progress keeps the mode it started in (its details are real or placeholders); otherwise the
+  // strip follows the link as it is now, live updates included.
+  const testMode = (current && inProgress ? current.mode : data.mode) === "test"
 
   // Keyed by step so each step makes its own entrance.
-  const body = checkout ? (
-    <CheckoutPanel key={`c-${checkout.status === "paid" ? "paid" : "open"}`} checkout={checkout} embed={embed} onUpdate={updated} onBack={startAgain} />
+  const body = current ? (
+    <CheckoutPanel
+      key={`c-${current.status === "paid" ? "paid" : "open"}`}
+      checkout={current}
+      embed={embed}
+      nudge={nudge}
+      available={data.available}
+      onUpdate={updated}
+      onBack={startAgain}
+    />
   ) : data.available ? (
     <PayForm key="form" data={data} embed={embed} prefill={prefill} onStarted={started} onStage={formStage} />
   ) : (
@@ -275,7 +307,7 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
             }
           />
         </header>
-        {testMode && <TestModeStrip />}
+        {testMode && <TestModeStrip donation={!!feed} />}
         {feed ? (
           step >= 0 && <GiftSteps step={giftStep} className="px-6 pt-6 sm:px-8" />
         ) : (
@@ -321,17 +353,17 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
         sheetRef={sheet}
         sheet={
           <>
-            {testMode && <TestModeStrip />}
+            {testMode && <TestModeStrip donation />}
             {step >= 0 && (
               <>
-                <TicketStub number={feed.progress.donationsCount + 1} />
+                {step < 2 && <TicketStub number={feed.progress.donationsCount + 1} />}
                 <GiftSteps step={giftStep} className="px-6 pt-5 sm:px-7" />
               </>
             )}
             {body}
           </>
         }
-        canGive={!checkout && data.available}
+        canGive={!current && data.available}
         onReport={(donation) => setReport({ donation })}
         reportDialog={reportDialog}
       />
@@ -421,54 +453,59 @@ function FundraiserPage({
   }
 
   const hasPictures = images.length > 0
-  // The left column's rows, so the roll and the card span exactly them (the roll joins the column below xl).
-  const rows = 4 + (hasPictures ? 1 : 0) + (story ? 1 : 0)
+  // The left column's rows (title, pictures and total, story), so the card spans exactly them and the roll starts below.
+  const rows = 2 + (story ? 1 : 0)
   return (
     <main style={vars} className="pay-brand min-h-dvh bg-(--fund-ground) [--notch:var(--fund-ground)]">
-      <div
-        style={{ "--rows-lg": rows, "--rows-xl": rows - 1 } as React.CSSProperties}
-        className="mx-auto grid w-full max-w-360 gap-x-10 gap-y-8 px-4 pt-6 pb-28 sm:px-6 sm:pt-10 lg:grid-cols-[minmax(0,1fr)_24rem] lg:px-10 lg:pb-16 xl:grid-cols-[minmax(0,1fr)_20rem_24rem] xl:gap-x-12 xl:pt-0 2xl:grid-cols-[minmax(0,1fr)_22rem_25rem]"
-      >
-        <header className="page-enter grid gap-6 lg:col-start-1 xl:pt-10">
-          <div className="flex items-center gap-3">
-            <BusinessMark name={businessName} logoSrc={logoSrc} className="bg-(--biz) text-(--on-biz)" />
-            <p className="grid min-w-0 flex-1 leading-snug">
-              <span className="truncate text-[15px] font-medium">{businessName}</span>
-              <span className="text-sm text-muted-foreground">is raising money</span>
-            </p>
-            <ShareButton title={title} className="rounded-full bg-transparent" />
+      <div className="mx-auto grid w-full max-w-360 gap-y-8 px-4 pt-6 pb-28 sm:px-6 sm:pt-10 lg:px-10 lg:pb-16">
+        {/* Its own grid, so the sticky card stops at the roll instead of riding over it. */}
+        <div
+          style={{ "--rows": rows } as React.CSSProperties}
+          className="grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_24rem] xl:gap-x-12 2xl:grid-cols-[minmax(0,1fr)_25rem]"
+        >
+          <header className="page-enter grid gap-6 lg:col-start-1">
+            <div className="flex items-center gap-3">
+              <BusinessMark name={businessName} logoSrc={logoSrc} className="bg-(--biz) text-(--on-biz)" />
+              <p className="grid min-w-0 flex-1 leading-snug">
+                <span className="truncate text-[15px] font-medium">{businessName}</span>
+                <span className="text-sm text-muted-foreground">is raising money</span>
+              </p>
+              <ShareButton title={title} className="rounded-full bg-transparent" />
+            </div>
+            <h1 id="pay-title" className="type-display text-[2.75rem] text-balance sm:text-6xl 2xl:text-[4rem]">
+              {title}
+            </h1>
+          </header>
+
+          {/* The pictures stay short, so the total and the story are on the first screen. Side by side once the column is wide enough. */}
+          <div className="@container lg:col-start-1">
+            <div className="grid gap-8 @3xl:grid-cols-2 @3xl:items-center @3xl:gap-10">
+              {hasPictures && <FundraiserGallery images={images} title={title} />}
+              <RaisedSummary progress={feed.progress} latest={feed.items[0] ?? null} />
+            </div>
           </div>
-          <h1 id="pay-title" className="type-display text-[2.75rem] text-balance sm:text-6xl 2xl:text-[4rem]">
-            {title}
-          </h1>
-        </header>
 
-        {hasPictures && <FundraiserGallery images={images} title={title} className="lg:col-start-1" />}
+          {story && (
+            <section aria-labelledby="story-title" className="grid gap-3 lg:col-start-1">
+              <h2 id="story-title" className="type-display text-2xl">
+                About this fundraiser
+              </h2>
+              <p className="max-w-[65ch] text-[17px] leading-relaxed text-pretty whitespace-pre-line">{story}</p>
+            </section>
+          )}
 
-        <RaisedSummary progress={feed.progress} latest={feed.items[0] ?? null} className="lg:col-start-1" />
-
-        <aside className="lg:sticky lg:top-6 lg:col-start-2 lg:max-h-[calc(100dvh-3rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:rounded-2xl lg:[grid-row:1/span_var(--rows-lg)] xl:top-10 xl:col-start-3 xl:mt-10 xl:max-h-[calc(100dvh-5rem)] xl:[grid-row:1/span_var(--rows-xl)]">
-          <section ref={sheetRef} aria-label="Donate" className="surface scroll-mt-4 overflow-hidden">
-            {sheet}
-          </section>
-          <Secured businessName={businessName} className="mt-4 px-2 text-center text-muted-foreground" />
-        </aside>
-
-        {story && (
-          <section aria-labelledby="story-title" className="grid gap-3 lg:col-start-1">
-            <h2 id="story-title" className="type-display text-2xl">
-              About this fundraiser
-            </h2>
-            <p className="max-w-[65ch] text-[17px] leading-relaxed text-pretty whitespace-pre-line">{story}</p>
-          </section>
-        )}
-
-        {/* On wide screens the roll hangs the full height of the window beside the story, and stays as the page scrolls. */}
-        <div className="lg:col-start-1 xl:col-start-2 xl:[contain:size] xl:[grid-row:1/span_var(--rows-xl)]">
-          <TicketRoll slug={slug} feed={feed} onReport={onReport} className="max-h-[min(46rem,82dvh)] xl:sticky xl:top-0 xl:h-dvh xl:max-h-none" />
+          <aside className="lg:sticky lg:top-6 lg:col-start-2 lg:max-h-[calc(100dvh-3rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:rounded-2xl lg:row-[1/span_var(--rows)]">
+            <section ref={sheetRef} aria-label="Donate" className="surface scroll-mt-4 overflow-hidden">
+              {sheet}
+            </section>
+            <Secured businessName={businessName} className="mt-4 px-2 text-center text-muted-foreground" />
+          </aside>
         </div>
 
-        <ReportLink onClick={() => onReport(null)} className="justify-self-start lg:col-start-1" />
+        {/* Everyone who's given, across the full width below the story and the card. */}
+        <TicketRoll slug={slug} feed={feed} onReport={onReport} className="max-h-[min(48rem,85dvh)]" />
+
+        <ReportLink onClick={() => onReport(null)} className="justify-self-start" />
       </div>
       <DonateBar progress={feed.progress} visible={canGive && !cardInView} onDonate={goGive} />
       {reportDialog}
@@ -477,13 +514,13 @@ function FundraiserPage({
 }
 
 /** Test mode (the business is trying the page out): says so on every step. */
-function TestModeStrip() {
+function TestModeStrip({ donation = false }: { donation?: boolean }) {
   return (
     <p className="flex items-start gap-2.5 border-b border-dashed border-warning/50 bg-warning-subtle px-6 py-3 text-sm text-warning-foreground sm:px-8">
       <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
       <span>
         <span className="font-semibold">Test mode.</span> No real money moves. The bank details are placeholders, and you can
-        simulate the payment.
+        simulate the {donation ? "gift. Test gifts show on this page until it goes live." : "payment."}
       </span>
     </p>
   )
@@ -851,11 +888,17 @@ function Unavailable({ data }: { data: PublicPaymentLink }) {
 function CheckoutPanel({
   checkout: c,
   embed,
+  nudge,
+  available,
   onUpdate,
   onBack,
 }: {
   checkout: PublicCheckout
   embed: EmbedMode
+  /** Goes up when the link's live stream says a payment landed: check this checkout now. */
+  nudge: number
+  /** Whether the link takes payments right now (kept live by the stream). */
+  available: boolean
   onUpdate: (c: PublicCheckout) => void
   onBack: () => void
 }) {
@@ -893,7 +936,20 @@ function CheckoutPanel({
     }
   }, [c.token, watching, expired, onUpdate])
 
-  if (c.status === "paid") return <Paid checkout={c} embed={embed} />
+  // A payment landed on the link (live stream): it may be this one, so look now.
+  useEffect(() => {
+    if (!nudge || !waiting) return
+    let stopped = false
+    fetch(`/api/pay/checkouts/${encodeURIComponent(c.token)}`, { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<PublicCheckout>) : null))
+      .then((next) => next && !stopped && onUpdate(next))
+      .catch(() => {})
+    return () => {
+      stopped = true
+    }
+  }, [nudge, waiting, c.token, onUpdate])
+
+  if (c.status === "paid") return <Paid checkout={c} embed={embed} available={available} onAgain={onBack} />
   if (c.status === "underpaid") return <Underpaid checkout={c} />
 
   const amountText = koboToInput(c.amountKobo)
@@ -1016,6 +1072,7 @@ function CheckoutPanel({
 function SimulateTransfer({ checkout: c, onUpdate }: { checkout: PublicCheckout; onUpdate: (c: PublicCheckout) => void }) {
   const [busy, setBusy] = useState<"paid" | "underpaid" | null>(null)
   const [error, setError] = useState<string>()
+  const donation = c.link.kind === "donation"
 
   async function simulate(outcome: "paid" | "underpaid") {
     setBusy(outcome)
@@ -1039,7 +1096,9 @@ function SimulateTransfer({ checkout: c, onUpdate }: { checkout: PublicCheckout;
   return (
     <div className="grid gap-3 border-t border-dashed px-6 py-5 sm:px-8 short:py-4">
       <p className="text-sm leading-relaxed text-pretty text-muted-foreground">
-        Don&apos;t send money to these details. Simulate the transfer to see what your customers see once theirs lands.
+        {donation
+          ? "Don't send money to these details. Simulate the gift to see it land: it prints on the roll and counts in the total until the fundraiser goes live."
+          : "Don't send money to these details. Simulate the transfer to see what your customers see once theirs lands."}
       </p>
       {error && (
         <p role="alert" className="flex gap-2 rounded-xl bg-destructive-subtle px-3.5 py-3 text-sm text-destructive">
@@ -1047,15 +1106,18 @@ function SimulateTransfer({ checkout: c, onUpdate }: { checkout: PublicCheckout;
           {error}
         </p>
       )}
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+      <div className={cn("grid gap-2", !donation && "sm:grid-cols-[minmax(0,1fr)_auto]")}>
         <Button type="button" size="lg" disabled={!!busy} onClick={() => simulate("paid")} className={BIZ_BUTTON}>
           {busy === "paid" ? <Spinner /> : <FlaskConical data-icon="inline-start" aria-hidden />}
-          Simulate payment
+          {donation ? "Simulate the gift" : "Simulate payment"}
         </Button>
-        <Button type="button" size="lg" variant="outline" disabled={!!busy} onClick={() => simulate("underpaid")} className="h-12 text-[15px]">
-          {busy === "underpaid" && <Spinner />}
-          Simulate part payment
-        </Button>
+        {/* Any amount that arrives is a whole gift, so a fundraiser has no part payment to try. */}
+        {!donation && (
+          <Button type="button" size="lg" variant="outline" disabled={!!busy} onClick={() => simulate("underpaid")} className="h-12 text-[15px]">
+            {busy === "underpaid" && <Spinner />}
+            Simulate part payment
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -1115,7 +1177,18 @@ function Underpaid({ checkout: c }: { checkout: PublicCheckout }) {
   )
 }
 
-function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMode }) {
+function Paid({
+  checkout: c,
+  embed,
+  available,
+  onAgain,
+}: {
+  checkout: PublicCheckout
+  embed: EmbedMode
+  /** The link takes payments right now: offer another go. */
+  available: boolean
+  onAgain: () => void
+}) {
   // On its own page, a link with a redirect sends the payer on after a moment.
   useEffect(() => {
     if (embed || !c.redirectUrl) return
@@ -1159,7 +1232,9 @@ function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMo
         <p className="text-[15px] leading-relaxed text-muted-foreground">
           {c.mode === "test" ? (
             <>
-              No money was sent. We&apos;ve emailed a test receipt to <span className="text-foreground">{c.payer.email}</span>.
+              No money was sent.{" "}
+              {donation ? "Your test gift is on the roll and in the total until the fundraiser goes live. " : ""}
+              We&apos;ve emailed a test receipt to <span className="text-foreground">{c.payer.email}</span>.
             </>
           ) : donation ? (
             <>
@@ -1174,10 +1249,11 @@ function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMo
           )}
         </p>
       </div>
-      {donation && c.mode === "live" && (
+      {donation && (
         <Ticket
           label="Your ticket"
-          flag="On the roll"
+          flag={c.mode === "test" ? "Test gift" : "On the roll"}
+          test={c.mode === "test"}
           name={c.donor?.anonymous ? null : c.payer.name}
           toneKey={c.donor?.anonymous ? "anonymous" : c.payer.name}
           amountKobo={c.paidKobo ?? c.amountKobo}
@@ -1199,6 +1275,17 @@ function Paid({ checkout: c, embed }: { checkout: PublicCheckout; embed: EmbedMo
           <ShareButton title={c.link.title} size="lg" className="h-12 w-full text-[15px]" />
         </div>
       )}
+      {!c.redirectUrl &&
+        (available ? (
+          <Button type="button" variant="outline" size="lg" onClick={onAgain} className="h-12 w-full text-[15px]">
+            <RotateCcw data-icon="inline-start" aria-hidden />
+            {donation ? "Give again" : "Make another payment"}
+          </Button>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {donation ? "This fundraiser isn't taking donations right now." : "This link isn't taking payments right now."}
+          </p>
+        ))}
       {c.redirectUrl && (
         <div className="grid gap-2">
           <Button asChild size="lg" className={BIZ_BUTTON}>

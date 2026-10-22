@@ -71,14 +71,17 @@ export function usePaymentLinkEmbed(id: string | undefined) {
   });
 }
 
-/** Checkouts for one link, test ones included, or every link's live ones when `link` is undefined (like the totals). */
-export function useLinkCheckouts(link: string | undefined, tab: CheckoutTab, enabled = true) {
+/**
+ * Checkouts for one link, or every link's real ones when `link` is undefined (like the totals). On one link,
+ * `mode` picks its test or real payments (a test-mode link's two tabs); live links show only real ones.
+ */
+export function useLinkCheckouts(link: string | undefined, tab: CheckoutTab, enabled = true, mode: PaymentMode = "live") {
   const business = useBusinessKey();
   return useInfiniteQuery({
-    queryKey: [business, "payment-links", "checkouts", link ?? "all", tab],
+    queryKey: [business, "payment-links", "checkouts", link ?? "all", tab, mode],
     queryFn: ({ pageParam, signal }) => {
-      const params = new URLSearchParams({ skip: String(pageParam), take: "30", status: tab });
-      params.set(link ? "link" : "mode", link ?? "live");
+      const params = new URLSearchParams({ skip: String(pageParam), take: "30", status: tab, mode });
+      if (link) params.set("link", link);
       return api<LinkCheckoutList>(`/api/payment-links/checkouts?${params}`, { signal });
     },
     initialPageParam: 0,

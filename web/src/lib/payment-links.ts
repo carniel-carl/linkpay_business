@@ -111,7 +111,16 @@ export function parseLinksQuery(params: RawParams): LinksQuery {
   }
 }
 
-export type CheckoutQuery = { status: CheckoutTab; source?: "page" | "embed"; q?: string; page: number; size: number; checkout?: string }
+export type CheckoutQuery = {
+  status: CheckoutTab
+  source?: "page" | "embed"
+  q?: string
+  page: number
+  size: number
+  checkout?: string
+  /** A link's own page while it's in test mode: its test payments or its real ones. */
+  mode?: "live" | "test"
+}
 
 export function parseCheckoutQuery(params: RawParams): CheckoutQuery {
   const source = one(params.source)
@@ -122,6 +131,7 @@ export function parseCheckoutQuery(params: RawParams): CheckoutQuery {
     page: page(one(params.page)),
     size: size(one(params.size)),
     checkout: idOrUndefined(one(params.checkout)),
+    mode: one(params.mode) === "live" ? "live" : one(params.mode) === "test" ? "test" : undefined,
   }
 }
 
@@ -137,10 +147,15 @@ export function linksApiParams(q: LinksQuery, branchId?: string) {
  * Query string for GET /api/payment-links/checkouts. Across every link only live payments show, like the
  * totals; a link's own page shows its test payments too, tagged.
  */
-export function checkoutsApiParams(q: { status: CheckoutTab; source?: string; q?: string; page: number; size: number }, scope: { link?: string; branch?: string }) {
+export function checkoutsApiParams(
+  q: { status: CheckoutTab; source?: string; q?: string; page: number; size: number; mode?: "live" | "test" },
+  scope: { link?: string; branch?: string },
+) {
   const params = new URLSearchParams({ skip: String((q.page - 1) * q.size), take: String(q.size), status: q.status })
-  if (scope.link) params.set("link", scope.link)
-  else params.set("mode", "live")
+  if (scope.link) {
+    params.set("link", scope.link)
+    if (q.mode) params.set("mode", q.mode)
+  } else params.set("mode", "live")
   if (scope.branch) params.set("branch", scope.branch)
   if (q.source) params.set("source", q.source)
   if (q.q) params.set("q", q.q)

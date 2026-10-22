@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import Link from "next/link"
 import { notFound, redirect } from "next/navigation"
 import { PageHeader } from "@/components/common/page-header"
 import { CheckoutsView } from "@/components/payment-links/checkouts-view"
@@ -7,7 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { EmbedCard, ShareCard } from "@/components/payment-links/embed-card"
 import { LinkActions, TestModeBanner } from "@/components/payment-links/link-actions"
 import { KindBadge, LinkStateBadge, OriginsList, PaymentLinksLocked, TestBadge } from "@/components/payment-links/parts"
-import { ShieldAlert } from "lucide-react"
+import { FlaskConical, ShieldAlert } from "lucide-react"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import type { PaymentLink } from "@/lib/api/types"
 import { brandingLogoSrc } from "@/components/invoices/parts"
@@ -15,6 +16,7 @@ import { getBranding, getLinkCheckout, getLinkCheckouts, getOverview, getPayment
 import { formatDate, formatDateTime, formatNaira } from "@/lib/format"
 import { checkoutsApiParams, FALLBACK_PALETTE, linkImageSrc, parseCheckoutQuery, paymentsLabel, PHONE_LABELS, priceLabel, UNAVAILABLE_LABELS } from "@/lib/payment-links"
 import { can } from "@/lib/permissions"
+import { cn } from "@/lib/utils"
 
 export async function generateMetadata({ params }: PageProps<"/payment-links/[id]">): Promise<Metadata> {
   const link = await getPaymentLink((await params).id)
@@ -28,16 +30,19 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
   if (!can(overview, "accounts.view")) return <PaymentLinksLocked />
 
   const query = parseCheckoutQuery(await searchParams)
-  const [link, embed, checkouts, linked, branding] = await Promise.all([
-    getPaymentLink(id),
+  const link = await getPaymentLink(id)
+  if (!link) notFound()
+  // In test mode the payments split into the test ones (shown first) and the real ones; live, only real ones.
+  const segment = link.mode === "test" ? (query.mode ?? "test") : "live"
+  const [embed, checkouts, linked, branding] = await Promise.all([
     getPaymentLinkEmbed(id),
-    getLinkCheckouts(checkoutsApiParams(query, { link: id })),
+    getLinkCheckouts(checkoutsApiParams({ ...query, mode: segment }, { link: id })),
     query.checkout ? getLinkCheckout(query.checkout) : null,
     getBranding(),
   ])
-  if (!link) notFound()
-  // A fundraiser's donors, first page (the panel loads more as it scrolls).
-  const donors = link.kind === "donation" ? await getLinkCheckouts(new URLSearchParams({ link: id, status: "received", take: "50" })) : null
+  // A fundraiser's donors, first page (the panel loads more as it scrolls), in the same segment.
+  const donors =
+    link.kind === "donation" ? await getLinkCheckouts(new URLSearchParams({ link: id, status: "received", mode: segment, take: "50" })) : null
   // For the QR code: the business as its payers see it.
   const brand = {
     name: overview.business.name,
@@ -71,7 +76,10 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
           {link.takenDown && <TakenDownBanner link={link} />}
           <TestModeBanner link={link} />
           <Totals link={link} />
-          {donors?.ok && <DonorsPanel key={`${link._id}-${link.paymentsCount}`} linkId={link._id} initial={donors.data} />}
+          {link.test && <PaymentsSegment link={link} current={segment} />}
+          {donors?.ok && (
+            <DonorsPanel key={`${link._id}-${segment}-${link.paymentsCount}-${link.test?.paymentsCount ?? 0}`} linkId={link._id} initial={donors.data} mode={segment} />
+          )}
           {checkouts.ok ? (
             <CheckoutsView
               data={checkouts.data}
@@ -92,6 +100,47 @@ export default async function PaymentLinkPage({ params, searchParams }: PageProp
         </div>
       </div>
     </>
+  )
+}
+
+/**
+ * In test mode: the link's test payments and its real ones, as two pill tabs (real links, so the back button
+ * works). Going live clears the test ones.
+ */
+function PaymentsSegment({ link, current }: { link: PaymentLink; current: "live" | "test" }) {
+  const noun = link.kind === "donation" ? "gifts" : "payments"
+  const tabs = [
+    { key: "test", label: `Test ${noun}`, count: link.test?.paymentsCount ?? 0 },
+    { key: "live", label: `Real ${noun}`, count: link.paymentsCount },
+  ] as const
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <nav aria-label={`Test or real ${noun}`}>
+        <ul className="flex w-fit gap-1 rounded-full bg-muted p-1">
+          {tabs.map((t) => {
+            const active = t.key === current
+            return (
+              <li key={t.key}>
+                <Link
+                  href={`/payment-links/${link._id}?mode=${t.key}`}
+                  scroll={false}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-sm transition-colors duration-150 outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                    active ? "bg-card font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {t.key === "test" && <FlaskConical className={cn("size-3.5", active && "text-warning")} aria-hidden />}
+                  {t.label}
+                  <span className="figure text-xs text-muted-foreground">{t.count}</span>
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
+      </nav>
+      {current === "test" && <p className="text-sm text-muted-foreground">Cleared when the link goes live.</p>}
+    </div>
   )
 }
 
@@ -135,13 +184,27 @@ function Totals({ link }: { link: PaymentLink }) {
             aria-valuenow={Math.round(pct)}
             className="h-2.5 overflow-hidden rounded-full bg-muted"
           >
-            <div className="h-full rounded-full bg-primary transition-[width] duration-700" style={{ width: `${pct}%` }} />
+            <div className="h-full rounded-full bg-(--fund-progress) transition-[width] duration-700" style={{ width: `${pct}%` }} />
           </div>
         )}
+        {link.mode === "test" && (
+          <p className="flex items-start gap-2 rounded-xl bg-warning-subtle px-3.5 py-2.5 text-sm text-warning-foreground">
+            <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+            <span>
+              {d.testKobo ? (
+                <>
+                  Includes <span className="figure font-semibold">{formatNaira(d.testKobo)}</span> in test gifts. They come off when the link goes live
+                  and never reach your balance.
+                </>
+              ) : (
+                "Test gifts you simulate count here and on the page until the link goes live. They never reach your balance."
+              )}
+            </span>
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
-          {paymentsLabel(link)}
-          {link.lastPaidAt ? `, the latest ${formatDateTime(link.lastPaidAt)}` : ""}
-          {link.mode === "test" ? ". Live donations only." : ""}
+          {paymentsLabel({ ...link, paymentsCount: d.donationsCount })}
+          {d.lastDonationAt ? `, the latest ${formatDateTime(d.lastDonationAt)}` : ""}
           {!link.available && link.unavailableReason && link.unavailableReason !== "taken_down" ? `. ${UNAVAILABLE_LABELS[link.unavailableReason]}.` : ""}
         </p>
       </section>
@@ -157,6 +220,19 @@ function Totals({ link }: { link: PaymentLink }) {
           {link.lastPaidAt ? `, the latest ${formatDateTime(link.lastPaidAt)}` : ""}
           {link.mode === "test" ? ". Live payments only." : ""}
         </p>
+        {link.test && (
+          <p className="flex items-center gap-1.5 text-sm text-warning-foreground">
+            <FlaskConical className="size-4 shrink-0 text-warning" aria-hidden />
+            {link.test.collectedKobo ? (
+              <span>
+                Plus <span className="figure font-semibold">{formatNaira(link.test.collectedKobo)}</span> in{" "}
+                {link.test.paymentsCount === 1 ? "1 test payment" : `${link.test.paymentsCount} test payments`}, not real money.
+              </span>
+            ) : (
+              <span>Test payments you simulate show here, apart from real money.</span>
+            )}
+          </p>
+        )}
       </div>
       {!link.available && link.unavailableReason && (
         <p className="max-w-64 text-sm text-muted-foreground sm:text-right">

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useTransform } from "motion/react"
-import { Check, CircleAlert, Flag, Heart, MoreHorizontal, Share2 } from "lucide-react"
+import { Check, CircleAlert, Flag, FlaskConical, Heart, MoreHorizontal, Share2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -23,8 +23,9 @@ import { BIZ_BUTTON, type SummaryImage } from "./pay-parts"
 // Donation links (fundraisers) on the pay page: what's been raised, the donors and the report form.
 // Contract: docs/briefs/donations.md §3.
 
-/** How often the page looks for new donations while it's on screen. */
+/** How often the page looks for new donations while it's on screen (slower while the live stream is open). */
 const FEED_POLL_MS = 15_000
+const FEED_POLL_LIVE_MS = 60_000
 /** How long a new donation stays highlighted in the list. */
 const FRESH_MS = 6_000
 const PAGE_SIZE = 20
@@ -51,8 +52,10 @@ export type DonationFeed = {
   hasMore: boolean
   loadingMore: boolean
   loadMore: () => void
-  /** Look now (after the payer's own donation lands). */
+  /** Look now for new donations (a payment landed). */
   refresh: () => void
+  /** Start over from the first page (the link changed: live or test, a donation hidden). */
+  reload: () => void
 }
 
 const NO_DONATIONS: Donation = {
@@ -65,8 +68,11 @@ const NO_DONATIONS: Donation = {
   recent: { items: [], nextBefore: null },
 }
 
-/** The fundraiser's live figures and donors. `initial` null (a payment link): nothing is fetched and the feed is null. */
-export function useDonationFeed(slug: string, initial: Donation | null): DonationFeed | null {
+/**
+ * The fundraiser's live figures and donors. `initial` null (a payment link): nothing is fetched and the feed is
+ * null. `streaming`: the page's live stream is open, so polling is only a safety net.
+ */
+export function useDonationFeed(slug: string, initial: Donation | null, streaming = false): DonationFeed | null {
   const enabled = !!initial
   const start = initial ?? NO_DONATIONS
   const [progress, setProgress] = useState<DonationProgress>(start)
@@ -125,7 +131,7 @@ export function useDonationFeed(slug: string, initial: Donation | null): Donatio
   useEffect(() => {
     if (!enabled) return
     const tick = () => document.visibilityState === "visible" && void refresh()
-    const id = setInterval(tick, FEED_POLL_MS)
+    const id = setInterval(tick, streaming ? FEED_POLL_LIVE_MS : FEED_POLL_MS)
     document.addEventListener("visibilitychange", tick)
     const pending = timers.current
     return () => {
@@ -133,7 +139,7 @@ export function useDonationFeed(slug: string, initial: Donation | null): Donatio
       document.removeEventListener("visibilitychange", tick)
       pending.forEach(clearTimeout)
     }
-  }, [enabled, refresh])
+  }, [enabled, refresh, streaming])
 
   const loadMore = useCallback(async () => {
     if (!nextBefore || loadingMore) return
@@ -153,8 +159,25 @@ export function useDonationFeed(slug: string, initial: Donation | null): Donatio
 
   const refreshNow = useCallback(() => void refresh(), [refresh])
 
+  const reload = useCallback(async () => {
+    let page: PublicDonationFeed
+    try {
+      page = await fetchPage({ take: String(PAGE_SIZE) })
+    } catch {
+      return
+    }
+    timers.current.forEach(clearTimeout)
+    timers.current.clear()
+    setFresh(new Set())
+    setLatest(null)
+    setProgress(page.progress)
+    setItems(page.items)
+    setNextBefore(page.nextBefore)
+  }, [fetchPage])
+  const reloadNow = useCallback(() => void reload(), [reload])
+
   if (!enabled) return null
-  return { progress, items, fresh, latest, hasMore: !!nextBefore, loadingMore, loadMore, refresh: refreshNow }
+  return { progress, items, fresh, latest, hasMore: !!nextBefore, loadingMore, loadMore, refresh: refreshNow, reload: reloadNow }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -319,6 +342,7 @@ export function Ticket({
   action,
   toneKey,
   perforated = false,
+  test = false,
   className,
 }: {
   /** The ticket number, or "Your ticket". */
@@ -334,10 +358,19 @@ export function Ticket({
   action?: ReactNode
   toneKey: string | number
   perforated?: boolean
+  /** A simulated gift (test mode): a dashed line inside the edge marks it. */
+  test?: boolean
   className?: string
 }) {
   return (
-    <div style={donorTone(toneKey)} className={cn("relative grid gap-2.5 bg-(--tone) px-6 pt-4 pb-5 text-(--tone-ink)", className)}>
+    <div
+      style={donorTone(toneKey)}
+      className={cn(
+        "relative grid gap-2.5 bg-(--tone) px-6 pt-4 pb-5 text-(--tone-ink)",
+        test && "outline-2 -outline-offset-8 outline-[color-mix(in_oklch,var(--tone-ink)_45%,transparent)] outline-dashed",
+        className,
+      )}
+    >
       {perforated && (
         <>
           <span aria-hidden className="absolute inset-x-3 top-0 border-t-2 border-dashed border-[var(--ticket-ground,var(--fund-ground))]" />
@@ -389,9 +422,9 @@ export function RaisedSummary({ progress, latest, className }: { progress: Donat
   const shown = goalKobo ? Math.min(100, Math.max(raisedKobo > 0 ? 1.5 : 0, (raisedKobo / goalKobo) * 100)) : 0
   const reached = goalKobo !== null && raisedKobo >= goalKobo
   return (
-    <section aria-label="Raised so far" className={cn("grid gap-4", className)}>
+    <section aria-label="Raised so far" className={cn("@container grid gap-4", className)}>
       <div className="grid gap-2.5">
-        <p className="type-display text-[3.5rem] leading-[0.92] sm:text-[4.5rem]">
+        <p className="type-display text-[3.5rem] leading-[0.92] @md:text-[4.5rem]">
           <CountUp kobo={raisedKobo} />
         </p>
         <p className="text-[17px] text-muted-foreground">
@@ -440,17 +473,29 @@ export function RaisedSummary({ progress, latest, className }: { progress: Donat
             </span>
           ))}
       </p>
+      {!!progress.testKobo && (
+        <p className="flex items-start gap-2 rounded-xl bg-warning-subtle px-3.5 py-2.5 text-sm text-warning-foreground">
+          <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+          <span>
+            Includes <span className="figure font-semibold">{naira(progress.testKobo)}</span> in test gifts. They come off when the fundraiser
+            goes live.
+          </span>
+        </p>
+      )}
     </section>
   )
 }
 
-/** What the money is for: the pictures at their own shape on a soft fill of themselves, with thumbnails to switch. */
+/**
+ * What the money is for: the pictures at their own shape on a soft fill of themselves, with thumbnails to switch.
+ * Kept short so the total and the story still fit on the first screen.
+ */
 export function FundraiserGallery({ images, title, className }: { images: SummaryImage[]; title: string; className?: string }) {
   const [index, setIndex] = useState(0)
   const shown = images[Math.min(index, images.length - 1)]
   return (
     <figure className={cn("flex flex-col gap-2.5", className)}>
-      <div className="relative h-[min(26rem,52vw)] overflow-hidden rounded-[18px] bg-muted lg:h-[min(24rem,38vh)]">
+      <div className="relative h-[min(15rem,48vw)] overflow-hidden rounded-[18px] bg-muted lg:h-[min(14rem,28vh)] @3xl:h-[min(17rem,34vh)]">
         {/* A blurred copy fills the frame, so a tall poster or a wide photo both keep their shape. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={shown.src} alt="" aria-hidden className="absolute inset-0 size-full scale-125 object-cover blur-2xl saturate-150" />
@@ -474,7 +519,7 @@ export function FundraiserGallery({ images, title, className }: { images: Summar
               aria-label={`Show picture ${i + 1}`}
               onClick={() => setIndex(i)}
               className={cn(
-                "size-14 overflow-hidden rounded-[10px] ring-2 ring-offset-2 ring-offset-(--fund-ground) transition-[opacity,box-shadow] duration-150 outline-none focus-visible:ring-ring",
+                "size-12 overflow-hidden rounded-[10px] ring-2 ring-offset-2 ring-offset-(--fund-ground) transition-[opacity,box-shadow] duration-150 outline-none focus-visible:ring-ring",
                 i === index ? "ring-(--biz-strong)" : "opacity-65 ring-transparent hover:opacity-100",
               )}
             >
@@ -679,6 +724,25 @@ export function DonateBar({ progress, visible, onDonate }: { progress: DonationP
 
 const ROW_ESTIMATE = 150
 const PREFETCH_ROWS = 6
+/** The roll runs the full width of the page, so it splits into strips side by side: one per 17rem, up to 4. */
+const LANE_MIN_PX = 272
+const MAX_LANES = 4
+const LANE_GAP = "1.5rem"
+
+function useRollLanes(ref: React.RefObject<HTMLElement | null>) {
+  const [lanes, setLanes] = useState(1)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new ResizeObserver(([entry]) => {
+      const gap = 24
+      setLanes(Math.max(1, Math.min(MAX_LANES, Math.floor((entry.contentRect.width + gap) / (LANE_MIN_PX + gap)))))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [ref])
+  return lanes
+}
 
 /** "Top" donors: fetched when the toggle is first used (`open`), then paged. */
 function useTopDonations(slug: string) {
@@ -767,7 +831,7 @@ export function TicketRoll({
           <Spinner />
         </div>
       ) : items.length === 0 ? (
-        <div className="mx-3 -mt-3 grid justify-items-start gap-2 rounded-b-[6px] border-2 border-t-0 border-dashed border-[color-mix(in_oklch,var(--foreground)_22%,transparent)] px-6 pt-9 pb-8">
+        <div className="mx-3 -mt-3 grid justify-items-start gap-2 rounded-b-[6px] sm:max-w-88 border-2 border-t-0 border-dashed border-[color-mix(in_oklch,var(--foreground)_22%,transparent)] px-6 pt-9 pb-8">
           <span className="font-mono text-xs tracking-[0.06em] text-muted-foreground uppercase">{ticketNumber(1)}</span>
           <p className="type-display text-2xl">No tickets yet</p>
           <p className="text-sm text-pretty text-muted-foreground">The first gift prints here, at the top of the roll. It could be yours.</p>
@@ -820,6 +884,7 @@ function RollTickets({
   onReport: (donation: PublicDonation) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const lanes = useRollLanes(scrollRef)
   // One extra row at the end holds the "loading more" spinner.
   const count = items.length + (hasMore ? 1 : 0)
   const virtualizer = useVirtualizer({
@@ -828,9 +893,20 @@ function RollTickets({
     estimateSize: () => ROW_ESTIMATE,
     getItemKey: (index) => items[index]?._id ?? "more",
     overscan: 4,
+    lanes,
   })
   const rows = virtualizer.getVirtualItems()
   const lastIndex = rows.at(-1)?.index ?? -1
+  // The bottom ticket of each strip gets the torn-off corners once the whole roll is loaded.
+  const lastInLane = new Set<number>()
+  if (!hasMore) {
+    if (lanes === 1) lastInLane.add(items.length - 1)
+    else {
+      const last = new Map<number, number>()
+      for (const m of virtualizer.measurementsCache) last.set(m.lane, m.index)
+      for (const index of last.values()) lastInLane.add(index)
+    }
+  }
 
   useEffect(() => {
     if (hasMore && !busy && lastIndex >= items.length - PREFETCH_ROWS) loadMore()
@@ -843,14 +919,19 @@ function RollTickets({
         {rows.map((row) => {
           const d = items[row.index]
           const isFresh = !!d && !!fresh?.has(d._id)
+          // The first ticket in each strip comes straight out of the spool.
+          const top = row.start === 0
           return (
             <li
               key={row.key}
               data-index={row.index}
               ref={virtualizer.measureElement}
-              // Tickets glide down when a new one prints at the top.
-              className="absolute top-0 left-0 w-full transition-transform duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none"
-              style={{ transform: `translateY(${row.start}px)` }}
+              // Tickets glide along (down, or across to the next strip) when a new one prints at the top.
+              className="absolute top-0 left-0 transition-transform duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none"
+              style={{
+                width: `calc((100% - ${lanes - 1} * ${LANE_GAP}) / ${lanes})`,
+                transform: `translate(calc(${row.lane} * (100% + ${LANE_GAP})), ${row.start}px)`,
+              }}
             >
               {d ? (
                 <Ticket
@@ -859,10 +940,11 @@ function RollTickets({
                   name={d.name}
                   message={d.message}
                   when={timeAgo(d.paidAt ?? undefined)}
-                  flag={isFresh ? "Just in" : row.index === 0 && newestFirst ? "Newest" : undefined}
+                  flag={[isFresh ? "Just in" : row.index === 0 && newestFirst ? "Newest" : null, d.test ? "Test" : null].filter(Boolean).join(" · ") || undefined}
+                  test={d.test}
                   toneKey={toneFor(row.index)}
-                  perforated={row.index > 0}
-                  className={cn(row.index === 0 ? "pt-7" : "", row.index === items.length - 1 && !hasMore && "rounded-b-[6px]", isFresh && "ticket-print")}
+                  perforated={!top}
+                  className={cn(top && "pt-7", lastInLane.has(row.index) && "rounded-b-[6px]", isFresh && "ticket-print")}
                   action={<TicketMenu name={d.name} onReport={() => onReport(d)} />}
                 />
               ) : (

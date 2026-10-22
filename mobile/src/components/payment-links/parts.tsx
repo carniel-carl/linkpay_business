@@ -48,6 +48,16 @@ export function TestTag({ mode }: { mode: PaymentMode | undefined }) {
   );
 }
 
+/** "+ ₦5,000 in test" under a test-mode link's collected figure: simulated payments, never real money. */
+export function TestTotal({ test }: { test: PaymentLink["test"] }) {
+  if (!test?.collectedKobo) return null;
+  return (
+    <Text maxFontSizeMultiplier={1.3} className="text-[12px] text-warning-foreground">
+      + {formatNairaShort(test.collectedKobo)} in test
+    </Text>
+  );
+}
+
 /** "Donation" on fundraiser links, so they stand out in lists. */
 export const KindTag = ({ link }: { link: Pick<PaymentLink, "kind"> }) =>
   link.kind === "donation" ? <Tag label="Donation" tone={DONATION} /> : null;
@@ -83,7 +93,7 @@ export const LinkRow = memo(function LinkRow({ link: l, onPress }: { link: Payme
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${l.title}, ${meta}, ${formatNairaShort(l.collectedKobo)} collected, ${linkStateLabel(l)}${l.mode === "test" ? ", test mode" : ""}`}
+      accessibilityLabel={`${l.title}, ${meta}, ${formatNairaShort(l.collectedKobo)} collected${l.test?.collectedKobo ? `, plus ${formatNairaShort(l.test.collectedKobo)} in test` : ""}, ${linkStateLabel(l)}${l.mode === "test" ? ", test mode" : ""}`}
       onPress={() => onPress(l)}
       className="flex-row items-center gap-3 px-4 py-3.5 active:bg-muted"
     >
@@ -108,7 +118,10 @@ export const LinkRow = memo(function LinkRow({ link: l, onPress }: { link: Payme
           <TestTag mode={l.mode} />
         </View>
       </View>
-      <Figure size={16}>{formatNairaShort(l.collectedKobo)}</Figure>
+      <View className="items-end gap-1">
+        <Figure size={16}>{formatNairaShort(l.collectedKobo)}</Figure>
+        <TestTotal test={l.test} />
+      </View>
     </Pressable>
   );
 });

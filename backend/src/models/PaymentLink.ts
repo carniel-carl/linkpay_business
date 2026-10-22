@@ -98,6 +98,9 @@ const checkoutSchema = new Schema(
     link: { type: Types.ObjectId, ref: "PaymentLink", required: true },
     // The link's mode when the checkout started.
     mode: { type: String, enum: PAYMENT_MODES, default: "live" },
+    // Test checkouts only: set when the link went live, which clears its test payments from every list and
+    // figure (kept, not deleted, so an old notification still opens the checkout).
+    testClearedAt: { type: Date },
     // Unguessable id for the payer's status page (no sign-in).
     token: { type: String, required: true, unique: true },
     // "LP-7K2Q9M": the payer may put it in the transfer's narration.

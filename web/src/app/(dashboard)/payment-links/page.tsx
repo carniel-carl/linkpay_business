@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { Link2, Plus } from "lucide-react"
+import { FlaskConical, Link2, Plus } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
 import { CheckoutsView } from "@/components/payment-links/checkouts-view"
@@ -106,6 +106,15 @@ function SummaryCard({ summary }: { summary: PaymentLinkSummary | null }) {
           <>
             <p className="type-display text-[2.5rem] break-all sm:text-5xl figure">{formatNaira(summary.collectedKobo)}</p>
             <p className="text-sm text-muted-foreground">{summary.paymentsCount === 1 ? "1 payment" : `${summary.paymentsCount} payments`} in all</p>
+            {summary.test?.collectedKobo > 0 && (
+              <p className="flex items-center gap-1.5 text-sm text-warning-foreground">
+                <FlaskConical className="size-4 shrink-0 text-warning" aria-hidden />
+                <span>
+                  Plus <span className="figure font-semibold">{formatNaira(summary.test.collectedKobo)}</span> in test payments on links in test mode,
+                  not real money.
+                </span>
+              </p>
+            )}
           </>
         ) : (
           <p className="type-display text-3xl text-muted-foreground">Unavailable</p>

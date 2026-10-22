@@ -9,6 +9,7 @@ import { VirtualAccountModel } from "../models/VirtualAccount";
 import { HttpError } from "../utils/HttpError";
 import { accentPalette } from "./branding";
 import { sendPaymentLinkReceiptEmail, type InvoiceBrand } from "./email";
+import { publishLinkEvent } from "./linkStream";
 import { paymentLinkPaid } from "./notificationEvents";
 
 const MINUTE = 60_000;
@@ -336,6 +337,12 @@ async function settleCheckout(checkoutId: Types.ObjectId, tx: Payment, matchedBy
           { $inc: { paymentsCount: 1, collectedKobo: tx.amountKobo }, $max: { lastPaidAt: tx.occurredAt } },
           { returnDocument: "after" },
         );
+  if (link) {
+    // Open pages pull in the new donation and re-check their own checkout; a link that just reached its
+    // payment limit also tells them it's sold out.
+    publishLinkEvent(link._id, "paid");
+    if (link.maxPayments && link.paymentsCount >= link.maxPayments) publishLinkEvent(link._id, "link");
+  }
   const business = await BusinessModel.findById(checkout.business);
   if (link && business) {
     await paymentLinkPaid(business, link, checkout);

@@ -756,7 +756,10 @@ export type PaymentLinkUnavailableReason = "taken_down" | "inactive" | "expired"
 /** "donation": a fundraiser (donor chooses, optional goal, public donor list). Contract: docs/briefs/donations.md. */
 export type PaymentLinkKind = "payment" | "donation"
 
-/** A fundraiser's figures. Raised includes the few kobo that tell transfers apart; test payments never count. */
+/**
+ * A fundraiser's figures. Raised includes the few kobo that tell transfers apart. Test payments never count in
+ * the link's own totals; on the public page they count while the link is in test mode (`testKobo` of raised).
+ */
 export type DonationProgress = {
   goalKobo: number | null
   raisedKobo: number
@@ -764,10 +767,21 @@ export type DonationProgress = {
   /** Floor of raised / goal, can pass 100; null without a goal. */
   percent: number | null
   lastDonationAt: string | null
+  /** Public page only: how much of `raisedKobo` is simulated gifts (test mode). */
+  testKobo?: number
 }
 
 /** One donation as anyone can see it: no email, and no name when the donor chose to stay anonymous. */
-export type PublicDonation = { _id: string; name: string | null; anonymous: boolean; amountKobo: number; message: string | null; paidAt: string | null }
+export type PublicDonation = {
+  _id: string
+  name: string | null
+  anonymous: boolean
+  amountKobo: number
+  message: string | null
+  paidAt: string | null
+  /** A simulated gift, listed only while the fundraiser is in test mode. */
+  test?: boolean
+}
 export type PublicDonationPage = { items: PublicDonation[]; nextBefore: string | null }
 export type DonationSort = "recent" | "top"
 /** GET /api/public/pay/:slug/donations */
@@ -819,6 +833,8 @@ export type PaymentLink = {
   paymentsCount: number
   collectedKobo: number
   lastPaidAt: string | null
+  /** While in test mode: what simulated payments came to, shown beside the real figures. null when live. */
+  test: { collectedKobo: number; paymentsCount: number } | null
   available: boolean
   unavailableReason: PaymentLinkUnavailableReason | null
   createdBy: { _id: string; name: string } | null
@@ -834,6 +850,8 @@ export type PaymentLinkSummary = {
   collectedKobo: number
   paymentsCount: number
   last30Days: { collectedKobo: number; paymentsCount: number }
+  /** Simulated payments on links that are in test mode (never in the totals above). */
+  test: { collectedKobo: number; paymentsCount: number }
   currency: "NGN"
 }
 

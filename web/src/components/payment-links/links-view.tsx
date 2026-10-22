@@ -15,7 +15,7 @@ import type { PaymentLink, PaymentLinkList } from "@/lib/api/types"
 import { formatNaira, formatShortDate } from "@/lib/format"
 import { DEFAULT_PAGE_SIZE, LINK_TAB_LABELS, LINK_TABS, linkImageSrc, PAGE_SIZES, parseLinksQuery, paymentsLabel, priceLabel, type LinksQuery } from "@/lib/payment-links"
 import { cn } from "@/lib/utils"
-import { DonationBar, KindBadge, LinkStateBadge, TestBadge } from "./parts"
+import { DonationBar, KindBadge, LinkStateBadge, TestBadge, TestTotal } from "./parts"
 
 type Patch = Record<string, string | undefined>
 const helper = createColumnHelper<DataTableFeatures, PaymentLink>()
@@ -98,6 +98,7 @@ export function LinksView({ data, query, showBranch, newLink }: { data: PaymentL
           cell: ({ row }) => (
             <div className="grid justify-items-end gap-0.5 whitespace-nowrap">
               <span className="font-medium figure">{formatNaira(row.original.collectedKobo)}</span>
+              <TestTotal test={row.original.test} />
               <DonationBar link={row.original} />
               <span className="text-xs text-muted-foreground">
                 {paymentsLabel(row.original)}
@@ -213,6 +214,7 @@ export function LinksView({ data, query, showBranch, newLink }: { data: PaymentL
                       </span>
                       <span className="grid justify-items-end gap-1">
                         <span className="font-medium figure">{formatNaira(l.collectedKobo)}</span>
+                        <TestTotal test={l.test} />
                         <DonationBar link={l} />
                         <span className="flex items-center gap-1">
                           <KindBadge link={l} />

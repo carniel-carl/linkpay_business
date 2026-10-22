@@ -1,7 +1,7 @@
 import type { RequestHandler } from "express";
 import { z } from "zod";
 import { DONATION_LIMITS, EMBED_LIMITS, LINK_REPORT_LIMITS, LINK_REPORT_REASON_KEYS, PAYMENT_LINK_LIMITS } from "../config/paymentLinks";
-import { DONATION_SORTS, donationProgress, listPublicDonations, reportLink } from "../services/donations";
+import { DONATION_SORTS, listPublicDonations, publicDonationProgress, reportLink } from "../services/donations";
 import { BusinessModel, type BusinessDocument } from "../models/Business";
 import { CHECKOUT_SOURCES, CheckoutModel, PaymentLinkModel, type CheckoutDocument, type PaymentLinkDocument } from "../models/PaymentLink";
 import { VirtualAccountModel } from "../models/VirtualAccount";
@@ -10,6 +10,7 @@ import { checkoutStatus, originAllowed, simulateCheckoutPayment, startCheckout, 
 import { PaymentLinkImageModel } from "../models/PaymentLink";
 import { describePublicImage, linkImages, sendLinkImage } from "../services/paymentLinkImages";
 import { syncIfStale } from "../services/transactions";
+import { serveLinkStream } from "../services/linkStream";
 import { HttpError } from "../utils/HttpError";
 import { sendLogo } from "./branding";
 
@@ -104,7 +105,7 @@ async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDoc
 async function describeDonation(link: PaymentLinkDocument) {
   if (link.kind !== "donation") return null;
   const first = await listPublicDonations(link, { sort: "recent", take: 20 });
-  return { ...donationProgress(link), suggestedAmountsKobo: link.suggestedAmountsKobo ?? [], recent: first };
+  return { ...(await publicDonationProgress(link)), suggestedAmountsKobo: link.suggestedAmountsKobo ?? [], recent: first };
 }
 
 /**
@@ -157,7 +158,16 @@ export const getPublicDonations: RequestHandler<SlugParams> = async (req, res) =
   const { link } = await findPublicLink(req.params.slug);
   if (link.kind !== "donation") throw new HttpError(404, "This link doesn't take donations", "NOT_A_DONATION_LINK");
   const page = await listPublicDonations(link, query);
-  res.setHeader("Cache-Control", "private, no-store").json({ ...page, progress: donationProgress(link) });
+  res.setHeader("Cache-Control", "private, no-store").json({ ...page, progress: await publicDonationProgress(link) });
+};
+
+/**
+ * Live updates for the link's page (Server-Sent Events): `ready`, then `link` when the link changes and `paid`
+ * when a payment lands. No payer data travels on it; the page re-fetches through the routes above.
+ */
+export const streamPublicLinkEvents: RequestHandler<SlugParams> = async (req, res) => {
+  const { link } = await findPublicLink(req.params.slug);
+  serveLinkStream(req, res, link._id);
 };
 
 /**
