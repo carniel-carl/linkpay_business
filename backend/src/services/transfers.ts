@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { Types } from "mongoose";
+import { Types } from "mongoose";
 import { BeneficiaryModel } from "../models/Beneficiary";
 import { BranchModel } from "../models/Branch";
 import type { BusinessDocument } from "../models/Business";
@@ -12,11 +12,13 @@ import {
   TransferModel,
   type TransferDocument,
   type TransferKind,
+  type TransferStatus,
 } from "../models/Transfer";
 import { UserModel } from "../models/User";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { HttpError } from "../utils/HttpError";
 import { assertSameRequest, isDuplicateClientKey, requestHash } from "../utils/idempotency";
+import { inPool } from "../utils/pool";
 import { sendTransferAwaitingApprovalEmail, sendTransferFailedEmail, sendTransferRejectedEmail } from "./email";
 import { liquifia, LiquifiaError, newIdempotencyKey, PAYOUT_STATUSES, toKobo, toNaira, type LiquifiaBank, type LiquifiaPayout } from "./liquifia/client";
 import { transferApprovalRequested, transferSettled, transfersDecided, transferStuck } from "./notificationEvents";
@@ -87,28 +89,93 @@ export type ResolvedRecipient = {
   label?: string;
 };
 
+// Name enquiries answered in the last few minutes, by bank and account number. Only the bulk review reads them
+// (resolve-accounts and the preview), so a review and its preview don't ask the bank twice for 200 rows.
+// Sending always asks the bank afresh, and refreshes the entry. Successful answers only.
+const NAME_TTL_MS = 5 * 60_000;
+const NAME_CACHE_MAX = 5_000;
+const nameCache = new Map<string, { at: number; accountName: string; bankName?: string }>();
+
+/** Empties the name-enquiry cache (tests). */
+export const clearNameCache = () => nameCache.clear();
+
 /** Looks the account up with the bank (name enquiry) and notes when it's an account on LinkPay. */
-export async function resolveBankRecipient(business: BusinessDocument, accountNumber: string, bankUuid: string): Promise<ResolvedRecipient> {
+export async function resolveBankRecipient(
+  business: BusinessDocument,
+  accountNumber: string,
+  bankUuid: string,
+  opts: { cached?: boolean } = {},
+): Promise<ResolvedRecipient> {
   const bank = (await listBanks()).find((b) => b.uuid === bankUuid);
   if (!bank) throw new HttpError(400, "Choose a bank from the list", "INVALID_BANK");
 
-  let lookup;
-  try {
-    lookup = await liquifia.validateAccount(accountNumber, bankUuid);
-  } catch (err) {
-    if (err instanceof LiquifiaError && err.status >= 400 && err.status < 500) {
-      throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
+  const key = `${bankUuid}:${accountNumber}`;
+  const hit = opts.cached ? nameCache.get(key) : undefined;
+  let found = hit && Date.now() - hit.at < NAME_TTL_MS ? { accountName: hit.accountName, bankName: hit.bankName } : null;
+  if (!found) {
+    let lookup;
+    try {
+      lookup = await liquifia.validateAccount(accountNumber, bankUuid);
+    } catch (err) {
+      if (err instanceof LiquifiaError && err.status >= 400 && err.status < 500) {
+        throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
+      }
+      throw err;
     }
-    throw err;
+    if (!lookup?.account_name) throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
+    found = { accountName: lookup.account_name, bankName: lookup.bank_name ?? bank.name };
+    nameCache.delete(key);
+    nameCache.set(key, { at: Date.now(), ...found });
+    // Oldest first: Map keeps insertion order.
+    if (nameCache.size > NAME_CACHE_MAX) nameCache.delete(nameCache.keys().next().value!);
   }
-  if (!lookup?.account_name) throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
 
-  return classifyRecipient(business, {
-    kind: "bank",
-    accountNumber,
-    accountName: lookup.account_name,
-    bankName: lookup.bank_name ?? bank.name,
-    bankUuid,
+  return classifyRecipient(business, { kind: "bank", accountNumber, accountName: found.accountName, bankName: found.bankName, bankUuid });
+}
+
+/**
+ * An account name as compared when a bulk row says which name the member reviewed: letters and digits only,
+ * lower case, accents dropped. "Obi, Amaka-Jane" and "OBI AMAKA JANE" are the same name; word order counts.
+ */
+export const normaliseAccountName = (name: string) =>
+  name
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+
+export const sameAccountName = (a: string, b: string) => {
+  const x = normaliseAccountName(a);
+  return x.length > 0 && x === normaliseAccountName(b);
+};
+
+export type ResolvedRow =
+  | { row: number; accountNumber: string; bankUuid: string; accountName: string; bankName: string | null; kind: TransferKind; label: string | null }
+  | { row: number; accountNumber: string; bankUuid: string; error: string; code?: string };
+
+/**
+ * Name enquiries for a bulk review: a result per row, the name or why it failed. Five at a time, each account
+ * asked once however many rows pay it, and answers from the last few minutes reused. A failure that isn't
+ * about the row (the bank's service is down) fails the whole call, so it can be tried again.
+ */
+export async function resolveBankRecipients(business: BusinessDocument, rows: { accountNumber: string; bankUuid: string }[]) {
+  const keyOf = (r: { accountNumber: string; bankUuid: string }) => `${r.bankUuid}:${r.accountNumber}`;
+  const distinct = [...new Map(rows.map((r) => [keyOf(r), r])).values()];
+  const answers = new Map<string, ResolvedRecipient | HttpError>();
+  await inPool(distinct, 5, async (r) => {
+    try {
+      if (!/^\d{10}$/.test(r.accountNumber)) throw new HttpError(400, "Account numbers are 10 digits", "INVALID_ACCOUNT_NUMBER");
+      answers.set(keyOf(r), await resolveBankRecipient(business, r.accountNumber, r.bankUuid, { cached: true }));
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      answers.set(keyOf(r), err);
+    }
+  });
+  return rows.map((r, row): ResolvedRow => {
+    const answer = answers.get(keyOf(r))!;
+    const base = { row, accountNumber: r.accountNumber, bankUuid: r.bankUuid };
+    if (answer instanceof HttpError) return { ...base, error: answer.message, code: answer.code };
+    return { ...base, accountName: answer.accountName, bankName: answer.bankName ?? null, kind: answer.kind, label: answer.label ?? null };
   });
 }
 
@@ -258,9 +325,51 @@ export type TransferRequest = {
 
 const newReference = () => `LPB${randomBytes(8).toString("hex").toUpperCase()}`;
 
-/** Does this transfer need someone else to approve it before it goes? */
+/** Would a transfer of this amount alone need approval? Sending also counts the member's last 24 hours (planForRequest). */
 export function needsApproval(business: BusinessDocument, membership: MembershipDocument, totalAmountKobo: number) {
   return approvalPlan(business, membership, totalAmountKobo).length > 0;
+}
+
+/** How far back a member's own transfers from a branch count towards the amount that decides approval. */
+export const APPROVAL_WINDOW_MS = 24 * 60 * 60_000;
+/** Transfers that never sent money, or never will: they don't count towards that amount. */
+const NOT_SENT: TransferStatus[] = ["failed", "rejected", "cancelled"];
+
+/**
+ * What this member created from this branch in the last 24 hours, amounts before fees: every transfer
+ * waiting for approval, in progress or sent.
+ */
+export async function recentTotalKobo(userId: string | Types.ObjectId, branchId: Types.ObjectId, now = new Date()) {
+  const [row] = await TransferModel.aggregate<{ totalKobo: number }>([
+    {
+      $match: {
+        createdBy: new Types.ObjectId(String(userId)),
+        branch: branchId,
+        createdAt: { $gte: new Date(now.getTime() - APPROVAL_WINDOW_MS) },
+        status: { $nin: NOT_SENT },
+      },
+    },
+    { $group: { _id: null, totalKobo: { $sum: "$amountKobo" } } },
+  ]);
+  return row?.totalKobo ?? 0;
+}
+
+/**
+ * The approval levels a request of `amountKobo` needs (a whole batch for bulk transfers and payout-list runs).
+ * The amount that decides it, and the tier of a workflow, is the larger of the request and the member's
+ * 24-hour total from this branch including it, so splitting one payment into several smaller ones doesn't
+ * get round the rule. Sending calls this under the account lock, so two requests at once can't both slip under.
+ */
+export async function planForRequest(opts: {
+  business: BusinessDocument;
+  membership: MembershipDocument;
+  userId: string;
+  branchId: Types.ObjectId;
+  amountKobo: number;
+}) {
+  const earlierKobo = await recentTotalKobo(opts.userId, opts.branchId);
+  const decidingKobo = Math.max(opts.amountKobo, earlierKobo + opts.amountKobo);
+  return { plan: approvalPlan(opts.business, opts.membership, decidingKobo), earlierKobo, decidingKobo };
 }
 
 /**
@@ -287,7 +396,9 @@ export async function createTransfers(opts: {
 
   // What this request asks for, so the same Idempotency-Key with different details is refused. The batch title
   // is left out: it moves no money, and a payout list's default title carries the date, so a retry after
-  // midnight would be refused (and the client could then send it again under a new key).
+  // midnight would be refused (and the client could then send it again under a new key). The account name a bulk
+  // row was reviewed with is left out too: it's a check on the recipient (resolvePayoutRows), not part of the
+  // payment. A retry after the name was checked again must replay the first batch, not be refused or sent twice.
   const hash = opts.clientKey
     ? requestHash({
         branch: String(branch._id),
@@ -329,14 +440,16 @@ export async function createTransfers(opts: {
   const amountKobo = requests.reduce((s, r) => s + r.amountKobo, 0);
   const feeKobo = requests.reduce((s, r) => s + fees.get(r.amountKobo)!.feeKobo, 0);
   const totalKobo = amountKobo + feeKobo;
-  const plan = approvalPlan(business, membership, amountKobo);
-  const approval = plan.length > 0;
-  await assertPlanReachable(business, branch._id, plan, userId);
+  let plan: PlannedLevel[] = [];
 
   const created = await withAccountLock(account._id, async (lock) => {
     // Again under the lock: a request with the same key that was running alongside this one has finished by now.
     const replayed = await replay();
     if (replayed) return replayed;
+
+    // Under the lock, so the member's 24-hour total includes anything they sent from this account just before.
+    plan = (await planForRequest({ business, membership, userId, branchId: branch._id, amountKobo })).plan;
+    await assertPlanReachable(business, branch._id, plan, userId);
 
     const { availableKobo } = await availableBalance(account);
     if (totalKobo > availableKobo) {
@@ -388,7 +501,7 @@ export async function createTransfers(opts: {
             },
             narration: r.narration,
             reference: newReference(),
-            status: approval ? "pending_approval" : "processing",
+            status: plan.length > 0 ? "pending_approval" : "processing",
             createdBy: userId,
             approval: initialApproval(plan),
             // Only the first transfer carries the key: the unique index is per transfer.
@@ -414,13 +527,138 @@ export async function createTransfers(opts: {
   const paid = requests.flatMap((r) => (r.beneficiary ? [r.beneficiary] : []));
   if (paid.length) await BeneficiaryModel.updateMany({ _id: { $in: paid } }, { lastPaidAt: new Date() });
 
-  if (approval) {
+  if (plan.length > 0) {
     const approvers = levelApprovers(plan[0]!, await approversForBranch(business, branch._id), [userId]);
     await notifyApprovers(business, approvers, userId, transfers).catch((err) => console.error("Couldn't email approvers:", err));
   } else {
     for (const transfer of transfers) await submitTransfer(transfer);
   }
   return { transfers: await TransferModel.find({ _id: { $in: transfers.map((t) => t._id) } }).sort({ _id: 1 }), batch, replayed: false };
+}
+
+/** What's wrong with one bulk row, as in an INVALID_ROWS error's `details.rows`. */
+export type RowError = { row: number; error: string; code?: string; accountName?: string };
+
+/**
+ * A dry run of createTransfers for a bulk review: each row's fee, the totals, the available balance and the
+ * approval the batch would get, with everything that would stop it being sent. It creates nothing, holds no
+ * money and takes no lock, so it's a prediction: sending checks it all again.
+ */
+export async function previewTransfers(opts: {
+  business: BusinessDocument;
+  membership: MembershipDocument;
+  userId: string;
+  branchId: string;
+  rows: { amountKobo: number; narration?: string }[];
+  /** The checked rows (resolvePayoutRows' check), missing where the row has an error in `errors`. */
+  requests: (TransferRequest | undefined)[];
+  errors: RowError[];
+}) {
+  const { business, membership, userId, rows, requests } = opts;
+  assertMoneyCanMove(business);
+  const branch = await BranchModel.findOne({ _id: opts.branchId, business: business._id });
+  if (!branch || !canAccessBranch(membership, branch._id)) throw new HttpError(404, "Branch not found");
+  const account = await VirtualAccountModel.findOne({ branch: branch._id });
+  if (!account) throw new HttpError(409, `${branch.name}'s account isn't ready yet`, "ACCOUNT_NOT_READY");
+
+  const errors = [...opts.errors];
+  requests.forEach((r, row) => {
+    if (r?.recipient.accountNumber === account.accountNumber) {
+      errors.push({ row, error: "You can't send money to the account it's coming from", code: "SAME_ACCOUNT" });
+    }
+  });
+  errors.sort((a, b) => a.row - b.row);
+
+  const amounts = [...new Set(rows.map((r) => r.amountKobo))];
+  const quotes = await inPool(amounts, 5, (amount) => quoteFee(amount));
+  const fees = new Map(amounts.map((amount, i) => [amount, quotes[i]!]));
+  const amountKobo = rows.reduce((s, r) => s + r.amountKobo, 0);
+  const feeKobo = rows.reduce((s, r) => s + fees.get(r.amountKobo)!.feeKobo, 0);
+  const stampDutyKobo = rows.reduce((s, r) => s + fees.get(r.amountKobo)!.stampDutyKobo, 0);
+  const totalKobo = amountKobo + feeKobo;
+
+  const [{ plan, earlierKobo, decidingKobo }, eligible, balance] = await Promise.all([
+    planForRequest({ business, membership, userId, branchId: branch._id, amountKobo }),
+    approversForBranch(business, branch._id),
+    // Sending checks the balance again under the lock; an answer here is only a guide.
+    availableBalance(account).catch((err) => {
+      console.error("Couldn't read the balance for a bulk preview:", err);
+      return null;
+    }),
+  ]);
+
+  const blockers: { error: string; code?: string; details?: Record<string, unknown> }[] = [];
+  try {
+    await assertPlanReachable(business, branch._id, plan, userId);
+  } catch (err) {
+    if (!(err instanceof HttpError)) throw err;
+    blockers.push({ error: err.message, code: err.code, details: err.details });
+  }
+  if (balance && totalKobo > balance.availableKobo) {
+    blockers.push({
+      error: "There isn't enough money in this account for this transfer",
+      code: "INSUFFICIENT_BALANCE",
+      details: { availableKobo: Math.max(0, balance.availableKobo), requiredKobo: totalKobo },
+    });
+  }
+
+  // Who would be asked at each level: the same people the approval emails go to (never the member themselves).
+  const levels = plan.map((level) => levelApprovers(level, eligible, [userId]));
+  const users = await UserModel.find({ _id: { $in: levels.flat() } }).select("name");
+  const byRow = new Map(errors.map((e) => [e.row, e]));
+
+  return {
+    branch: { _id: branch.id as string, name: branch.name, isHeadOffice: !!branch.isHeadOffice },
+    count: rows.length,
+    amountKobo,
+    feeKobo,
+    stampDutyKobo,
+    totalKobo,
+    // null when the balance couldn't be read just now.
+    availableKobo: balance ? Math.max(0, balance.availableKobo) : null,
+    approval: {
+      needed: plan.length > 0,
+      // The amount that decided it: this batch plus what the member sent from this branch in the last 24 hours.
+      decidingKobo,
+      earlierKobo,
+      levels: plan.map((level, i) => ({
+        level: i + 1,
+        // true: anyone who can approve transfers from this branch.
+        any: level.any,
+        approvers: levels[i]!.flatMap((id) => {
+          const u = users.find((x) => x._id.equals(id));
+          return u ? [{ _id: u.id as string, name: u.name }] : [];
+        }),
+      })),
+    },
+    rows: rows.map((r, row) => {
+      const request = requests[row];
+      const fee = fees.get(r.amountKobo)!;
+      const problem = byRow.get(row);
+      return {
+        row,
+        accountNumber: request?.recipient.accountNumber ?? null,
+        // On ACCOUNT_NAME_CHANGED, the name the bank gives now.
+        accountName: request?.recipient.accountName ?? problem?.accountName ?? null,
+        bankName: request?.recipient.bankName ?? null,
+        kind: request?.recipient.kind ?? null,
+        label: request?.recipient.label ?? null,
+        beneficiary: request?.beneficiary ? String(request.beneficiary) : null,
+        amountKobo: r.amountKobo,
+        feeKobo: fee.feeKobo,
+        stampDutyKobo: fee.stampDutyKobo,
+        totalKobo: r.amountKobo + fee.feeKobo,
+        narration: r.narration ?? null,
+        error: problem?.error ?? null,
+        code: problem?.code ?? null,
+      };
+    }),
+    // What /bulk would refuse with INVALID_ROWS (or SAME_ACCOUNT), row by row.
+    errors,
+    // What would stop the whole batch: NO_APPROVER or INSUFFICIENT_BALANCE.
+    blockers,
+    ready: errors.length === 0 && blockers.length === 0,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------

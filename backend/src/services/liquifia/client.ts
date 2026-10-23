@@ -98,8 +98,16 @@ export const liquifia = {
     request<LiquifiaVirtualAccount>("POST", `/customers/${customerId}/virtual-accounts`, { body, idempotencyKey }),
   getVirtualAccountBalance: (virtualAccountId: string, opts: { timeoutMs?: number } = {}) =>
     request<LiquifiaBalance>("GET", `/virtual-accounts/${virtualAccountId}/balance`, { timeoutMs: opts.timeoutMs }),
-  listInboundTransfers: (page: { skip: number; take: number }) =>
-    request<LiquifiaInboundTransfer[]>("GET", "/inbound-transfers", { query: page }),
+  /**
+   * One page of payments received on every account of the integrator, not only ours. The docs list skip/take
+   * (and country/currency) but no sort order or date filter, so services/transactions.ts works the order out.
+   */
+  listInboundTransfers: async (page: { skip: number; take: number }) => {
+    const rows = await request<LiquifiaInboundTransfer[]>("GET", "/inbound-transfers", { query: page });
+    // Anything but a list must not pass for the end of the list.
+    if (!Array.isArray(rows)) throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", "Liquifia's inbound-transfer list isn't an array");
+    return rows;
+  },
 
   // Payouts. Requests and fee quotes are in naira (major units); see toNaira()/toKobo().
   validateAccount: (accountNumber: string, bankUuid: string) =>

@@ -15,16 +15,19 @@ import {
   MAX_LEVELS,
   MAX_TIERS,
 } from "../services/approvals";
-import { beneficiaryRecipient, findBeneficiary, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
+import { beneficiaryRecipient, checkPayoutRows, findBeneficiary, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
 import { branchScope, canAccessBranch, ensureOwnerMembership, hasPermission } from "../services/team";
 import {
   cancelTransfers,
   createTransfers,
   decideTransfers,
   listBanks,
+  planForRequest,
+  previewTransfers,
   quoteFee,
   refreshTransfer,
   resolveBankRecipient,
+  resolveBankRecipients,
   resolveBranchRecipient,
 } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
@@ -187,11 +190,38 @@ export const resolveAccount: RequestHandler = async (req, res) => {
   });
 };
 
-/** Fee for one transfer of `amountKobo`, plus whether the signed-in member's transfer would need approval. */
+/**
+ * Name enquiries for a bulk transfer's review: `{ items: [{ accountNumber, bankUuid }] }` (1–200 rows), and a
+ * result per row in the same order, the account's name or why it can't be paid. Moves no money.
+ */
+export const resolveAccounts: RequestHandler = async (req, res) => {
+  const body = z
+    .object({
+      // Checked per row (INVALID_ACCOUNT_NUMBER), so one typo doesn't fail the rest.
+      items: z.array(z.object({ accountNumber: z.string().trim().max(20), bankUuid: z.string().trim().min(1).max(100) })).min(1).max(MAX_BULK_ITEMS),
+    })
+    .parse(req.body);
+  const items = await resolveBankRecipients(req.business!, body.items);
+  const failed = items.filter((i) => "error" in i).length;
+  res.json({ items, resolved: items.length - failed, failed });
+};
+
+/**
+ * Fee for one transfer of `amountKobo`, plus whether the signed-in member's transfer would need approval.
+ * With `branch`, that counts what the member sent from the branch in the last 24 hours, as sending does.
+ */
 export const getFee: RequestHandler = async (req, res) => {
-  const query = z.object({ amountKobo: z.coerce.number().pipe(amountKobo) }).parse(req.query);
+  const query = z.object({ amountKobo: z.coerce.number().pipe(amountKobo), branch: objectId.optional() }).parse(req.query);
   const fee = await quoteFee(query.amountKobo);
-  const plan = approvalPlan(req.business!, req.membership!, query.amountKobo);
+  let branchId: Types.ObjectId | undefined;
+  if (query.branch) {
+    const branch = await BranchModel.findOne({ _id: query.branch, business: req.business!._id }).select("_id");
+    if (!branch || !canAccessBranch(req.membership!, branch._id)) throw new HttpError(404, "Branch not found");
+    branchId = branch._id;
+  }
+  const { plan } = branchId
+    ? await planForRequest({ business: req.business!, membership: req.membership!, userId: req.userId!, branchId, amountKobo: query.amountKobo })
+    : { plan: approvalPlan(req.business!, req.membership!, query.amountKobo) };
   res.json({
     amountKobo: query.amountKobo,
     ...fee,
@@ -445,25 +475,29 @@ export const createTransfer: RequestHandler = async (req, res) => {
 
 export const MAX_BULK_ITEMS = 200;
 
+// The account name the member reviewed (resolve-accounts or the preview). Optional; when sent, a row whose
+// account is now under a different name is refused with ACCOUNT_NAME_CHANGED.
+const reviewedName = z.string().trim().min(1).max(200).optional();
+
 /** A bulk row: a saved beneficiary, or an account number and bank. */
 export const payoutRow = z.union([
-  z.object({ beneficiary: objectId, amountKobo, narration }),
-  z.object({ accountNumber, bankUuid: z.string().trim().min(1), amountKobo, narration }),
+  z.object({ beneficiary: objectId, amountKobo, narration, accountName: reviewedName }),
+  z.object({ accountNumber, bankUuid: z.string().trim().min(1), amountKobo, narration, accountName: reviewedName }),
 ]);
+
+const bulkBody = z.object({
+  branch: objectId,
+  title: z.string().trim().max(80).optional(),
+  items: z.array(payoutRow).min(1).max(MAX_BULK_ITEMS),
+  saveBeneficiaries: z.boolean().optional(),
+});
 
 /**
  * Several transfers from one account at once. Every row is checked first; if any row fails, nothing is
  * created and the errors come back per row (`details.rows`). `saveBeneficiaries: true` saves the new accounts.
  */
 export const createBulkTransfer: RequestHandler = async (req, res) => {
-  const body = z
-    .object({
-      branch: objectId,
-      title: z.string().trim().max(80).optional(),
-      items: z.array(payoutRow).min(1).max(MAX_BULK_ITEMS),
-      saveBeneficiaries: z.boolean().optional(),
-    })
-    .parse(req.body);
+  const body = bulkBody.parse(req.body);
   const business = req.business!;
   const requests = await resolvePayoutRows(business, body.items, { save: body.saveBeneficiaries, userId: req.userId! });
 
@@ -477,6 +511,26 @@ export const createBulkTransfer: RequestHandler = async (req, res) => {
     clientKey: clientKey(req),
   });
   res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
+};
+
+/**
+ * A dry run of POST /bulk with the same body (no Idempotency-Key): each row's fee and errors, the totals, the
+ * available balance and the approval the batch would get. Creates nothing, holds no money and takes no lock.
+ */
+export const previewBulkTransfer: RequestHandler = async (req, res) => {
+  const body = bulkBody.parse(req.body);
+  const { requests, errors } = await checkPayoutRows(req.business!, body.items, { cached: true });
+  res.json(
+    await previewTransfers({
+      business: req.business!,
+      membership: req.membership!,
+      userId: req.userId!,
+      branchId: body.branch,
+      rows: body.items,
+      requests,
+      errors,
+    }),
+  );
 };
 
 /** `{ batch }` for several rows; `{ batch: null, items }` when a single row became a plain transfer. */

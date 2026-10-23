@@ -130,6 +130,8 @@ transferSchema.index({ "provider.payoutId": 1 }, { sparse: true });
 transferSchema.index({ batch: 1 });
 transferSchema.index({ "recipient.beneficiary": 1, createdAt: -1 });
 transferSchema.index({ business: 1, status: 1, "approval.waitingOn": 1 });
+// A member's 24-hour total from a branch, which decides whether their next transfer needs approval.
+transferSchema.index({ createdBy: 1, branch: 1, createdAt: -1 });
 transferSchema.index(
   { business: 1, createdBy: 1, clientKey: 1 },
   { unique: true, partialFilterExpression: { clientKey: { $type: "string" } } },

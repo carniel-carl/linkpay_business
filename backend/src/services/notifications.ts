@@ -8,7 +8,7 @@ import { MembershipModel } from "../models/Membership";
 import { NotificationModel, type NotificationDocument } from "../models/Notification";
 import { StaffModel } from "../models/Staff";
 import { pushToUsers } from "./push";
-import { canAccessBranch, permissionsFor } from "./team";
+import { branchScope, canAccessBranch, permissionsFor } from "./team";
 
 type Id = Types.ObjectId | string;
 
@@ -79,7 +79,13 @@ export type NotificationContent = {
 
 const unique = (ids: (Id | null | undefined)[]) => [...new Set(ids.filter((id): id is Id => !!id).map(String))];
 
-async function deliver(audience: NotificationAudience, recipients: string[], content: NotificationContent, business?: { _id: Id; name: string }) {
+async function deliver(
+  audience: NotificationAudience,
+  recipients: string[],
+  content: NotificationContent,
+  business?: { _id: Id; name: string },
+  branch?: Id | null,
+) {
   if (NOTIFICATION_TYPES[content.type].audience !== audience) throw new Error(`${content.type} isn't a ${audience} notification`);
   if (!recipients.length) return [];
   const docs = (await NotificationModel.create(
@@ -88,6 +94,7 @@ async function deliver(audience: NotificationAudience, recipients: string[], con
       recipient,
       business: business?._id,
       businessName: business?.name,
+      ...(business && branch && { branch }),
       type: content.type,
       title: content.title,
       body: content.body,
@@ -117,7 +124,8 @@ async function deliver(audience: NotificationAudience, recipients: string[], con
  *
  * About a business, only people still on its team hear, and with `branch` only those who can see that
  * branch: someone removed or moved off the branch stops getting its news even when named directly (as the
- * creator of a link, an invoice or a transfer). `formerMembers` is for telling someone they were removed.
+ * creator of a link, an invoice or a transfer). The branch is stored too, so it's hidden from them later if
+ * they move off it. `formerMembers` is for telling someone they were removed.
  */
 export async function notifyUsers(
   userIds: (Id | null | undefined)[],
@@ -128,7 +136,7 @@ export async function notifyUsers(
   try {
     let recipients = unique(userIds);
     if (business && !formerMembers) recipients = await stillOnTeam(business, recipients, branch);
-    return await deliver("user", recipients, content, business ?? undefined);
+    return await deliver("user", recipients, content, business ?? undefined, branch);
   } catch (err) {
     console.error(`Couldn't create ${content.type} notifications:`, err);
     return [];
@@ -182,15 +190,26 @@ export async function stillOnTeam(business: { _id: Id; owner?: Id | null }, user
 
 /**
  * Which of a user's notifications they can still see: personal ones, ones about businesses they're still on
- * the team of, and the notice that they were removed. Used by the list, the unread count and the stream.
+ * the team of (on a branch-limited membership, only those about their branches or about no branch), and the
+ * notice that they were removed. Used by the list, the unread count and the stream's replay. Read fresh each
+ * time, so leaving a team or a branch applies straight away. Notifications stored before the branch was
+ * recorded have none, so they stay visible to everyone on the team.
  */
 export async function visibleToUser(userId: Id) {
   const [owned, memberships] = await Promise.all([
     BusinessModel.find({ owner: userId }).select("_id"),
-    MembershipModel.find({ user: userId }).select("business"),
+    MembershipModel.find({ user: userId }).select("business role branches"),
   ]);
-  const businesses = [...owned.map((b) => b._id), ...memberships.map((m) => m.business)];
-  return { $or: [{ business: null }, { business: { $in: businesses } }, { type: "team.removed" }] };
+  const ownedIds = new Set(owned.map((b) => String(b._id)));
+  const everyBranch = owned.map((b) => b._id);
+  const someBranches: Record<string, unknown>[] = [];
+  for (const m of memberships) {
+    if (ownedIds.has(String(m.business))) continue;
+    const scope = branchScope(m);
+    if (scope) someBranches.push({ business: m.business, $or: [{ branch: null }, { branch: { $in: scope } }] });
+    else everyBranch.push(m.business);
+  }
+  return { $or: [{ business: null }, { business: { $in: everyBranch } }, ...someBranches, { type: "team.removed" }] };
 }
 
 /** Active staff whose role has `permission`. */

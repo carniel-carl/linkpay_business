@@ -12,6 +12,8 @@ import {
   movePocketMoney,
   refreshTarget,
   savePocket,
+  settlePocketMovements,
+  STALE_MOVEMENT_MS,
   todayInLagos,
 } from "../services/pockets";
 import { branchScope, canAccessBranch, hasPermission } from "../services/team";
@@ -262,8 +264,11 @@ export const closePocketHandler: RequestHandler<IdParams> = async (req, res) => 
 export const listPocketActivity: RequestHandler<IdParams> = async (req, res) => {
   const query = z.object({ before: objectId.optional(), take: z.coerce.number().int().min(1).max(100).default(20) }).parse(req.query);
   const pocket = await findPocket(req, req.params.id);
+  // A movement a crash left half-done shows once settled; a recent pending one is a move still in progress.
+  await settlePocketMovements(pocket._id, { olderThanMs: STALE_MOVEMENT_MS });
   const movements = await PocketMovementModel.find({
     pocket: pocket._id,
+    state: { $ne: "pending" },
     ...(query.before && { _id: { $lt: new Types.ObjectId(query.before) } }),
   })
     .sort({ _id: -1 })

@@ -264,14 +264,21 @@ export const listBusinessTransfers: RequestHandler<IdParams> = async (req, res) 
 // Team
 // ---------------------------------------------------------------------------------------------------------
 
-/** Everyone on the business's team, with their last sign-in and signed-in phones, plus open invites. */
+/**
+ * Everyone on the business's team, with their last sign-in and signed-in phones, plus open invites. The IP
+ * of the last sign-in only goes to staff with `activity.view_ips` (compliance and super admins); for anyone
+ * else the field is left out.
+ */
 export const listBusinessMembers: RequestHandler<IdParams> = async (req, res) => {
+  const seesIps = !!req.staffPermissions?.includes("activity.view_ips");
   const business = await findBusiness(req.params.id);
   const memberships = await MembershipModel.find({ business: business._id }).sort({ createdAt: 1 });
   // The owner's membership is created lazily; include the owner either way.
   const userIds = [...new Set([String(business.owner), ...memberships.map((m) => String(m.user))])];
   const [users, branches, devices, invites] = await Promise.all([
-    UserModel.find({ _id: { $in: userIds } }).select("name email emailVerified twoFactor.enabled twoFactor.method lastSignInAt lastSignInIp createdAt"),
+    UserModel.find({ _id: { $in: userIds } }).select(
+      `name email emailVerified twoFactor.enabled twoFactor.method lastSignInAt createdAt${seesIps ? " lastSignInIp" : ""}`,
+    ),
     BranchModel.find({ business: business._id }).select("name"),
     SessionModel.aggregate<{ _id: Types.ObjectId; count: number }>([
       // Phones only: web dashboard sign-ins are sessions too now, but this counts devices.
@@ -294,7 +301,7 @@ export const listBusinessMembers: RequestHandler<IdParams> = async (req, res) =>
           emailVerified: user.emailVerified,
           twoFactor: user.twoFactor?.enabled ? user.twoFactor.method : null,
           lastSignInAt: user.lastSignInAt ?? null,
-          lastSignInIp: user.lastSignInIp ?? null,
+          ...(seesIps && { lastSignInIp: user.lastSignInIp ?? null }),
           createdAt: user.get("createdAt") as Date,
         },
         role,

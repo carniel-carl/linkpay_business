@@ -1,7 +1,6 @@
 import type { Request, RequestHandler } from "express";
 import { isValidObjectId, Types } from "mongoose";
 import { z } from "zod";
-import { env } from "../config/env";
 import { DONATION_LIMITS, EMBED_LIMITS, PAYMENT_LINK_LIMITS } from "../config/paymentLinks";
 import { BranchModel } from "../models/Branch";
 import {
@@ -315,10 +314,8 @@ export const getPaymentLinkEmbed: RequestHandler<IdParams> = async (req, res) =>
   res.json({
     ...embedSnippets(link),
     allowedOrigins: link.allowedOrigins ?? [],
-    // In test mode the code works the same, but payments are simulated; the verify call returns `mode: "test"`.
+    // In test mode the code works the same, but payments are simulated; the verify call (`verifyUrl`) returns `mode: "test"`.
     mode: link.mode ?? "live",
-    // Where the business's server confirms a checkout before fulfilling the order (no sign-in; the token is the secret).
-    verifyUrl: `${env.apiPublicUrl}/api/public/checkouts/{token}`,
   });
 };
 

@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { RequestHandler } from "express";
 import { env } from "../config/env";
 import { WebhookEventModel } from "../models/WebhookEvent";
-import { syncIfStale } from "../services/transactions";
+import { syncAfterNewPayment } from "../services/transactions";
 import { refreshFromPayoutEvent } from "../services/transfers";
 
 // ASSUMPTION until Liquifia confirms: X-Liquifia-Signature is the hex HMAC-SHA256 of the raw request
@@ -16,7 +16,8 @@ export function verifyLiquifiaSignature(rawBody: Buffer, header: string | undefi
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-// Events that mean money arrived; they trigger an immediate sync instead of trusting the payload.
+// Events that mean money arrived; they trigger an immediate sync instead of trusting the payload. If a sync is
+// already running it may have read past the new payment, so another one follows it.
 const CREDIT_EVENTS = new Set(["virtual_account.credited", "internal_transfer.completed", "optimistic_fill.credited"]);
 // Payout updates (the docs list payout.success and payout.failed; any payout.* counts) refresh the transfer they
 // name, through the same claim as every other caller. The payload only picks the transfer; it isn't trusted.
@@ -57,7 +58,7 @@ export const liquifiaWebhook: RequestHandler = async (req, res) => {
   res.json({ received: true });
 
   let work: Promise<unknown> | null = null;
-  if (eventType && CREDIT_EVENTS.has(eventType)) work = syncIfStale(0);
+  if (eventType && CREDIT_EVENTS.has(eventType)) work = syncAfterNewPayment();
   else if (eventType && isPayoutEvent(eventType)) work = refreshFromPayoutEvent(payload);
   if (work) {
     work

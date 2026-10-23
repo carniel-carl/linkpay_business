@@ -1,6 +1,6 @@
 import { KYB_REQUIREMENTS } from "../config/kyb";
 import { BranchModel, type BranchDocument } from "../models/Branch";
-import { BusinessModel, type BusinessDocument } from "../models/Business";
+import { BusinessModel, bvnContext, type BusinessDocument } from "../models/Business";
 import { UserModel } from "../models/User";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { decrypt } from "../utils/crypto";
@@ -42,7 +42,7 @@ async function buildCustomerInput(business: BusinessDocument, branch?: BranchDoc
     phone_number: toInternationalPhone(business.phone),
     // Liquifia doesn't require a BVN (confirmed by the product owner, 2026-10-20). Only the business's own
     // customer carries the principal's BVN, so the same BVN is never sent on several customers.
-    ...(!isBranch && principal?.bvnEncrypted && { bvn: decrypt(principal.bvnEncrypted) }),
+    ...(!isBranch && principal?.bvnEncrypted && { bvn: decrypt(principal.bvnEncrypted, bvnContext(business._id, principal._id)) }),
   };
 }
 

@@ -1,7 +1,7 @@
 // Demo data for `bun run dev:mock --seed`: a verified business with three branches, balances and a fortnight
 // of incoming payments, all in the in-memory database and the mock Liquifia. Never run against real services.
-import type { Types } from "mongoose";
-import { BusinessModel, type BusinessDocument } from "../src/models/Business";
+import { Types } from "mongoose";
+import { BusinessModel, bvnContext, type BusinessDocument } from "../src/models/Business";
 import { POCKET_COLORS, POCKET_ICONS, PocketModel } from "../src/models/Pocket";
 import { SafelockModel } from "../src/models/Safelock";
 import { BeneficiaryModel } from "../src/models/Beneficiary";
@@ -63,13 +63,17 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
     password: await Bun.password.hash(DEMO_PASSWORD),
     emailVerified: true,
   });
+  const [businessId, personId] = [new Types.ObjectId(), new Types.ObjectId()];
   const business = await BusinessModel.create({
+    _id: businessId,
     owner: owner._id,
     name: "Adaeze Fabrics Ltd",
     type: "limited_liability_company",
     email: "hello@adaezefabrics.test",
     address: { street: "12 Balogun Street", city: "Lagos", state: "Lagos" },
-    people: [{ fullName: "Adaeze Okafor", roles: ["director"], bvnEncrypted: encrypt("22345678901"), bvnLast4: "8901" }],
+    people: [
+      { _id: personId, fullName: "Adaeze Okafor", roles: ["director"], bvnEncrypted: encrypt("22345678901", bvnContext(businessId, personId)), bvnLast4: "8901" },
+    ],
     status: "approved",
     submittedAt: new Date(),
     reviewedAt: new Date(),
@@ -383,13 +387,17 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   const password = await Bun.password.hash(DEMO_PASSWORD);
   const make = async (name: string, email: string, ownerName: string) => {
     const owner = await UserModel.create({ name: ownerName, email, password, emailVerified: true });
+    const [businessId, personId] = [new Types.ObjectId(), new Types.ObjectId()];
     const business = await BusinessModel.create({
+      _id: businessId,
       owner: owner._id,
       name,
       type: "limited_liability_company",
       email: `hello@${email.split("@")[0]}.test`,
       address: { street: "4 Allen Avenue", city: "Ikeja", state: "Lagos" },
-      people: [{ fullName: ownerName, roles: ["director"], bvnEncrypted: encrypt("32345678901"), bvnLast4: "8901" }],
+      people: [
+        { _id: personId, fullName: ownerName, roles: ["director"], bvnEncrypted: encrypt("32345678901", bvnContext(businessId, personId)), bvnLast4: "8901" },
+      ],
       status: "approved",
       submittedAt: new Date(Date.now() - 9 * 86_400_000),
       reviewedAt: new Date(Date.now() - 8 * 86_400_000),

@@ -7,9 +7,9 @@
 //   bun run staff sign-out <email>     ends every session
 //   bun run staff list
 import { connectDB, disconnectDB } from "../src/config/db";
-import { STAFF_ROLES, SUPER_ADMIN_ROLE, isStaffRole } from "../src/config/staffPermissions";
-import { StaffModel } from "../src/models/Staff";
-import { assertKeepsASuperAdmin } from "../src/services/staff";
+import { STAFF_ROLES, SUPER_ADMIN_ROLE, isStaffRole, type StaffRole } from "../src/config/staffPermissions";
+import { StaffModel, type StaffDocument } from "../src/models/Staff";
+import { changeStaffAccess } from "../src/services/staff";
 import { revokeStaffSessions } from "../src/services/staffAuth";
 import { HttpError } from "../src/utils/HttpError";
 
@@ -22,98 +22,115 @@ const USAGE = `Usage:
   bun run staff list
 Roles: ${STAFF_ROLES.join(", ")}`;
 
-function fail(message: string): never {
-  console.error(message);
-  process.exit(1);
+/** A refusal to show the operator (the CLI prints it and exits with 1). */
+export class StaffCliError extends Error {}
+
+export type StaffCommand = { command: string; email?: string; third?: string; password?: string; role?: string };
+
+/** Reads the command line. Throws StaffCliError with the usage when it doesn't make sense. */
+export function parseStaffArgs(argv: string[]): StaffCommand {
+  const args = [...argv];
+  const takeFlag = (name: string) => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args.splice(i, 2)[1] : undefined;
+  };
+  const password = takeFlag("--password");
+  const role = takeFlag("--role");
+  const [command, rawEmail, third] = args;
+  const email = rawEmail?.trim().toLowerCase();
+  if (!command || (command !== "list" && !email)) throw new StaffCliError(USAGE);
+  return { command, email, third, password, role };
 }
 
-const args = process.argv.slice(2);
-function takeFlag(name: string) {
-  const i = args.indexOf(name);
-  return i >= 0 ? args.splice(i, 2)[1] : undefined;
-}
-const passwordArg = takeFlag("--password");
-const roleArg = takeFlag("--role");
-const [command, rawEmail, third] = args;
-const email = rawEmail?.trim().toLowerCase();
-
-if (!command || (command !== "list" && !email)) fail(USAGE);
-
-function parseRole(value: string | undefined) {
-  if (!isStaffRole(value)) fail(`Unknown role "${value ?? ""}". Roles: ${STAFF_ROLES.join(", ")}`);
+function parseRole(value: string | undefined): StaffRole {
+  if (!isStaffRole(value)) throw new StaffCliError(`Unknown role "${value ?? ""}". Roles: ${STAFF_ROLES.join(", ")}`);
   return value;
 }
 
-/** The last active super admin can't be demoted or disabled; add another one first. */
-async function keepsASuperAdmin(...args: Parameters<typeof assertKeepsASuperAdmin>) {
+/**
+ * The same atomic change the admin console makes (services/staff.ts), so the CLI can't leave nobody able to
+ * manage staff either, even run at the same moment as a change in the console.
+ */
+async function changeAccess(staff: StaffDocument, next: Parameters<typeof changeStaffAccess>[1]) {
   try {
-    await assertKeepsASuperAdmin(...args);
+    return await changeStaffAccess(staff, next);
   } catch (err) {
-    if (err instanceof HttpError) fail(`${err.message}. Add another super admin first.`);
+    if (err instanceof HttpError && err.code === "LAST_SUPER_ADMIN") throw new StaffCliError(`${err.message}. Add another super admin first.`);
+    if (err instanceof HttpError) throw new StaffCliError(err.message);
     throw err;
   }
 }
 
-await connectDB();
-await StaffModel.syncIndexes();
+/**
+ * Runs one command against the connected database. Output goes to `log`; a refusal throws StaffCliError.
+ * `ask` reads the password when --password isn't given.
+ */
+export async function runStaffCommand(
+  { command, email, third, password: passwordArg, role: roleArg }: StaffCommand,
+  { log = console.log, ask = (question: string) => prompt(question) }: { log?: (line: string) => void; ask?: (question: string) => string | null } = {},
+) {
+  const findStaff = async () => (await StaffModel.findOne({ email })) ?? Promise.reject(new StaffCliError(`No staff member with email ${email}`));
 
-async function findStaff() {
-  return (await StaffModel.findOne({ email })) ?? fail(`No staff member with email ${email}`);
-}
-
-switch (command) {
-  case "add": {
-    const name = third;
-    if (!name?.trim()) fail(USAGE);
-    const role = roleArg === undefined ? SUPER_ADMIN_ROLE : parseRole(roleArg);
-    if (await StaffModel.exists({ email })) fail(`${email} is already a staff member`);
-    const password = passwordArg ?? prompt("Password (at least 8 characters):") ?? "";
-    if (password.length < 8 || password.length > 128) fail("The password must be 8 to 128 characters");
-    await StaffModel.create({ name: name.trim(), email, role, password: await Bun.password.hash(password) });
-    console.log(`Added ${email} as ${role}. They sign in at the admin console with an emailed code as the second step.`);
-    break;
-  }
-  case "set-role": {
-    const role = parseRole(third);
-    const staff = await findStaff();
-    await keepsASuperAdmin(staff, { role });
-    staff.role = role;
-    await staff.save();
-    console.log(`${email} is now ${role}. It applies to their next request.`);
-    break;
-  }
-  case "disable": {
-    const staff = await findStaff();
-    await keepsASuperAdmin(staff, { status: "disabled" });
-    staff.status = "disabled";
-    await staff.save();
-    const ended = await revokeStaffSessions(staff._id);
-    console.log(`Disabled ${email} and ended ${ended} session(s)`);
-    break;
-  }
-  case "enable": {
-    const staff = await findStaff();
-    staff.status = "active";
-    await staff.save();
-    console.log(`Enabled ${email}`);
-    break;
-  }
-  case "sign-out": {
-    const staff = await findStaff();
-    console.log(`Ended ${await revokeStaffSessions(staff._id)} session(s) for ${email}`);
-    break;
-  }
-  case "list": {
-    const staff = await StaffModel.find().sort({ createdAt: 1 });
-    if (!staff.length) console.log("No staff yet. Add one with: bun run staff add <email> \"<name>\"");
-    for (const s of staff) {
-      const seen = s.lastSignInAt ? s.lastSignInAt.toISOString() : "never";
-      console.log(`${s.email}\t${s.name}\t${s.role ?? "(no role)"}\t${s.status}\t2FA: ${s.twoFactor?.method ?? "email"}\tlast sign-in: ${seen}`);
+  switch (command) {
+    case "add": {
+      const name = third;
+      if (!name?.trim()) throw new StaffCliError(USAGE);
+      const role = roleArg === undefined ? SUPER_ADMIN_ROLE : parseRole(roleArg);
+      if (await StaffModel.exists({ email })) throw new StaffCliError(`${email} is already a staff member`);
+      const password = passwordArg ?? ask("Password (at least 8 characters):") ?? "";
+      if (password.length < 8 || password.length > 128) throw new StaffCliError("The password must be 8 to 128 characters");
+      await StaffModel.create({ name: name.trim(), email, role, password: await Bun.password.hash(password) });
+      log(`Added ${email} as ${role}. They sign in at the admin console with an emailed code as the second step.`);
+      break;
     }
-    break;
+    case "set-role": {
+      const role = parseRole(third);
+      await changeAccess(await findStaff(), { role });
+      log(`${email} is now ${role}. It applies to their next request.`);
+      break;
+    }
+    case "disable": {
+      const staff = await changeAccess(await findStaff(), { status: "disabled" });
+      const ended = await revokeStaffSessions(staff._id);
+      log(`Disabled ${email} and ended ${ended} session(s)`);
+      break;
+    }
+    case "enable": {
+      await changeAccess(await findStaff(), { status: "active" });
+      log(`Enabled ${email}`);
+      break;
+    }
+    case "sign-out": {
+      const staff = await findStaff();
+      log(`Ended ${await revokeStaffSessions(staff._id)} session(s) for ${email}`);
+      break;
+    }
+    case "list": {
+      const staff = await StaffModel.find().sort({ createdAt: 1 });
+      if (!staff.length) log('No staff yet. Add one with: bun run staff add <email> "<name>"');
+      for (const s of staff) {
+        const seen = s.lastSignInAt ? s.lastSignInAt.toISOString() : "never";
+        log(`${s.email}\t${s.name}\t${s.role ?? "(no role)"}\t${s.status}\t2FA: ${s.twoFactor?.method ?? "email"}\tlast sign-in: ${seen}`);
+      }
+      break;
+    }
+    default:
+      throw new StaffCliError(USAGE);
   }
-  default:
-    fail(USAGE);
 }
 
-await disconnectDB();
+if (import.meta.main) {
+  let code = 0;
+  try {
+    const parsed = parseStaffArgs(process.argv.slice(2));
+    await connectDB();
+    await StaffModel.syncIndexes();
+    await runStaffCommand(parsed);
+  } catch (err) {
+    if (!(err instanceof StaffCliError)) throw err;
+    console.error(err.message);
+    code = 1;
+  }
+  await disconnectDB();
+  process.exit(code);
+}
