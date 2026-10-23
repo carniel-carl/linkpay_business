@@ -179,13 +179,34 @@ The web builds and owns the script. The contract is:
 
 The iframe and the script talk over `postMessage`. Messages from the iframe are `{ source: "linkpay", type, frameId, checkout?, height? }`, where `type` is `ready | checkout | update | paid | close | resize`. A pasted `<iframe>` (no `frame` id) still resizes when the script is on the page. The script checks that `event.origin` is WEB_URL and that `frameId` is one it created.
 
-Inside the iframe, the pay page sends `source: "embed"` with `embedOrigin`, taken first from `location.ancestorOrigins[0]`, then the `origin` query parameter the script adds, then `document.referrer`.
+Inside the iframe, the pay page sends `source: "embed"` with `embedOrigin`, taken from `location.ancestorOrigins[0]`, or else `document.referrer`. The `origin` query parameter the script adds only picks where messages go. `embedOrigin` is **advisory**: any client can send any value, so it's for the dashboard's "where payments came from", not for security. Prefill (name, email, phone) no longer travels in the iframe URL. `embed.js` answers the frame's `ready` with a `{ source: "linkpay", type: "prefill", frameId, prefill }` message sent only to WEB_URL. The page accepts it only from `window.parent`, for its own frame id, and fills only empty fields.
 
-**Confirm on the server.** A browser callback can be faked. Before fulfilling an order, the business's server should call `GET API_URL/api/public/checkouts/<token>` and check `status === "paid"`, `mode === "live"`, `paidKobo` and `clientReference`. Webhooks to the business's server aren't built yet (open question 18).
+**Confirm on the server (updated 2026-10-23, audit H12).** A browser callback can be faked, and anyone can hand the merchant's page a checkout from a different link, because `clientReference` is set by the payer.
+
+Before fulfilling an order, the business's server calls `GET API_URL/api/public/checkouts/<token>` and fulfils only if **all** of these hold:
+- `status === "paid"`;
+- `mode === "live"`;
+- `link.slug` is *their* slug;
+- `currency === "NGN"`;
+- `priceKobo` is the order total, and `paidKobo` is at least that;
+- `clientReference` is their order id.
+
+The merchant then marks the order paid, so the same checkout can't be used twice. The embed snippet and the dashboard's embed card say exactly this.
+
+Proposed, not built yet: `GET /api/public/pay/:slug/checkouts/:token`, which 404s unless the token belongs to that slug, so the binding is enforced by us. Later, signed webhooks (open question 18).
 
 **Web files:** `web/public/embed.js` (the script), `web/src/app/pay/[slug]/` (the page), `web/src/components/pay/pay-client.tsx` (form, checkout, messages), `web/src/app/api/pay/` (start and poll, forwarding the payer's address), and `web/src/proxy.ts` (`frame-ancestors`).
 
-**Rate limits behind the web:** the web calls the public routes for payers and passes their address in `X-Forwarded-For`. The backend believes it only from `TRUST_PROXY` (default `loopback`), so each payer has their own limit. Set `TRUST_PROXY` to the web server's and load balancer's addresses in production.
+**Rate limits behind the web:** the web calls the public routes for payers and passes their address in `X-Forwarded-For`. It takes that address only from the header named by the web's `CLIENT_IP_HEADER` (the platform's own header, never one the browser sent; see `web/src/lib/client-ip.ts`). The backend believes it only from `TRUST_PROXY` (default `loopback`), so each payer has their own limit. Set `TRUST_PROXY` to the web server's and load balancer's addresses in production.
+
+**Abuse limits (2026-10-23, audit M2/M3/M7):**
+- **Reusing a checkout:** an open checkout is reused only for the same browser. The pay page keeps a random `resumeKey` per link per tab and sends it on every start, and the backend stores only its SHA-256 (`resumeKeyHash`). Reuse also needs identical details, and it never overwrites anything. Changed details, or no key, mean a new checkout.
+- **Open checkouts per account and price:** at most 10 per client IP (IPv6 grouped by /56) and 3 per payer email. Over the cap the start returns `429 TOO_MANY_OPEN_CHECKOUTS`, and paying a checkout frees its slot. Test-mode links have no caps.
+- **Payment limits:** `maxPayments` counts live pending checkouts still within their 30 minutes. When those fill it, the start returns `503 CHECKOUT_BUSY` with `details.reason: "places_held"`.
+- **Taken-down links:** open checkouts show `payTo: null`, and public simulate returns 404.
+- **Test simulations:** a test payment simulated through the public endpoint sends **no payer receipt**. Only a simulation from the dashboard sends the "[Test]" receipt.
+- **Live streams:** capped per IP (IPv6 by /56), plus a global cap of 5,000 per instance.
+- **Framing:** the web proxy decodes the path before matching. Every `/pay/*` path gets a `frame-ancestors`: the link's allowed websites on its own page, and `'self'` on anything else.
 
 ## 6. Test mode
 
