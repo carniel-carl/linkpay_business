@@ -8,6 +8,7 @@ import { Figure } from "@/components/ui/typography";
 import { can, useOverview } from "@/lib/api/banking";
 import type { Branch } from "@/lib/api/types";
 import { formatAccountNumber } from "@/lib/format";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** Every branch the member can see, with its account number. `branches.manage` adds and edits. */
@@ -18,12 +19,13 @@ export default function Branches() {
   // Refresh while an account is being opened, so its number appears without a pull.
   const settingUp = !!data?.branches.some((b) => !b.account && b.liquifia.accountStatus !== "failed");
   const overview = useOverview({ refetchInterval: settingUp ? 5000 : undefined });
+  const pull = usePullToRefresh(() => overview.refetch());
 
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-4 px-4 pb-12 pt-3"
-      refreshControl={<RefreshControl refreshing={overview.isRefetching} onRefresh={() => void overview.refetch()} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <FocusStatusBar />
       {manage && (

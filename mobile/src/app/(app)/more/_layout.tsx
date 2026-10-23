@@ -4,7 +4,7 @@ import { useTheme } from "@/theme/theme";
 
 // Other tabs open screens here (a notification opens Signed-in devices, the transaction PIN sheet opens Transaction
 // PIN), so More's list always sits underneath and Back leads to it.
-export const unstable_settings = { initialRouteName: "index" };
+export const unstable_settings = { anchor: "index" };
 
 /**
  * A standard inline header, not a large title: inside NativeTabs on iOS 26 the large title reserves its

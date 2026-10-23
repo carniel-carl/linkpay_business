@@ -3,7 +3,7 @@ import { stackScreenOptions } from "@/components/ui/stack-options";
 import { useTheme } from "@/theme/theme";
 
 // Send can be opened from Home; the payments list still sits underneath it. Transfers are a view of index.
-export const unstable_settings = { initialRouteName: "index" };
+export const unstable_settings = { anchor: "index" };
 
 export default function PaymentsLayout() {
   const { colors } = useTheme();

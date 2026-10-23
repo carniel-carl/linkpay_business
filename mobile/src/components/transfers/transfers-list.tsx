@@ -19,6 +19,7 @@ import {
 import type { Overview, Transfer } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
+import { usePullToRefresh } from "@/lib/query";
 import { useSendDraft } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
 
@@ -50,6 +51,7 @@ export function TransfersList({
   const tabs = TRANSFER_TABS.filter((t) => t.key !== "awaiting" || approver);
   const tab: TransferTab = wanted && tabs.some((t) => t.key === wanted) ? wanted : "all";
   const list = useTransfers(tab, { q });
+  const pull = usePullToRefresh(() => list.refetch());
   const rule = useApprovalRule();
   const pending = usePendingApprovalCount().data ?? 0;
   const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
@@ -62,10 +64,7 @@ export function TransfersList({
       {...LIST_PERFORMANCE}
       contentContainerStyle={{ paddingBottom: 48 }}
       refreshControl={
-        <RefreshControl
-          refreshing={list.isRefetching && !list.isFetchingNextPage}
-          onRefresh={() => void list.refetch()}
-        />
+        <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
       }
       onEndReachedThreshold={0.6}
       onEndReached={() => {

@@ -20,6 +20,7 @@ import { cn } from "@/lib/cn";
 import { dayHeading, formatNaira, lagosDate } from "@/lib/format";
 import { DEFAULT_FILTERS, usePaymentFilters } from "@/lib/payment-filters";
 import { PERIOD_LABELS, PERIODS } from "@/lib/periods";
+import { usePullToRefresh } from "@/lib/query";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
 import { useSendDraft } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
@@ -133,6 +134,7 @@ function Activity({
   const { filters, reset } = usePaymentFilters();
   const list = useTransactions(filters);
   const summary = useTransactionSummary(filters);
+  const pull = usePullToRefresh(() => Promise.all([list.refetch(), summary.refetch()]));
   const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
   const sections = useMemo(() => groupByDay(items), [items]);
   const branches = overview.branches;
@@ -147,10 +149,7 @@ function Activity({
       stickySectionHeadersEnabled={false}
       contentContainerStyle={{ paddingBottom: 48 }}
       refreshControl={
-        <RefreshControl
-          refreshing={list.isRefetching && !list.isFetchingNextPage}
-          onRefresh={() => void Promise.all([list.refetch(), summary.refetch()])}
-        />
+        <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
       }
       onEndReachedThreshold={0.6}
       onEndReached={() => {

@@ -18,6 +18,7 @@ import { cn } from "@/lib/cn";
 import { formatNaira } from "@/lib/format";
 import { INVOICE_TABS, type InvoiceTab } from "@/lib/invoices";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** Defined once, so memoised rows keep the same handler. */
@@ -32,6 +33,7 @@ export default function Invoices() {
   const [q, setQ] = useState<string>();
   const list = useInvoices(tab, { q, enabled: ready });
   const summary = useInvoiceSummary(ready);
+  const pull = usePullToRefresh(() => Promise.all([list.refetch(), summary.refetch()]));
   const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
 
   useEffect(() => {
@@ -76,10 +78,7 @@ export default function Invoices() {
         {...LIST_PERFORMANCE}
         contentContainerStyle={{ paddingBottom: 48 }}
         refreshControl={
-          <RefreshControl
-            refreshing={list.isRefetching && !list.isFetchingNextPage}
-            onRefresh={() => void Promise.all([list.refetch(), summary.refetch()])}
-          />
+          <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
         }
         onEndReachedThreshold={0.6}
         onEndReached={() => {

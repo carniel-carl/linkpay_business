@@ -17,6 +17,7 @@ import type { Pocket, PocketMovement } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatNaira } from "@/lib/format";
 import { formatDay } from "@/lib/invoices";
+import { usePullToRefresh } from "@/lib/query";
 import { describeAutoSave, MOVEMENT_LABELS } from "@/lib/savings";
 import { useTheme } from "@/theme/theme";
 
@@ -31,6 +32,7 @@ export default function PocketScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const pocket = usePocket(id);
   const activity = usePocketActivity(id);
+  const pull = usePullToRefresh(() => Promise.all([pocket.refetch(), activity.refetch()]));
   const overview = useOverview();
   const moved = usePocketMoved();
   const pin = useTransactionPin();
@@ -86,10 +88,7 @@ export default function PocketScreen() {
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
       refreshControl={
-        <RefreshControl
-          refreshing={pocket.isRefetching && !activity.isFetchingNextPage}
-          onRefresh={() => void Promise.all([pocket.refetch(), activity.refetch()])}
-        />
+        <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
       }
     >
       <FocusStatusBar />

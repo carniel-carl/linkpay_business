@@ -16,12 +16,14 @@ import type { AppNotification } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { dayHeading, lagosDate } from "@/lib/format";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
+import { usePullToRefresh } from "@/lib/query";
 import { openNotification } from "@/lib/notification-routes";
 import { useTheme } from "@/theme/theme";
 
 /** Everything that happened across the person's businesses, newest first, by Lagos day. Tap to open it. */
 export default function Notifications() {
   const list = useNotifications();
+  const pull = usePullToRefresh(() => list.refetch());
   const markRead = useMarkRead();
   const markAll = useMarkAllRead();
   const memberships = useMemberships();
@@ -49,7 +51,7 @@ export default function Notifications() {
         {...LIST_PERFORMANCE}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={{ paddingBottom: 48 }}
-        refreshControl={<RefreshControl refreshing={list.isRefetching && !list.isFetchingNextPage} onRefresh={() => void list.refetch()} />}
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
         onEndReachedThreshold={0.6}
         onEndReached={() => {
           if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();

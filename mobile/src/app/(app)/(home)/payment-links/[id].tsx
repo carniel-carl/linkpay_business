@@ -23,6 +23,7 @@ import {
 import type { LinkCheckout, PaymentLink, PaymentLinkImage, PaymentMode } from "@/lib/api/types";
 import { formatDate, formatDateTime, formatNaira, formatNairaShort } from "@/lib/format";
 import { CHECKOUT_TABS, originLabel, paymentsLabel, PHONE_LABELS, priceLabel, UNAVAILABLE_LABELS, type CheckoutTab } from "@/lib/payment-links";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 const openCheckout = (c: LinkCheckout) => router.push({ pathname: "/payment-links/checkout/[id]", params: { id: c._id } });
@@ -54,10 +55,10 @@ export default function PaymentLinkScreen() {
       </ScrollView>
     );
   }
-  return <Detail l={l} refetching={link.isRefetching} refetch={() => void link.refetch()} />;
+  return <Detail l={l} refetch={link.refetch} />;
 }
 
-function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolean; refetch: () => void }) {
+function Detail({ l, refetch }: { l: PaymentLink; refetch: () => Promise<unknown> }) {
   const { shadows } = useTheme();
   const change = usePaymentLinkChange();
   const embed = usePaymentLinkEmbed(l._id);
@@ -66,6 +67,7 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
   const [shownMode, setShownMode] = useState<PaymentMode>("test");
   const listMode: PaymentMode = l.mode === "test" ? shownMode : "live";
   const checkouts = useLinkCheckouts(l._id, tab, true, listMode);
+  const pull = usePullToRefresh(() => Promise.all([refetch(), checkouts.refetch()]));
   const items = useMemo(() => checkouts.data?.pages.flatMap((p) => p.items) ?? [], [checkouts.data]);
   const active = l.status === "active";
   const donation = l.kind === "donation";
@@ -157,15 +159,7 @@ function Detail({ l, refetching, refetch }: { l: PaymentLink; refetching: boolea
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerClassName="gap-6 px-4 pb-12 pt-3"
-        refreshControl={
-          <RefreshControl
-            refreshing={refetching}
-            onRefresh={() => {
-              refetch();
-              void checkouts.refetch();
-            }}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
         <FocusStatusBar />
         {l.images.length > 0 && <Pictures images={l.images} />}

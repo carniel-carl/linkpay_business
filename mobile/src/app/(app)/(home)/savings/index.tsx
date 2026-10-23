@@ -19,6 +19,7 @@ import { usePockets, type PocketStatusFilter } from "@/lib/api/savings";
 import type { Branch, Pocket, Safelock } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** Defined once, so memoised cards keep the same handler. */
@@ -42,6 +43,7 @@ export default function Savings() {
   // The open pockets always feed the total; the list shows whichever tab is picked.
   const open = usePockets({ status: "active", branch, enabled: ready && view === "pockets" });
   const list = usePockets({ status, branch, enabled: ready && view === "pockets" });
+  const pull = usePullToRefresh(() => Promise.all([list.refetch(), open.refetch()]));
 
   if (!ready) {
     return (
@@ -112,10 +114,7 @@ export default function Savings() {
         {...LIST_PERFORMANCE}
         contentContainerStyle={{ paddingBottom: 48, gap: 12 }}
         refreshControl={
-          <RefreshControl
-            refreshing={list.isRefetching}
-            onRefresh={() => void Promise.all([list.refetch(), open.refetch()])}
-          />
+          <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
         }
         ListHeaderComponent={
           <View className="gap-4 pb-1 pt-2">
@@ -192,6 +191,7 @@ function SafelockView({
   // The running locks always feed the total; the list shows whichever tab is picked.
   const locked = useSafelocks({ status: "locked", branch });
   const list = useSafelocks({ status, branch });
+  const pull = usePullToRefresh(() => Promise.all([list.refetch(), locked.refetch()]));
   const items = list.data?.items ?? [];
   const count = locked.data?.items.length;
   const branchCount = new Set(locked.data?.items.map((s) => s.branch?._id)).size;
@@ -204,7 +204,7 @@ function SafelockView({
       keyExtractor={keyById}
       {...LIST_PERFORMANCE}
       contentContainerStyle={{ paddingBottom: 48, gap: 12 }}
-      refreshControl={<RefreshControl refreshing={list.isRefetching} onRefresh={() => void Promise.all([list.refetch(), locked.refetch()])} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       ListHeaderComponent={
         <View className="gap-4 pb-1 pt-2">
           {header}

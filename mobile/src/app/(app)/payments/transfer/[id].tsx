@@ -15,6 +15,7 @@ import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { approveTransfer, KIND_LABELS, useTransfer, useTransferAction, useTransferChanged } from "@/lib/api/transfers";
 import type { Transfer } from "@/lib/api/types";
 import { formatAccountNumber, formatDateTime, formatNaira, formatNairaShort } from "@/lib/format";
+import { usePullToRefresh } from "@/lib/query";
 
 /** One transfer: where it is, who prepared and decided it, and what the member can do with it now. */
 export default function TransferDetail() {
@@ -38,10 +39,11 @@ export default function TransferDetail() {
       </KeyboardAwareScrollView>
     );
   }
-  return <Detail t={t} justSent={sent === "1"} refetching={transfer.isRefetching} refetch={() => void transfer.refetch()} />;
+  return <Detail t={t} justSent={sent === "1"} refetch={transfer.refetch} />;
 }
 
-function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: boolean; refetching: boolean; refetch: () => void }) {
+function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refetch: () => Promise<unknown> }) {
+  const pull = usePullToRefresh(refetch);
   const action = useTransferAction();
   const changed = useTransferChanged();
   const pin = useTransactionPin();
@@ -110,7 +112,7 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
         keyboardShouldPersistTaps="handled"
         contentInsetAdjustmentBehavior="automatic"
         contentContainerClassName="gap-6 px-4 pb-12 pt-4"
-        refreshControl={<RefreshControl refreshing={refetching} onRefresh={refetch} />}
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
         <FocusStatusBar />
         <View className="gap-2 px-1">
