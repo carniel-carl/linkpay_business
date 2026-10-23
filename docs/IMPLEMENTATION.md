@@ -49,17 +49,19 @@ bun run check        # read-only check of the MongoDB + Liquifia credentials
 bun run staff add someone@linkpay.ng "Their Name"   # staff account for the admin console (also: disable, enable, sign-out, list)
 bun run migrate:staff      # one-off: move old role: "admin" users to staff accounts (dry run; --apply writes and deletes staff-only users)
 bun run migrate:branches   # one-off: head office for businesses approved before branches (no Liquifia calls)
-bun test             # in-memory MongoDB + mock Liquifia; tests/setup.ts overrides the live keys
+bun run test         # in-memory MongoDB + mock Liquifia; tests/setup.ts overrides the live keys (30s hook timeout; plain `bun test` keeps bun's 5s)
 ```
+
+The lockfiles need **bun 1.4 or later**. On an older bun, run the same commands through `npx -y bun@1.4.4 …`.
 
 Environment variables go in `backend/.env`; see `backend/.env.example`. Bun loads `.env` automatically.
 
 | Var | Notes |
 | --- | --- |
 | `MONGODB_URI`, `MONGODB_DB_NAME` (default `linkpay_business`), `MONGODB_USERNAME`, `MONGODB_PASSWORD` | Username and password are passed to the driver separately from the URI. |
-| `LIQUIFIA_SECRET_KEY` (required), `LIQUIFIA_PUBLIC_KEY`, `LIQUIFIA_BASE_URL` | ⚠️ The current `.env` has **live** keys (`sk_live_`), so creating anything on Liquifia uses real money. Ask Liquifia for `sk_test_` keys for development. |
+| `LIQUIFIA_SECRET_KEY` (required), `LIQUIFIA_PUBLIC_KEY`, `LIQUIFIA_BASE_URL` | ⚠️ The current `.env` has **live** keys (`sk_live_`), so creating anything on Liquifia uses real money. Ask Liquifia for `sk_test_` keys for development. Outside `NODE_ENV=production` the server **refuses to start with an `sk_live_` key** unless `LIQUIFIA_ALLOW_LIVE=1` is set (it then prints a warning). `bun run check` sets that for itself. |
 | `JWT_SECRET`, `JWT_EXPIRES_IN`, `ENCRYPTION_KEY` | Generate secrets with `openssl rand -hex 32`. `ENCRYPTION_KEY` encrypts BVNs. |
-| `STAFF_JWT_SECRET` | Signs staff (admin console) tokens. Must differ from `JWT_SECRET`. Required in production; development falls back to a fixed dev value. |
+| `STAFF_JWT_SECRET` | Signs staff (admin console) tokens. **Required everywhere except tests**: at least 32 characters and different from `JWT_SECRET`, or the server refuses to start (`openssl rand -hex 32`). `dev:mock` and `dev:seed` set their own. |
 | `UPLOAD_DIR` | Local folder for verification documents (gitignored). |
 | `WEB_URL` | Public web URL used in emailed links (team invites). Default `http://localhost:3000`. |
 | `PUSH_PROVIDER`, `EXPO_ACCESS_TOKEN` | Phone pushes. Unset, they print to the console (`📱 Push to ...`); `expo` sends them through Expo's push service (the access token only if the Expo project requires one). |
@@ -68,7 +70,7 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | `LIQUIFIA_WEBHOOK_SECRET` | Verifies Liquifia webhooks. Until it's set, `POST /api/webhooks/liquifia` returns 503 and incoming payments arrive through the periodic sync only. |
 | `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia (default 60000; 0 turns it off). |
 
-Until a real email provider is connected, **emails, including OTP codes, are printed to the backend console.**
+Until a real email provider is connected, **emails, including OTP codes, are printed to the backend console.** For that reason the server **refuses to start with `NODE_ENV=production`** until `setEmailProvider()` is called at startup (`src/services/email.ts`).
 
 ### Web
 ```bash
@@ -502,3 +504,9 @@ Add a line per session: date, what was done, and anything left half-finished.
 
 - **2026-10-22 (pay page: live updates after paying):** product owner found that after making a payment on the page, switching mode or turning the link off and on no longer showed. The stream was fine; the giving card took its test strip from the payer's checkout and ignored the link once a checkout existed. Now (`pay-client.tsx`): a transfer in progress keeps its own mode (its details are real or placeholders); otherwise the strip follows the link live. A test transfer still in progress when the link goes live is dropped (going live clears it) and the card returns to the form. The thank-you stays after any change, with **Give again** while the link takes payments, or "isn't taking donations right now" when it's off. Checked on a scratch mock and web with the page left open: test gift, go live, off, on, Give again, back to test, and a test transfer in progress when it went live, each reflected in about 0.2 to 1.1 s with no reload and no page errors.
 
+
+- **2026-10-23 (audit and first fix batch):** full audit of backend, web, admin and mobile → `docs/AUDIT-2026-10-23.md`. Fixed on branch `fix/audit-batch-1` (not committed yet):
+  - Backend: atomic OTP attempts and a 20-per-day failure cap (`OtpFailure`); `STAFF_JWT_SECRET` always required; refuses `sk_live_` outside production without `LIQUIFIA_ALLOW_LIVE=1`; refuses production with the console email provider; generic 500 bodies (CastError → 400, multer → 400); every HTML email value escaped and names capped at 100; KYB decisions are conditional updates with the audit written first; concurrent provisioning no longer leaves "failed"; notification stream timers can't leak; tests pin push/uploads and run with a 30s timeout (`bun run test`). 272/272 pass.
+  - Web/admin: Next 16.4.2 (no critical advisories left; 9 dev/build-only ones remain via shadcn, postcss and fast-glob); idempotency keys follow the request details instead of being replaced on errors; `safeNext` rejects backslash/control-character/off-site `next` values.
+  - Mobile: sign-out wipes the keychain before any network call (the push-token DELETE is gone; ending the session drops the phone's tokens on the server); the 5-wrong-passcode limit is enforced at boot and checks no code once spent; idempotency keys follow the request details; money requests time out after 45s with "may already have gone" copy.
+  - Left for the next batches (see the audit's "Suggested order"): payout claim before sending, lock owner token, hold timing (ask Liquifia), password reset and clearing the password on OTP verification, revocable web sessions and client-IP forwarding, embed verification guidance, server-checked step-up. Also found while fixing: a reused idempotency key with different details replays the first result, and two simultaneous requests with one key get a bare 409 "Duplicate key"; `createStaffInvite` emails before auditing.

@@ -33,7 +33,7 @@ Status: **built 2026-10-21** on the finished backend (confirmed by its session, 
    - `security.new_sign_in` → `/more/devices`
 5. **Push** (native module, needs a rebuild): `bunx expo install expo-notifications`, config plugin in `app.json` (icon, colour, Android channels: Payments, Transfers, Invoices, Account and security; map each type to a channel on the backend's message `channelId`, a small backend addition).
    - Ask permission once, after passcode/biometrics setup, with our own screen first explaining what they'll get. Never at launch. Respect a refusal; More shows the status and a link to Settings.
-   - Register the token after sign-in and each unlock when it changed; remove it **before** sign-out (while the session is still valid). "Sign out and forget" and remote sign-out are covered by the backend dropping tokens of ended sessions.
+   - Register the token after sign-in and each unlock when it changed; no `DELETE` at sign-out (2026-10-23): it could hang sign-out behind the lock, and the backend already drops the tokens of ended sessions, which covers sign-out, "Sign out and forget" and remote sign-out.
    - Foreground: `setNotificationHandler` shows the system banner and refetches the list and count.
    - Tap: `addNotificationResponseReceivedListener` + `getLastNotificationResponseAsync` (cold start). If the app is locked, hold the target (like `lib/pending-invite.ts`) and open it after unlock. Mark the notification read.
    - App icon badge: set to the unread total after each count refetch; clear on sign-out.
