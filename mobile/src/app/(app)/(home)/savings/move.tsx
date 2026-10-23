@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { PocketTile } from "@/components/savings/pocket-parts";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { NairaField } from "@/components/ui/naira-field";
@@ -12,9 +13,9 @@ import { TextField } from "@/components/ui/text-field";
 import { useAccounts } from "@/lib/api/banking";
 import { idempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { usePocket, usePocketChange } from "@/lib/api/savings";
+import { usePocket, usePocketChange, usePocketMoved, withdrawFromPocket } from "@/lib/api/savings";
 import type { Pocket } from "@/lib/api/types";
-import { formatNaira } from "@/lib/format";
+import { formatNaira, formatNairaShort } from "@/lib/format";
 import { koboToInput } from "@/lib/invoices";
 import { parseNaira } from "@/lib/send-draft";
 
@@ -22,8 +23,9 @@ const MAX_KOBO = 10_000_000_000;
 
 /**
  * Add money (from the branch's available balance into the pocket) or Withdraw (back to available). Nothing
- * leaves the account, so there's no passcode, as the brief suggests. One Idempotency-Key per amount and note,
- * kept through errors, so a retry after a dropped connection can't move the money twice.
+ * leaves the account, but taking money out of savings needs the transaction PIN; adding it doesn't. One
+ * Idempotency-Key per amount and note, kept through errors and PIN retries, so a retry after a dropped
+ * connection can't move the money twice.
  */
 export default function MovePocketMoney() {
   const { id, direction } = useLocalSearchParams<{ id: string; direction: "deposit" | "withdraw" }>();
@@ -49,6 +51,10 @@ export default function MovePocketMoney() {
 function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "withdraw" }) {
   const accounts = useAccounts(direction === "deposit");
   const change = usePocketChange();
+  const moved = usePocketMoved();
+  const pin = useTransactionPin();
+  // A withdrawal that failed for a reason other than the PIN (deposits use `change.error`).
+  const [withdrawError, setWithdrawError] = useState<unknown>();
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [submitted, setSubmitted] = useState(false);
@@ -87,22 +93,38 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
     if (next.amount !== undefined) setAmount(next.amount);
     if (next.note !== undefined) setNote(next.note);
     change.reset();
+    setWithdrawError(undefined);
   }
 
   function submit() {
     setSubmitted(true);
     if (amountError || kobo === undefined) return;
     const move = { amountKobo: kobo, note: note.trim() || undefined };
-    change.mutate(
-      { kind: direction, id: pocket._id, ...move, idempotencyKey: keyFor(move) },
-      {
-        onSuccess: () => {
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          router.back();
-        },
+    const done = () => {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.back();
+    };
+    if (deposit) {
+      change.mutate({ kind: "deposit", id: pocket._id, ...move, idempotencyKey: keyFor(move) }, { onSuccess: done });
+      return;
+    }
+    setWithdrawError(undefined);
+    const shown = formatNairaShort(kobo);
+    void pin.ask({
+      title: `Withdraw ${shown}?`,
+      subtitle: `Enter your transaction PIN to move ${shown} from ${pocket.name} back to ${branchName}'s available balance.`,
+      pending: "Withdrawing…",
+      // A corrected PIN keeps the key: the PIN is a header, not part of what's sent.
+      run: (entered) => withdrawFromPocket(pocket._id, move, keyFor(move), entered),
+      onSuccess: (next) => {
+        moved(next);
+        done();
       },
-    );
+      onError: (err) => setWithdrawError(err),
+    });
   }
+
+  const error = deposit ? change.error : withdrawError;
 
   return (
     <KeyboardAwareScrollView
@@ -124,7 +146,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
         </View>
       </View>
 
-      <FormError message={change.error ? moveError(change.error, branchName) : undefined} />
+      <FormError message={error ? moveError(error, branchName) : undefined} />
 
       <View className="gap-3">
         <NairaField
@@ -164,7 +186,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
       />
 
       <View className="gap-3">
-        <Button loading={change.isPending} onPress={submit}>
+        <Button loading={change.isPending || pin.busy} onPress={submit}>
           {deposit
             ? kobo && !amountError
               ? `Add ${formatNaira(kobo)}`
@@ -179,6 +201,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
             : "Withdrawn money is available to send straight away."}
         </Text>
       </View>
+      {pin.sheet}
     </KeyboardAwareScrollView>
   );
 }

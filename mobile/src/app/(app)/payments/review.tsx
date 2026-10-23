@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { ConfirmPasscode } from "@/components/security/confirm-passcode";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FormError } from "@/components/ui/form-error";
@@ -12,24 +12,19 @@ import { Display } from "@/components/ui/typography";
 import { useAccounts } from "@/lib/api/banking";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { KIND_LABELS, sendTransfer, useFee, type SendRequest } from "@/lib/api/transfers";
-import { useAuth } from "@/lib/auth/store";
 import { useBusinessContext } from "@/lib/business-context";
-import { formatAccountNumber, formatNaira } from "@/lib/format";
-import { unlockWithBiometrics } from "@/lib/security/biometrics";
+import { formatAccountNumber, formatNaira, formatNairaShort } from "@/lib/format";
 import { parseNaira, useSendDraft } from "@/lib/send-draft";
 
-/** Everything about to happen, the fee from the payout partner, then Face ID or the passcode before it's sent. */
+/** Everything about to happen, the fee from the payout partner, then the transaction PIN before it's sent. */
 export default function Review() {
   const qc = useQueryClient();
   const business = useBusinessContext((s) => s.businessId ?? "default");
   const draft = useSendDraft((s) => s.draft);
-  const biometrics = useAuth((s) => s.biometrics);
-  const biometricsChanged = useAuth((s) => s.biometricsChanged);
   const accounts = useAccounts(true);
   const kobo = parseNaira(draft.amount);
   const fee = useFee(kobo);
-  const [askPasscode, setAskPasscode] = useState(false);
-  const [sending, setSending] = useState(false);
+  const pin = useTransactionPin();
   const [error, setError] = useState<string>();
 
   const source = accounts.data?.find((a) => a.branch._id === draft.from);
@@ -55,45 +50,41 @@ export default function Review() {
     );
   }
 
-  async function confirm() {
+  // The transaction PIN confirms it (it replaced Face ID and the passcode here), then it's sent.
+  function confirm() {
     setError(undefined);
-    if (biometrics) {
-      const result = await unlockWithBiometrics(`Send ${formatNaira(kobo!)}`);
-      if (result === "ok") return void send();
-      if (result === "changed") biometricsChanged();
-    }
-    // No Face ID, cancelled, or changed: the app passcode instead.
-    setAskPasscode(true);
-  }
-
-  async function send() {
-    setAskPasscode(false);
-    setSending(true);
     const body: SendRequest = {
       branch: draft.from!,
       amountKobo: kobo!,
       narration: draft.narration.trim() || undefined,
       recipient: draft.to === "branch" ? { type: "branch", branch: draft.toBranch! } : { type: "bank", accountNumber: draft.accountNumber, bankUuid: draft.bank!.uuid },
     };
-    try {
-      // The same details get the same key on a retry, so a send whose answer got lost can't go twice.
-      const transfer = await sendTransfer(body, draft.keyFor(body));
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      useSendDraft.getState().start();
-      void qc.invalidateQueries({ queryKey: [business] });
-      // Back from the transfer lands on the Transfers view, where it now shows.
-      router.dismissTo({ pathname: "/payments", params: { view: "transfers" } });
-      router.push({ pathname: "/payments/transfer/[id]", params: { id: transfer._id, sent: "1" } });
-    } catch (err) {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setError(
-        err instanceof ApiError && err.code === "TIMEOUT"
-          ? "That took too long, so the transfer may already have gone. Check your transfers before you send it again."
-          : friendlyMessage(err),
-      );
-    } finally {
-      setSending(false);
-    }
+    const amount = formatNairaShort(kobo!);
+    void pin.ask({
+      title: `Send ${amount}?`,
+      subtitle: fee.data?.needsApproval
+        ? `Enter your transaction PIN to send ${amount} to ${recipient!.name} for approval.`
+        : `Enter your transaction PIN to send ${amount} to ${recipient!.name}.`,
+      pending: "Sending…",
+      // The same details get the same key on a retry (a corrected PIN too), so a send whose answer got lost can't go twice.
+      run: (entered) => sendTransfer(body, draft.keyFor(body), entered),
+      onSuccess: (transfer) => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        useSendDraft.getState().start();
+        void qc.invalidateQueries({ queryKey: [business] });
+        // Back from the transfer lands on the Transfers view, where it now shows.
+        router.dismissTo({ pathname: "/payments", params: { view: "transfers" } });
+        router.push({ pathname: "/payments/transfer/[id]", params: { id: transfer._id, sent: "1" } });
+      },
+      onError: (err) => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        setError(
+          err instanceof ApiError && err.code === "TIMEOUT"
+            ? "That took too long, so the transfer may already have gone. Check your transfers before you send it again."
+            : friendlyMessage(err),
+        );
+      },
+    });
   }
 
   const q = fee.data;
@@ -135,22 +126,15 @@ export default function Review() {
         <FormError message={error ?? (fee.isError ? friendlyMessage(fee.error) : undefined)} />
 
         <View className="gap-3">
-          <Button loading={sending} disabled={!q} onPress={() => void confirm()} icon={{ ios: "paperplane.fill", android: "send" }}>
+          <Button loading={pin.busy} disabled={!q} onPress={confirm} icon={{ ios: "paperplane.fill", android: "send" }}>
             {q?.needsApproval ? "Send for approval" : `Send ${formatNaira(kobo)}`}
           </Button>
-          <Button variant="ghost" disabled={sending} onPress={() => router.back()}>
+          <Button variant="ghost" disabled={pin.busy} onPress={() => router.back()}>
             Edit
           </Button>
         </View>
       </ScrollView>
-      {askPasscode && (
-        <ConfirmPasscode
-          title={`Send ${formatNaira(kobo)}?`}
-          subtitle={`Enter your passcode to send to ${recipient.name}.`}
-          onConfirmed={() => void send()}
-          onCancel={() => setAskPasscode(false)}
-        />
-      )}
+      {pin.sheet}
     </>
   );
 }

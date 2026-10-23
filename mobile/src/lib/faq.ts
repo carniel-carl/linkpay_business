@@ -223,6 +223,14 @@ export const FAQ: FaqTopic[] = [
         a: `Tap "Forgot passcode?" on the lock screen, then sign in again with your email and password and choose a new passcode. After ${MAX_ATTEMPTS} wrong tries the app signs this phone out for you.`,
       },
       {
+        q: "What is the transaction PIN?",
+        a: "4 digits LinkPay asks for before money is sent, approved, locked in a Safelock or taken out of savings, and before team access or the approval rule changes. LinkPay checks it, so it's the same here and on the web, and it's separate from this phone's passcode. Set or change it under More, Transaction PIN.",
+      },
+      {
+        q: "I forgot my transaction PIN, or it's locked.",
+        a: "5 wrong tries in a row lock it for 30 minutes. Open More, Transaction PIN and choose Forgot PIN or Reset PIN: we email you a code, and with it and your password you choose a new PIN. That ends the lock too.",
+      },
+      {
         q: "I lost my phone. How do I protect my account?",
         a: "Sign in on another phone, open More, Signed-in devices and sign the lost phone out. That also turns off biometric sign-in on it.",
       },

@@ -2,7 +2,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, RefreshControl, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import { ConfirmPasscode } from "@/components/security/confirm-passcode";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { ApprovalTimeline } from "@/components/transfers/approval-timeline";
 import { moneyOut, recipientName, TransferStatusTag } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
@@ -11,12 +11,10 @@ import { FormError } from "@/components/ui/form-error";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { Display } from "@/components/ui/typography";
-import { friendlyMessage } from "@/lib/api/errors";
-import { KIND_LABELS, useTransfer, useTransferAction } from "@/lib/api/transfers";
+import { ApiError, friendlyMessage } from "@/lib/api/errors";
+import { approveTransfer, KIND_LABELS, useTransfer, useTransferAction, useTransferChanged } from "@/lib/api/transfers";
 import type { Transfer } from "@/lib/api/types";
-import { useAuth } from "@/lib/auth/store";
-import { formatAccountNumber, formatDateTime, formatNaira } from "@/lib/format";
-import { unlockWithBiometrics } from "@/lib/security/biometrics";
+import { formatAccountNumber, formatDateTime, formatNaira, formatNairaShort } from "@/lib/format";
 
 /** One transfer: where it is, who prepared and decided it, and what the member can do with it now. */
 export default function TransferDetail() {
@@ -45,25 +43,23 @@ export default function TransferDetail() {
 
 function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: boolean; refetching: boolean; refetch: () => void }) {
   const action = useTransferAction();
-  const biometrics = useAuth((s) => s.biometrics);
-  const biometricsChanged = useAuth((s) => s.biometricsChanged);
+  const changed = useTransferChanged();
+  const pin = useTransactionPin();
   const [note, setNote] = useState("");
-  const [askPasscode, setAskPasscode] = useState(false);
+  const [approveError, setApproveError] = useState<string>();
   const name = recipientName(t);
   const levels = t.approval?.levels.length ?? 0;
   const current = t.approval?.current ?? null;
   // Approving the last level sends the money; an earlier one passes it to the next level's approvers.
   const finalApproval = !current || current >= levels;
 
-  function run(kind: "approve" | "reject" | "cancel" | "refresh") {
+  // Rejecting, cancelling and refreshing don't move money, so they need no PIN (rejecting keeps its own check).
+  function run(kind: "reject" | "cancel" | "refresh") {
+    setApproveError(undefined);
     action.mutate(
       { id: t._id, action: kind, note: note.trim() || undefined },
       {
-        onSuccess: (next) => {
-          if (kind === "approve" && next.status === "pending_approval") {
-            const total = next.approval?.levels.length ?? levels;
-            Alert.alert("Approved", `Level ${current ?? 1} of ${total} is done. It goes to the level ${next.approval?.current ?? (current ?? 1) + 1} approvers next.`);
-          } else if (kind === "approve") Alert.alert("Approved", `${formatNaira(next.amountKobo)} is on its way to ${recipientName(next)}.`);
+        onSuccess: () => {
           if (kind === "reject") Alert.alert("Rejected", "The money is available again.");
           if (kind === "cancel") Alert.alert("Transfer cancelled", "The money is available again.");
         },
@@ -71,14 +67,28 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
     );
   }
 
-  // Approving sends money, so it's confirmed like a send: Face ID, or the passcode.
-  async function approve() {
-    if (biometrics) {
-      const result = await unlockWithBiometrics(`Approve ${formatNaira(t.totalKobo)}`);
-      if (result === "ok") return run("approve");
-      if (result === "changed") biometricsChanged();
-    }
-    setAskPasscode(true);
+  // Approving can send money, so the transaction PIN confirms it (it replaced Face ID and the passcode here).
+  function approve() {
+    action.reset();
+    setApproveError(undefined);
+    const amount = formatNairaShort(t.amountKobo);
+    const trimmed = note.trim() || undefined;
+    void pin.ask({
+      title: `Approve ${amount}?`,
+      subtitle: finalApproval
+        ? `Enter your transaction PIN to send ${amount} to ${name}.`
+        : `Enter your transaction PIN to approve level ${current} of ${levels}.`,
+      pending: finalApproval ? "Sending…" : "Approving…",
+      run: (entered) => approveTransfer(t._id, trimmed, entered),
+      onSuccess: (next) => {
+        changed(next);
+        if (next.status === "pending_approval") {
+          const total = next.approval?.levels.length ?? levels;
+          Alert.alert("Approved", `Level ${current ?? 1} of ${total} is done. It goes to the level ${next.approval?.current ?? (current ?? 1) + 1} approvers next.`);
+        } else Alert.alert("Approved", `${formatNaira(next.amountKobo)} is on its way to ${recipientName(next)}.`);
+      },
+      onError: (err) => setApproveError(approvalError(err)),
+    });
   }
 
   const banner =
@@ -156,18 +166,18 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
           <DetailRow label="Total from the account" value={formatNaira(t.totalKobo)} />
         </DetailList>
 
-        <FormError message={action.error ? friendlyMessage(action.error) : undefined} />
+        <FormError message={approveError ?? (action.error ? friendlyMessage(action.error) : undefined)} />
 
         {t.canApprove && (
           <View className="gap-3">
             <TextField label="Note (optional)" value={note} onChangeText={(v) => setNote(v.slice(0, 300))} hint="The person who prepared it sees this." maxLength={300} />
-            <Button loading={action.isPending && action.variables?.action === "approve"} disabled={action.isPending} onPress={() => void approve()}>
+            <Button loading={pin.busy} disabled={action.isPending} onPress={approve}>
               {finalApproval ? "Approve and send" : `Approve level ${current} of ${levels}`}
             </Button>
             <Button
               variant="destructive"
               loading={action.isPending && action.variables?.action === "reject"}
-              disabled={action.isPending}
+              disabled={action.isPending || pin.busy}
               onPress={() =>
                 Alert.alert("Reject this transfer?", `${formatNaira(t.amountKobo)} to ${name} won't be sent, and the money is available again.`, [
                   { text: "Keep it", style: "cancel" },
@@ -206,17 +216,15 @@ function Detail({ t, justSent, refetching, refetch }: { t: Transfer; justSent: b
           </Button>
         )}
       </KeyboardAwareScrollView>
-      {askPasscode && (
-        <ConfirmPasscode
-          title={`Approve ${formatNaira(t.totalKobo)}?`}
-          subtitle={finalApproval ? `Enter your passcode to send it to ${name}.` : `Enter your passcode to approve level ${current} of ${levels}.`}
-          onConfirmed={() => {
-            setAskPasscode(false);
-            run("approve");
-          }}
-          onCancel={() => setAskPasscode(false)}
-        />
-      )}
+      {pin.sheet}
     </>
   );
+}
+
+/** An approval that timed out may still have gone through (the last one sends the money), so look before trying again. */
+function approvalError(err: unknown) {
+  if (err instanceof ApiError && err.code === "TIMEOUT") {
+    return "That took too long, so the approval may already have gone through. Pull down to refresh before you try again.";
+  }
+  return friendlyMessage(err);
 }

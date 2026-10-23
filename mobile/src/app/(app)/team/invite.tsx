@@ -2,6 +2,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { AccessFields, accessError } from "@/components/team/access-fields";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -9,16 +10,18 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { useOverview } from "@/lib/api/banking";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { useInviteMember, useRoles, type AccessValues } from "@/lib/api/team";
+import { inviteMember, useRoles, useTeamChanged, type AccessValues } from "@/lib/api/team";
 import { grantableRoles, isOwner, roleLabel } from "@/lib/permissions";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Email, role and branch access. The invite is a 7-day link sent by email. */
+/** Email, role and branch access, confirmed with the transaction PIN. The invite is a 7-day link sent by email. */
 export default function InviteMember() {
   const overview = useOverview();
   const roles = useRoles();
-  const invite = useInviteMember();
+  const changed = useTeamChanged();
+  const pin = useTransactionPin();
+  const [formError, setFormError] = useState<string>();
   const [email, setEmail] = useState("");
   const [access, setAccess] = useState<AccessValues>({ role: "", allBranches: true, branches: [] });
   const [submitted, setSubmitted] = useState(false);
@@ -33,28 +36,31 @@ export default function InviteMember() {
   function send() {
     setSubmitted(true);
     setEmailError(undefined);
+    setFormError(undefined);
     const address = email.trim().toLowerCase();
     if (!EMAIL.test(address) || Object.keys(accessError(access, grantable, branches)).length) return;
-    invite.mutate(
-      { email: address, ...access },
-      {
-        onSuccess: () => {
-          Alert.alert("Invite sent", `We emailed ${address} a link to join as ${roleLabel(access.role, roles.data?.roles)}. It works for 7 days.`);
-          router.back();
-        },
-        // These are about the email, so they show under the field.
-        onError: (err) => {
-          if (err instanceof ApiError && (err.code === "ALREADY_MEMBER" || err.code === "INVITE_EXISTS")) setEmailError(friendlyMessage(err));
-        },
+    const values = { email: address, ...access };
+    const role = roleLabel(access.role, roles.data?.roles);
+    // Giving someone access needs the transaction PIN.
+    void pin.ask({
+      title: "Send the invite?",
+      subtitle: `Enter your transaction PIN to invite ${address} as ${role}.`,
+      pending: "Sending…",
+      run: (entered) => inviteMember(values, entered),
+      onSuccess: () => {
+        changed();
+        Alert.alert("Invite sent", `We emailed ${address} a link to join as ${role}. It works for 7 days.`);
+        router.back();
       },
-    );
+      onError: (err) => {
+        // These are about the email, so they show under the field.
+        if (err instanceof ApiError && (err.code === "ALREADY_MEMBER" || err.code === "INVITE_EXISTS")) setEmailError(friendlyMessage(err));
+        else setFormError(friendlyMessage(err));
+      },
+    });
   }
 
   const fieldError = emailError ?? emailInvalid;
-  const formError =
-    invite.error && !(invite.error instanceof ApiError && (invite.error.code === "ALREADY_MEMBER" || invite.error.code === "INVITE_EXISTS"))
-      ? friendlyMessage(invite.error)
-      : undefined;
 
   return (
     <KeyboardAwareScrollView
@@ -97,9 +103,10 @@ export default function InviteMember() {
       ) : (
         <View className="h-64 rounded-surface bg-muted" />
       )}
-      <Button loading={invite.isPending} onPress={send} icon={{ ios: "paperplane", android: "send" }}>
+      <Button loading={pin.busy} onPress={send} icon={{ ios: "paperplane", android: "send" }}>
         Send invite
       </Button>
+      {pin.sheet}
     </KeyboardAwareScrollView>
   );
 }

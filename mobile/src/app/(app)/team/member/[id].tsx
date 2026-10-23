@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { AccessFields, accessError } from "@/components/team/access-fields";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -8,12 +9,15 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display } from "@/components/ui/typography";
 import { useOverview } from "@/lib/api/banking";
 import { friendlyMessage } from "@/lib/api/errors";
-import { useMembers, useRemoveMember, useRoles, useUpdateMember, type AccessValues } from "@/lib/api/team";
+import { removeMember, updateMember, useMembers, useRoles, useTeamChanged, type AccessValues } from "@/lib/api/team";
 import type { TeamMember } from "@/lib/api/types";
 import { formatDate, initials } from "@/lib/format";
 import { canManage, grantableRoles, isOwner, roleLabel } from "@/lib/permissions";
 
-/** Change a member's role and branches, or remove them. Only reachable for members the actor may manage. */
+/**
+ * Change a member's role and branches, or remove them, each confirmed with the transaction PIN. Only reachable
+ * for members the actor may manage.
+ */
 export default function MemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const overview = useOverview();
@@ -43,8 +47,10 @@ export default function MemberScreen() {
 function MemberForm({ member }: { member: TeamMember }) {
   const overview = useOverview();
   const roles = useRoles();
-  const update = useUpdateMember();
-  const remove = useRemoveMember();
+  const changed = useTeamChanged();
+  const pin = useTransactionPin();
+  const [pinFor, setPinFor] = useState<"save" | "remove">();
+  const [error, setError] = useState<string>();
   const initial: AccessValues = { role: member.role, allBranches: member.branches.length === 0, branches: member.branches.map((b) => b._id) };
   const [access, setAccess] = useState(initial);
   const [submitted, setSubmitted] = useState(false);
@@ -57,27 +63,39 @@ function MemberForm({ member }: { member: TeamMember }) {
 
   function save() {
     setSubmitted(true);
+    setError(undefined);
     if (Object.keys(accessError(access, grantable, branches)).length) return;
-    update.mutate(
-      { id: member._id, ...access },
-      {
-        onSuccess: (m) => {
-          Alert.alert("Access updated", `${name} is now ${roleLabel(m.role, roles.data?.roles)}. The change applies straight away.`);
-          router.back();
-        },
+    const values = access;
+    setPinFor("save");
+    void pin.ask({
+      title: "Change their access?",
+      subtitle: `Enter your transaction PIN to save ${name}'s new access. It applies straight away.`,
+      pending: "Saving…",
+      run: (entered) => updateMember(member._id, values, entered),
+      onSuccess: (m) => {
+        changed();
+        Alert.alert("Access updated", `${name} is now ${roleLabel(m.role, roles.data?.roles)}. The change applies straight away.`);
+        router.back();
       },
-    );
+      onError: (err) => setError(friendlyMessage(err)),
+    });
   }
 
+  // The sheet says what removing does and has Cancel, so it takes the place of the "Remove?" alert.
   function confirmRemove() {
-    Alert.alert(`Remove ${name}?`, `They lose access to ${businessName} straight away. Their LinkPay sign-in stays, and you can invite them again later.`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Remove",
-        style: "destructive",
-        onPress: () => remove.mutate(member._id, { onSuccess: () => router.back(), onError: (err) => Alert.alert("Not removed", friendlyMessage(err)) }),
+    setError(undefined);
+    setPinFor("remove");
+    void pin.ask({
+      title: `Remove ${name}?`,
+      subtitle: `They lose access to ${businessName} straight away; their LinkPay sign-in stays. Enter your transaction PIN to remove them.`,
+      pending: "Removing…",
+      run: (entered) => removeMember(member._id, entered),
+      onSuccess: () => {
+        changed();
+        router.back();
       },
-    ]);
+      onError: (err) => Alert.alert("Not removed", friendlyMessage(err)),
+    });
   }
 
   return (
@@ -96,7 +114,7 @@ function MemberForm({ member }: { member: TeamMember }) {
         </View>
       </View>
 
-      <FormError message={update.error ? friendlyMessage(update.error) : undefined} />
+      <FormError message={error} />
       {roles.data ? (
         <AccessFields
           value={access}
@@ -112,13 +130,20 @@ function MemberForm({ member }: { member: TeamMember }) {
       )}
 
       <View className="gap-3">
-        <Button loading={update.isPending} disabled={!dirty} onPress={save}>
+        <Button loading={pin.busy && pinFor === "save"} disabled={!dirty || pin.busy} onPress={save}>
           Save changes
         </Button>
-        <Button variant="destructive" loading={remove.isPending} icon={{ ios: "person.badge.minus", android: "person_remove" }} onPress={confirmRemove}>
+        <Button
+          variant="destructive"
+          loading={pin.busy && pinFor === "remove"}
+          disabled={pin.busy}
+          icon={{ ios: "person.badge.minus", android: "person_remove" }}
+          onPress={confirmRemove}
+        >
           Remove from team
         </Button>
       </View>
+      {pin.sheet}
     </ScrollView>
   );
 }

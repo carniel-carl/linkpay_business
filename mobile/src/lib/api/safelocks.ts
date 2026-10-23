@@ -3,9 +3,11 @@ import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
 import { api, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
+import { pinHeader } from "./transaction-pin";
 import type { Safelock, SafelockLimits, SafelockList } from "./types";
 
-// /api/safelocks (docs/briefs/savings.md §6). Reads need accounts.view; create and rename need savings.manage.
+// /api/safelocks (docs/briefs/savings.md §6). Reads need accounts.view; create and rename need savings.manage,
+// and create also the transaction PIN.
 // There are no routes to break, top up, shorten or extend a lock, so there's nothing here for them either.
 
 const useBusinessKey = () => useBusinessContext((s) => s.businessId ?? "default");
@@ -60,21 +62,27 @@ export function useSafelock(id: string | undefined) {
 export type SafelockInput = { branch: string; title: string; amountKobo: number; unlockOn: string };
 
 /**
- * Locks money. The Idempotency-Key makes a retried create (dropped connection) return the same lock.
- * Balances refresh, since the amount leaves the branch's available balance.
+ * Locks money, with the transaction PIN as this request's header (a plain call, so the PIN stays out of
+ * react-query's state). The Idempotency-Key makes a retried create (dropped connection) return the same lock;
+ * the PIN isn't part of the body, so retrying with a corrected PIN keeps the same key.
  */
-export function useCreateSafelock() {
+export const createSafelock = (input: SafelockInput, idempotencyKey: string, pin: string) =>
+  api<Safelock>("/api/safelocks", {
+    method: "POST",
+    json: input,
+    headers: { "Idempotency-Key": idempotencyKey, ...pinHeader(pin) },
+    timeoutMs: MONEY_TIMEOUT_MS,
+  });
+
+/** After a lock is created. Balances refresh, since the amount leaves the branch's available balance. */
+export function useSafelockCreated() {
   const qc = useQueryClient();
   const business = useBusinessKey();
-  return useMutation({
-    mutationFn: ({ input, idempotencyKey }: { input: SafelockInput; idempotencyKey: string }) =>
-      api<Safelock>("/api/safelocks", { method: "POST", json: input, headers: { "Idempotency-Key": idempotencyKey }, timeoutMs: MONEY_TIMEOUT_MS }),
-    onSuccess: (lock) => {
-      qc.setQueryData([business, "safelock", lock._id], lock);
-      void qc.invalidateQueries({ queryKey: [business, "safelocks"] });
-      void qc.invalidateQueries({ queryKey: [business, "accounts"] });
-    },
-  });
+  return (lock: Safelock) => {
+    qc.setQueryData([business, "safelock", lock._id], lock);
+    void qc.invalidateQueries({ queryKey: [business, "safelocks"] });
+    void qc.invalidateQueries({ queryKey: [business, "accounts"] });
+  };
 }
 
 /** The title is the only thing that can change, and only while it's locked. */

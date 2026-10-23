@@ -1,14 +1,15 @@
 import { router } from "expo-router";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { friendlyMessage } from "@/lib/api/errors";
-import { describeApprovalRule, useApprovalRule, useSaveApprovalRule } from "@/lib/api/transfers";
+import { describeApprovalRule, saveApprovalRule, useApprovalRule, useApprovalRuleSaved, type SimpleApprovalRule } from "@/lib/api/transfers";
 import type { ApprovalRule } from "@/lib/api/types";
 import { formatNaira } from "@/lib/format";
 import { parseNaira } from "@/lib/send-draft";
@@ -57,7 +58,9 @@ export default function ApprovalRuleScreen() {
 }
 
 function RuleForm({ rule }: { rule: ApprovalRule }) {
-  const save = useSaveApprovalRule();
+  const saved = useApprovalRuleSaved();
+  const pin = useTransactionPin();
+  const [error, setError] = useState<string>();
   // A workflow is edited on the web; here the owner can only replace it with one of the simple rules.
   const workflow = rule.mode === "workflow";
   const [mode, setMode] = useState<SimpleMode | undefined>(OPTIONS.some((o) => o.mode === rule.mode) ? (rule.mode as SimpleMode) : undefined);
@@ -67,16 +70,26 @@ function RuleForm({ rule }: { rule: ApprovalRule }) {
   const kobo = parseNaira(threshold);
   const thresholdError = mode === "above_threshold" && (kobo === undefined || kobo < 100) ? "Enter an amount of at least ₦1." : undefined;
 
+  // The approval rule is a security setting, so the transaction PIN confirms a change. Replacing a workflow used
+  // to have its own alert; the sheet now carries that warning, with Cancel to keep the workflow.
   function submit() {
     setSubmitted(true);
+    setError(undefined);
     if (!mode || thresholdError) return;
-    const apply = () =>
-      save.mutate(mode === "above_threshold" ? { mode, thresholdKobo: kobo! } : { mode }, { onSuccess: () => router.back() });
-    if (!workflow) return apply();
-    Alert.alert("Replace the approval workflow?", "Its tiers and approvers are removed. Transfers already waiting keep their levels.", [
-      { text: "Keep workflow", style: "cancel" },
-      { text: "Replace", style: "destructive", onPress: apply },
-    ]);
+    const approval: SimpleApprovalRule = mode === "above_threshold" ? { mode, thresholdKobo: kobo! } : { mode };
+    void pin.ask({
+      title: workflow ? "Replace the workflow?" : "Change the approval rule?",
+      subtitle: workflow
+        ? "Its tiers and approvers are removed; transfers already waiting keep their levels. Enter your transaction PIN to save the new rule."
+        : "Enter your transaction PIN to change when transfers need approval.",
+      pending: "Saving…",
+      run: (entered) => saveApprovalRule(approval, entered),
+      onSuccess: () => {
+        saved();
+        router.back();
+      },
+      onError: (err) => setError(friendlyMessage(err)),
+    });
   }
 
   return (
@@ -106,10 +119,11 @@ function RuleForm({ rule }: { rule: ApprovalRule }) {
           style={{ fontFamily: "BricolageText-SemiBold", fontSize: 20 }}
         />
       )}
-      <FormError message={save.error ? friendlyMessage(save.error) : undefined} />
-      <Button loading={save.isPending} disabled={!mode} onPress={submit}>
+      <FormError message={error} />
+      <Button loading={pin.busy} disabled={!mode} onPress={submit}>
         Save rule
       </Button>
+      {pin.sheet}
     </>
   );
 }

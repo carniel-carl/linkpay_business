@@ -3,6 +3,7 @@ import { router, Stack } from "expo-router";
 import { useState, type ReactNode } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { HeaderButton } from "@/components/ui/header-button";
@@ -11,7 +12,7 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display } from "@/components/ui/typography";
 import { can } from "@/lib/api/banking";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { leaveBusiness, useInvites, useMembers, useResendInvite, useRevokeInvite, useRoles } from "@/lib/api/team";
+import { leaveBusiness, resendInvite, useInvites, useMembers, useRevokeInvite, useRoles, useTeamChanged } from "@/lib/api/team";
 import type { Invite, Membership, Overview, RoleInfo, TeamMember } from "@/lib/api/types";
 import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
@@ -155,20 +156,29 @@ function MemberRow({ member, actor, roles, divider }: { member: TeamMember; acto
 
 function InviteRow({ invite, manageable, roles, divider }: { invite: Invite; manageable: boolean; roles?: RoleInfo[]; divider: boolean }) {
   const { colors } = useTheme();
-  const resend = useResendInvite();
+  const changed = useTeamChanged();
+  const pin = useTransactionPin();
   const revoke = useRevokeInvite();
-  const busy = resend.isPending || revoke.isPending;
+  const busy = pin.busy || revoke.isPending;
+
+  // A resend issues a fresh link, so it gives access like an invite and needs the transaction PIN. Revoking doesn't.
+  function resend() {
+    void pin.ask({
+      title: "Resend the invite?",
+      subtitle: `Enter your transaction PIN to send ${invite.email} a fresh link. The old one stops working.`,
+      pending: "Sending…",
+      run: (entered) => resendInvite(invite._id, entered),
+      onSuccess: () => {
+        changed();
+        Alert.alert("Invite sent again", `New link sent to ${invite.email}. The old one no longer works.`);
+      },
+      onError: (err) => Alert.alert("Not sent", cooldownMessage(err) ?? friendlyMessage(err)),
+    });
+  }
 
   function actions() {
     Alert.alert(invite.email, "Resending sends a fresh link; the old one stops working.", [
-      {
-        text: "Resend link",
-        onPress: () =>
-          resend.mutate(invite._id, {
-            onSuccess: () => Alert.alert("Invite sent again", `New link sent to ${invite.email}. The old one no longer works.`),
-            onError: (err) => Alert.alert("Not sent", cooldownMessage(err) ?? friendlyMessage(err)),
-          }),
-      },
+      { text: "Resend link", onPress: resend },
       {
         text: "Revoke invite",
         style: "destructive",
@@ -215,6 +225,7 @@ function InviteRow({ invite, manageable, roles, divider }: { invite: Invite; man
         </View>
         {manageable && <Icon ios="ellipsis" android="more_horiz" size={18} color={colors["muted-foreground"]} />}
       </Pressable>
+      {pin.sheet}
     </View>
   );
 }

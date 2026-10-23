@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { memo, useMemo } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { ProgressBar, PocketTile, useMoney } from "@/components/savings/pocket-parts";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError, Notice } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
@@ -11,7 +12,7 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display, Figure } from "@/components/ui/typography";
 import { can, useOverview } from "@/lib/api/banking";
 import { friendlyMessage } from "@/lib/api/errors";
-import { usePocket, usePocketActivity, usePocketChange } from "@/lib/api/savings";
+import { closePocket, usePocket, usePocketActivity, usePocketMoved } from "@/lib/api/savings";
 import type { Pocket, PocketMovement } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatNaira } from "@/lib/format";
@@ -31,7 +32,8 @@ export default function PocketScreen() {
   const pocket = usePocket(id);
   const activity = usePocketActivity(id);
   const overview = useOverview();
-  const change = usePocketChange();
+  const moved = usePocketMoved();
+  const pin = useTransactionPin();
   const money = useMoney();
   const p = pocket.data;
 
@@ -56,26 +58,24 @@ export default function PocketScreen() {
   const open = p.status === "active";
   const branchName = p.branch?.name ?? "the branch";
 
+  // Closing takes the money out of savings, so the transaction PIN confirms it. The sheet says what happens and
+  // has Cancel, so it takes the place of the "Close pocket?" alert rather than following it.
   function close(target: Pocket) {
     const body =
       target.balanceKobo > 0
-        ? `${formatNaira(target.balanceKobo)} goes back to ${branchName}'s available balance. The pocket's history is kept.`
+        ? `${formatNaira(target.balanceKobo)} goes back to ${branchName}'s available balance, and the history is kept.`
         : "The pocket's history is kept.";
-    Alert.alert(`Close ${target.name}?`, body, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Close pocket",
-        style: "destructive",
-        onPress: () =>
-          change.mutate(
-            { kind: "close", id: target._id },
-            {
-              onSuccess: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
-              onError: (err) => Alert.alert("That didn't work", friendlyMessage(err)),
-            },
-          ),
+    void pin.ask({
+      title: `Close ${target.name}?`,
+      subtitle: `${body} Enter your transaction PIN to close it.`,
+      pending: "Closing…",
+      run: (entered) => closePocket(target._id, entered),
+      onSuccess: (closed) => {
+        moved(closed);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       },
-    ]);
+      onError: (err) => Alert.alert("That didn't work", friendlyMessage(err)),
+    });
   }
 
   const move = (direction: "deposit" | "withdraw") =>
@@ -153,13 +153,14 @@ export default function PocketScreen() {
           />
           <ListRow
             icon={{ ios: "xmark.circle", android: "cancel" }}
-            title={change.isPending ? "Closing…" : "Close pocket"}
+            title={pin.busy ? "Closing…" : "Close pocket"}
             destructive
             chevron={false}
-            onPress={change.isPending ? undefined : () => close(p)}
+            onPress={pin.busy ? undefined : () => close(p)}
           />
         </ListSection>
       )}
+      {pin.sheet}
     </ScrollView>
   );
 }
