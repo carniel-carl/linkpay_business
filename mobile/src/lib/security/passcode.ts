@@ -42,7 +42,7 @@ export async function setPasscode(passcode: string) {
   await secureDelete(KEYS.attempts);
 }
 
-/** False when none is set, or when an older 6-digit one is dropped so the phone asks for a new code. */
+/** False when none is set, or when an older 6-digit one is dropped. At launch either signs the phone out (store.ts boot). */
 export async function hasPasscode() {
   const raw = await secureGet(KEYS.passcode);
   if (!raw) return false;

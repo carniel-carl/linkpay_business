@@ -23,6 +23,7 @@ const ENDED: Record<string, string> = {
   revoked: "This phone was signed out from another device. Sign in again to continue.",
   tooManyAttempts: "Too many wrong passcodes, so we signed this phone out. Sign in again to choose a new passcode.",
   passwordSet: "Your password is set, and every device was signed out. Sign in with it to continue.",
+  noPasscode: "This phone needs a passcode, so we signed it out. Sign in again to choose one.",
 };
 
 export default function SignIn() {

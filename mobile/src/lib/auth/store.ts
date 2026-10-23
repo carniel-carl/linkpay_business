@@ -13,6 +13,7 @@ import {
   endSessionOnServer,
   forgetSession,
   hasStoredSession,
+  retryPendingLogouts,
   saveSession,
   setSessionEndedHandler,
   setUnlocked,
@@ -22,7 +23,7 @@ import {
 import { forgetPush } from "@/lib/push";
 
 /**
- * booting: reading the keychain. signedOut: auth screens. needsPasscode: signed in on this phone,
+ * booting: reading the keychain. signedOut: auth screens. needsPasscode: just signed in on this phone,
  * passcode not set yet. locked: session kept, waiting for the passcode or biometrics. unlocked: in.
  */
 export type AuthStatus = "booting" | "signedOut" | "needsPasscode" | "locked" | "unlocked";
@@ -58,9 +59,9 @@ type AuthState = {
   /** After a face or finger was added: everything biometric is gone from this phone. */
   biometricsChanged: () => void;
   /**
-   * Ends this phone's session. With biometric sign-in on, an ordinary sign-out or an expired session
-   * keeps the phone's passcode and Face ID so its owner can sign straight back in; `forget` (and a
-   * remote sign-out, or too many wrong passcodes) removes everything.
+   * Ends this phone's session. With biometric sign-in on, an ordinary sign-out, an expired session or a
+   * launch without a passcode keeps the phone's passcode and Face ID so its owner can sign straight back in;
+   * `forget` (and a remote sign-out, or too many wrong passcodes) removes everything.
    */
   signOut: (reason?: SessionEndReason, opts?: { forget?: boolean }) => Promise<void>;
   /** "Not you?": forgets the remembered user on the welcome screen. */
@@ -92,7 +93,8 @@ export const useAuth = create<AuthState>((set, get) => ({
         installed.create();
       }
       await Promise.all([loadInstallationId(), loadBusinessId()]);
-      // hasPasscode() also drops passcodes in an older format, so those phones ask for a new one.
+      void retryPendingLogouts();
+      // hasPasscode() also drops passcodes in an older format.
       const [session, passcode, rawProfile, flags, attempts] = await Promise.all([
         hasStoredSession(),
         hasPasscode(),
@@ -106,11 +108,15 @@ export const useAuth = create<AuthState>((set, get) => ({
       // Signed out: only a phone with biometric sign-in remembers who used it.
       if (!session && !flags.signIn) await wipeDevice();
       set({
-        status: !session ? "signedOut" : passcode ? "locked" : "needsPasscode",
         profile: session || flags.signIn ? profile : undefined,
         biometrics: flags.unlock,
         biometricSignIn: !!profile && flags.signIn,
       });
+      // A passcode is chosen only straight after a sign-in, in the same run of the app. A session without
+      // one at launch (an old 6-digit code, or a first sign-in closed before choosing) would let whoever
+      // holds the phone pick it, so sign out instead. Biometric sign-in stays, as for any sign-out.
+      if (session && !passcode) return await get().signOut("noPasscode");
+      set({ status: session ? "locked" : "signedOut" });
     } catch {
       // An unreadable keychain (restored backup, OS key change) must never strand the app on a blank screen.
       await secureWipe().catch(() => undefined);
@@ -135,6 +141,8 @@ export const useAuth = create<AuthState>((set, get) => ({
     const passcode = known && (await hasPasscode());
     if (passcode) setUnlocked(true);
     set({ status: passcode ? "unlocked" : "needsPasscode", profile, challenge: undefined, endedReason: undefined });
+    // Online for sure now: a sign-out that didn't reach the server earlier can go.
+    void retryPendingLogouts();
   },
 
   async signInWithBiometrics(prompt) {
@@ -197,9 +205,10 @@ export const useAuth = create<AuthState>((set, get) => ({
 
   async signOut(reason = "signedOut", { forget = false } = {}) {
     setUnlocked(false);
-    const keep = !forget && get().biometricSignIn && (reason === "signedOut" || reason === "expired");
+    const keep = !forget && get().biometricSignIn && (reason === "signedOut" || reason === "expired" || reason === "noPasscode");
     // Kept in memory to tell the server afterwards. An expired or revoked session has already ended there.
-    const refreshToken = reason === "signedOut" || reason === "tooManyAttempts" ? await storedRefreshToken().catch(() => null) : null;
+    const live = reason === "signedOut" || reason === "tooManyAttempts" || reason === "noPasscode";
+    const refreshToken = live ? await storedRefreshToken().catch(() => null) : null;
     // The phone forgets everything first, so no network call can hold up the wipe or, if the app is closed, skip it.
     await forgetSession();
     if (!keep) await secureWipe({ keepInstallation: true });
