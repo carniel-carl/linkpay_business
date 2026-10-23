@@ -1,7 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { formatNaira } from "@/lib/format";
-import { api } from "./client";
+import { api, MONEY_TIMEOUT_MS } from "./client";
 import type { ApprovalRule, ApprovalTier, Bank, FeeQuote, ResolvedAccount, Transfer, TransferList, TransferStatus } from "./types";
 
 // /api/transfers. Copy (status and kind labels) matches the web's Transfers page.
@@ -136,7 +136,12 @@ export function useTransferAction() {
   const business = useBusinessKey();
   return useMutation({
     mutationFn: ({ id, action, note }: { id: string; action: "approve" | "reject" | "cancel" | "refresh"; note?: string }) =>
-      api<Transfer>(`/api/transfers/${id}/${action}`, { method: "POST", json: action === "approve" || action === "reject" ? { note: note || undefined } : {} }),
+      api<Transfer>(`/api/transfers/${id}/${action}`, {
+        method: "POST",
+        json: action === "approve" || action === "reject" ? { note: note || undefined } : {},
+        // The last approval sends the payout in the same request.
+        timeoutMs: MONEY_TIMEOUT_MS,
+      }),
     onSuccess: (t) => {
       qc.setQueryData([business, "transfer", t._id], t);
       void qc.invalidateQueries({ queryKey: [business] });
@@ -181,7 +186,7 @@ export type SendRequest = {
 
 /** Creates one transfer. The Idempotency-Key makes a retried send (dropped connection) return the same transfer. */
 export const sendTransfer = (body: SendRequest, idempotencyKey: string) =>
-  api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": idempotencyKey } });
+  api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": idempotencyKey }, timeoutMs: MONEY_TIMEOUT_MS });
 
 export function useApprovalRule(enabled = true) {
   const business = useBusinessKey();

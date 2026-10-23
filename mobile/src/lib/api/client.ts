@@ -1,7 +1,30 @@
+import * as Crypto from "expo-crypto";
 import { API_URL } from "@/lib/config";
 import { getAccessToken, invalidateAccessToken, refreshSession } from "@/lib/auth/session";
 import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
 import { ApiError } from "./errors";
+
+/**
+ * For requests that move money. The server can wait 30 s on the payment partner inside one request, so the
+ * app waits longer than that before calling it a timeout.
+ */
+export const MONEY_TIMEOUT_MS = 45_000;
+
+/**
+ * Idempotency-Keys for one form, by request body. Sending exactly the same thing again reuses its key, so a
+ * retry after a lost answer (timeout, dropped connection, server error) gets back what was already done
+ * instead of doing it twice. Different details get a new key: the server would answer a reused key with the
+ * first request's result. A refused request saves nothing under its key, so keeping it is always safe.
+ */
+export function idempotencyKeys() {
+  const keys = new Map<string, string>();
+  return (body: unknown) => {
+    const id = JSON.stringify(body);
+    let key = keys.get(id);
+    if (!key) keys.set(id, (key = Crypto.randomUUID()));
+    return key;
+  };
+}
 
 type Options = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";

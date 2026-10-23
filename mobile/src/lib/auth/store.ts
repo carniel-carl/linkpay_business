@@ -6,7 +6,7 @@ import { loadBusinessId, useBusinessContext } from "@/lib/business-context";
 import { loadInstallationId } from "@/lib/device";
 import { queryClient } from "@/lib/query";
 import { biometricFlags, readSignInSecret, saveBiometrics, type BiometricFlags } from "@/lib/security/biometrics";
-import { hasPasscode, resetAttempts } from "@/lib/security/passcode";
+import { failedAttempts, hasPasscode, MAX_ATTEMPTS, resetAttempts } from "@/lib/security/passcode";
 import { createBiometricKey, endBiometricKey, signInWithBiometricKey } from "./api";
 import { DEVICE_KEYS, KEYS, secureDelete, secureGet, secureSet, secureWipe } from "./secure-storage";
 import {
@@ -16,9 +16,10 @@ import {
   saveSession,
   setSessionEndedHandler,
   setUnlocked,
+  storedRefreshToken,
   type SessionEndReason,
 } from "./session";
-import { unregisterPush } from "@/lib/push";
+import { forgetPush } from "@/lib/push";
 
 /**
  * booting: reading the keychain. signedOut: auth screens. needsPasscode: signed in on this phone,
@@ -92,12 +93,15 @@ export const useAuth = create<AuthState>((set, get) => ({
       }
       await Promise.all([loadInstallationId(), loadBusinessId()]);
       // hasPasscode() also drops passcodes in an older format, so those phones ask for a new one.
-      const [session, passcode, rawProfile, flags] = await Promise.all([
+      const [session, passcode, rawProfile, flags, attempts] = await Promise.all([
         hasStoredSession(),
         hasPasscode(),
         secureGet(KEYS.profile),
         biometricFlags(),
+        failedAttempts(),
       ]);
+      // The last wrong passcode signs out. If the app was closed before that finished, it finishes now.
+      if (attempts >= MAX_ATTEMPTS) return await get().signOut("tooManyAttempts");
       const profile = rawProfile ? (JSON.parse(rawProfile) as Profile) : undefined;
       // Signed out: only a phone with biometric sign-in remembers who used it.
       if (!session && !flags.signIn) await wipeDevice();
@@ -194,11 +198,9 @@ export const useAuth = create<AuthState>((set, get) => ({
   async signOut(reason = "signedOut", { forget = false } = {}) {
     setUnlocked(false);
     const keep = !forget && get().biometricSignIn && (reason === "signedOut" || reason === "expired");
-    if (reason === "signedOut" || reason === "tooManyAttempts") {
-      // While the session still works: this phone stops getting this account's pushes.
-      await unregisterPush();
-      await endSessionOnServer({ forgetDevice: !keep });
-    }
+    // Kept in memory to tell the server afterwards. An expired or revoked session has already ended there.
+    const refreshToken = reason === "signedOut" || reason === "tooManyAttempts" ? await storedRefreshToken().catch(() => null) : null;
+    // The phone forgets everything first, so no network call can hold up the wipe or, if the app is closed, skip it.
     await forgetSession();
     if (!keep) await secureWipe({ keepInstallation: true });
     useBusinessContext.getState().setBusinessId(undefined);
@@ -209,6 +211,9 @@ export const useAuth = create<AuthState>((set, get) => ({
       endedReason: reason,
       ...(!keep && { profile: undefined, biometrics: false, biometricSignIn: false }),
     });
+    // Ending the session also stops this phone getting the account's pushes (the server drops its tokens).
+    if (refreshToken) void endSessionOnServer(refreshToken, { forgetDevice: !keep });
+    await forgetPush();
   },
 
   async forgetPhone() {

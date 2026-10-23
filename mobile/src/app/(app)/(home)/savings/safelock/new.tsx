@@ -1,4 +1,3 @@
-import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -18,6 +17,7 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { Display } from "@/components/ui/typography";
 import { can, useAccounts } from "@/lib/api/banking";
+import { idempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { useCreateSafelock, useSafelockLimits } from "@/lib/api/safelocks";
 import type { Branch, SafelockLimits } from "@/lib/api/types";
@@ -95,8 +95,8 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
   const [agreed, setAgreed] = useState(false);
   const [askPasscode, setAskPasscode] = useState(false);
   const [serverField, setServerField] = useState<{ amount?: string; unlockOn?: string }>({});
-  // Kept for this lock, so a create whose answer got lost can't lock the money twice.
-  const [key, setKey] = useState(() => Crypto.randomUUID());
+  // Locking the same details again reuses the key, so a create whose answer got lost can't lock the money twice.
+  const [keyFor] = useState(() => idempotencyKeys());
 
   const picked = branches.find((b) => b._id === branch);
   const account = accounts.data?.find((a) => a.branch._id === branch);
@@ -144,8 +144,9 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
 
   function lock() {
     setAskPasscode(false);
+    const input = { branch: branch!, title: title.trim(), amountKobo: kobo!, unlockOn };
     create.mutate(
-      { input: { branch: branch!, title: title.trim(), amountKobo: kobo!, unlockOn }, idempotencyKey: key },
+      { input, idempotencyKey: keyFor(input) },
       {
         onSuccess: (saved) => {
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -153,9 +154,6 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
         },
         onError: (err) => {
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          // A refused lock gets a new key, so the corrected one isn't taken for a replay. A busy account may
-          // still be working on this one, so its key stays.
-          if (!(err instanceof ApiError) || err.code !== "ACCOUNT_BUSY") setKey(Crypto.randomUUID());
           if (err instanceof ApiError && (err.code === "SAFELOCK_TOO_SMALL" || err.code === "INSUFFICIENT_BALANCE")) {
             setServerField({ amount: err.code === "INSUFFICIENT_BALANCE" ? NOT_ENOUGH : friendlyMessage(err) });
             setStep("details");
@@ -199,7 +197,7 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
             <Agree checked={agreed} onChange={setAgreed} label={`I understand the money stays locked until ${formatDay(unlockOn)}.`} />
           </View>
 
-          <FormError message={create.error && !fieldError ? friendlyMessage(create.error) : undefined} />
+          <FormError message={create.error && !fieldError ? lockError(create.error) : undefined} />
 
           <View className="gap-3">
             <Button loading={create.isPending} disabled={!agreed} onPress={() => void confirm()} icon={{ ios: "lock.fill", android: "lock" }}>
@@ -355,4 +353,12 @@ function Agree({ checked, onChange, label }: { checked: boolean; onChange: (v: b
       <Text className="flex-1 text-[14px] leading-5 text-foreground">{label}</Text>
     </Pressable>
   );
+}
+
+/** A lock that timed out may still have gone through, so the message says to look before trying again. */
+function lockError(err: unknown) {
+  if (err instanceof ApiError && err.code === "TIMEOUT") {
+    return "That took too long, so the money may already be locked. Check your Safelocks before you try again.";
+  }
+  return friendlyMessage(err);
 }

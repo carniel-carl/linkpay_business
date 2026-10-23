@@ -81,8 +81,6 @@ export async function askForPush(): Promise<PushStatus> {
 const projectId = () =>
   (Constants.expoConfig?.extra?.eas as { projectId?: string } | undefined)?.projectId ?? Constants.easConfig?.projectId;
 
-let registered: string | undefined;
-
 /**
  * Sends this phone's Expo push token to the backend, tied to the current device session. Called after each
  * unlock (cheap, and catches a token that changed); quiet if permission isn't granted or the app has no EAS
@@ -100,24 +98,18 @@ export async function registerPush() {
   try {
     const { data: token } = await N.getExpoPushTokenAsync({ projectId: id });
     await api("/api/notifications/push-tokens", { method: "POST", json: { token, platform: Platform.OS } });
-    registered = token;
   } catch (err) {
     if (__DEV__) console.warn("Push: couldn't register this phone", err);
   }
 }
 
-/** Before signing out, while the session still works: this phone stops getting this account's pushes. */
-export async function unregisterPush() {
+/**
+ * On sign-out: clears the badge. Nothing to tell the server: a push token belongs to the session that
+ * registered it, and the backend stops using it once that session ends (logout, expiry or revocation).
+ */
+export async function forgetPush() {
   const N = await loadNotifications();
-  if (!N) return;
-  try {
-    const token = registered ?? (projectId() ? (await N.getExpoPushTokenAsync({ projectId: projectId()! })).data : undefined);
-    if (token) await api("/api/notifications/push-tokens", { method: "DELETE", json: { token } });
-  } catch {
-    // The backend also drops tokens of sessions that ended, so this is best effort.
-  }
-  registered = undefined;
-  await N.setBadgeCountAsync(0).catch(() => false);
+  await N?.setBadgeCountAsync(0).catch(() => false);
 }
 
 /** The app icon badge: the unread total across every business. */

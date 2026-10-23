@@ -1,5 +1,5 @@
-import * as Crypto from "expo-crypto";
 import { create } from "zustand";
+import { idempotencyKeys } from "@/lib/api/client";
 import type { Bank, ResolvedAccount } from "@/lib/api/types";
 
 /** A transfer being prepared, shared by the send form, the bank picker and the review. Memory only. */
@@ -15,16 +15,19 @@ export type SendDraft = {
   /** As typed, e.g. "25,000.50". */
   amount: string;
   narration: string;
-  /** One per review, so a retried send after a dropped connection can't pay twice. */
-  idempotencyKey: string;
+  /**
+   * The Idempotency-Key for a send, by what's sent: sending the same transfer again from this draft (after a
+   * dropped connection, or Edit and Continue with nothing changed) reuses its key, so it can't pay twice.
+   */
+  keyFor: (body: unknown) => string;
 };
 
-const blank = (): SendDraft => ({ to: "bank", accountNumber: "", amount: "", narration: "", idempotencyKey: Crypto.randomUUID() });
+const blank = (): SendDraft => ({ to: "bank", accountNumber: "", amount: "", narration: "", keyFor: idempotencyKeys() });
 
 export const useSendDraft = create<{ draft: SendDraft; update: (d: Partial<SendDraft>) => void; start: (from?: string) => void }>((set) => ({
   draft: blank(),
-  // Any change to what's being sent means a new send, so a new key.
-  update: (d) => set((s) => ({ draft: { ...s.draft, ...d, idempotencyKey: Crypto.randomUUID() } })),
+  update: (d) => set((s) => ({ draft: { ...s.draft, ...d } })),
+  // A new transfer (and after one is sent): a fresh draft, with its own keys.
   start: (from) => set({ draft: { ...blank(), from } }),
 }));
 
