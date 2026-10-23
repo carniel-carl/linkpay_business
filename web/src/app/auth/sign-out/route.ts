@@ -12,14 +12,17 @@ export async function GET(request: NextRequest) {
   if (request.cookies.has(SESSION_COOKIE)) await api("/api/auth/logout", { method: "POST" }).catch(() => {})
 
   const params = request.nextUrl.searchParams
-  const url = new URL("/sign-in", request.url)
-  if (params.get("expired")) url.searchParams.set("expired", "1")
+  const query = new URLSearchParams()
+  if (params.get("expired")) query.set("expired", "1")
   const next = safeNext(params.get("next"))
-  if (next) url.searchParams.set("next", next)
+  if (next) query.set("next", next)
   const email = params.get("email")
-  if (email) url.searchParams.set("email", email)
+  if (email) query.set("email", email)
 
-  const res = NextResponse.redirect(url)
+  // A relative Location. Behind a proxy, `next start` builds request.url from the address it listens on
+  // (http://localhost:3000), not the one the browser used, so an absolute redirect would leave the site.
+  const search = query.toString()
+  const res = new NextResponse(null, { status: 307, headers: { Location: search ? `/sign-in?${search}` : "/sign-in" } })
   res.cookies.delete(SESSION_COOKIE)
   res.cookies.delete(CHALLENGE_COOKIE)
   for (const name of CHOICE_COOKIES) res.cookies.delete(name)
