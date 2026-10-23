@@ -68,6 +68,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "payment_link.restored": "Link restored",
   "donation.hidden": "Donation hidden",
   "donation.shown": "Donation shown again",
+  "staff.added": "Staff added",
   "staff.invited": "Staff invited",
   "staff.invite_resent": "Staff invite resent",
   "staff.invite_revoked": "Staff invite revoked",

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { MoreHorizontal, Store, UserCog, UserMinus } from "lucide-react"
 import { useForm } from "react-hook-form"
@@ -271,22 +271,24 @@ function RemoveDialog({
   name: string
   businessName: string
 }) {
-  const [pending, startTransition] = useTransition()
+  // Plain state, not a transition: an async transition holds back every update made inside it until it
+  // finishes, and that includes opening the PIN dialog it's waiting on.
+  const [pending, setPending] = useState(false)
   const pin = useTransactionPin()
 
-  function remove() {
-    startTransition(async () => {
-      const result = await pin.confirm({
-        purpose: `remove ${name} from ${businessName}`,
-        confirmLabel: `Remove ${name}`,
-        run: (transactionPin) => removeMember(memberId, transactionPin),
-      })
-      if (!result) return
-      if (result.ok) {
-        onOpenChange(false)
-        toast.success(`${name} no longer has access to ${businessName}.`)
-      } else toast.error(result.error)
+  async function remove() {
+    setPending(true)
+    const result = await pin.confirm({
+      purpose: `remove ${name} from ${businessName}`,
+      confirmLabel: `Remove ${name}`,
+      run: (transactionPin) => removeMember(memberId, transactionPin),
     })
+    setPending(false)
+    if (!result) return
+    if (result.ok) {
+      onOpenChange(false)
+      toast.success(`${name} no longer has access to ${businessName}.`)
+    } else toast.error(result.error)
   }
 
   return (
@@ -306,7 +308,7 @@ function RemoveDialog({
             disabled={pending}
             onClick={(e) => {
               e.preventDefault()
-              remove()
+              void remove()
             }}
           >
             {pending && <Spinner />}

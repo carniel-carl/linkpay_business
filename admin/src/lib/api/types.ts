@@ -342,6 +342,7 @@ export type AuditAction =
   | "payment_link.restored"
   | "donation.hidden"
   | "donation.shown"
+  | "staff.added"
   | "staff.invited"
   | "staff.invite_resent"
   | "staff.invite_revoked"

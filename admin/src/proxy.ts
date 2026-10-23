@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { CSP_REPORT_GROUP, CSP_REPORT_PATH, REPORTING_ENDPOINTS } from "@/lib/csp-report"
 import { safeNext } from "@/lib/safe-next"
 
 // Auth-state guard only: the proxy can't verify the staff token. The console layout does that
@@ -41,6 +42,10 @@ function contentSecurityPolicy(nonce: string, https: boolean) {
     // Over HTTPS only (X-Forwarded-Proto behind a proxy): on plain http, as with `next start` locally, browsers
     // would also upgrade redirects to https and fail them.
     ...(https ? ["upgrade-insecure-requests"] : []),
+    // Violations go to app/api/csp-report: report-to where the Reporting API is (Reporting-Endpoints below names
+    // the group), report-uri elsewhere. Browsers with both use report-to.
+    `report-uri ${CSP_REPORT_PATH}`,
+    `report-to ${CSP_REPORT_GROUP}`,
   ].join("; ")
 }
 
@@ -56,6 +61,7 @@ function proceed(request: NextRequest) {
   headers.set("Content-Security-Policy", policy)
   const response = NextResponse.next({ request: { headers } })
   response.headers.set(REPORT_ONLY ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", policy)
+  response.headers.set("Reporting-Endpoints", REPORTING_ENDPOINTS)
   return response
 }
 

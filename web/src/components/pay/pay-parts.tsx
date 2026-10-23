@@ -38,6 +38,7 @@ export const PAY_STEPS = [
     title: "Payment confirmed",
     short: "Confirmed",
     line: "We spot it as it lands and email your receipt.",
+    testLine: "We spot it as it lands. Test payments don't email a receipt.",
   },
 ] as const;
 
@@ -407,10 +408,13 @@ const STATE_LABEL = {
 export function StepTimeline({
   step,
   dense = false,
+  test = false,
   className,
 }: {
   step: PayStep;
   dense?: boolean;
+  /** Test mode: simulated payments don't email a receipt, so the steps don't promise one. */
+  test?: boolean;
   className?: string;
 }) {
   return (
@@ -473,7 +477,7 @@ export function StepTimeline({
                   "short:hidden",
                 )}
               >
-                {s.line}
+                {test && "testLine" in s ? s.testLine : s.line}
               </p>
             </div>
           </li>

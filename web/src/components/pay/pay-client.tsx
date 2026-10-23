@@ -431,7 +431,7 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
           <LinkSummary {...summaryProps} variant="panel" fitScreen />
           {step >= 0 && (
             <div className="hidden gap-6 lg:grid">
-              <StepTimeline step={step} dense={images.length > 0} />
+              <StepTimeline step={step} dense={images.length > 0} test={testMode} />
               <Secured businessName={business.name} className="text-(--biz-muted)" />
             </div>
           )}
@@ -838,7 +838,14 @@ function PayForm({
           onChange={(e) => setEmail(e.target.value)}
           className="h-11 short:h-10"
         />
-        {errors.email ? <FieldError>{errors.email}</FieldError> : <FieldDescription>We&apos;ll email your receipt here.</FieldDescription>}
+        {errors.email ? (
+          <FieldError>{errors.email}</FieldError>
+        ) : (
+          <FieldDescription>
+            {/* Simulated payments never email a receipt (the Paid screen says so too). */}
+            {data.mode === "test" ? "Test payments on this page don't email a receipt." : <>We&apos;ll email your receipt here.</>}
+          </FieldDescription>
+        )}
       </Field>
       {link.phone !== "off" && (
         <Field data-invalid={!!errors.phone}>

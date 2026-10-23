@@ -52,7 +52,9 @@ export function InvitesList({ invites, actor, roles }: { invites: Invite[]; acto
 }
 
 function InviteRow({ invite, manageable, roles }: { invite: Invite; manageable: boolean; roles: RoleInfo[] }) {
-  const [resending, startResend] = useTransition()
+  // Plain state, not a transition: an async transition holds back every update made inside it until it
+  // finishes, and that includes opening the PIN dialog it's waiting on.
+  const [resending, setResending] = useState(false)
   const pin = useTransactionPin()
   // How long Resend stays disabled: the backend's retryAt when it gives one, otherwise a minute.
   const [cooldownMs, setCooldownMs] = useState(0)
@@ -65,24 +67,24 @@ function InviteRow({ invite, manageable, roles }: { invite: Invite; manageable: 
     return () => clearTimeout(id)
   }, [cooldownMs])
 
-  function resend() {
-    startResend(async () => {
-      const result = await pin.confirm({
-        purpose: `send ${invite.email} a new invite link`,
-        confirmLabel: "Resend invite",
-        run: (transactionPin) => resendInvite(invite._id, transactionPin),
-      })
-      if (!result) return
-      if (result.ok) {
-        setCooldownMs(COOLDOWN_MS)
-        toast.success(`New link sent to ${invite.email}. The old one no longer works.`)
-      } else if (result.code === "INVITE_COOLDOWN") {
-        const wait = result.retryAt ? Math.max(1000, new Date(result.retryAt).getTime() - Date.now()) : COOLDOWN_MS
-        setCooldownMs(wait)
-        const seconds = Math.ceil(wait / 1000)
-        toast.info(`This invite was sent moments ago. You can resend it in ${seconds} ${seconds === 1 ? "second" : "seconds"}.`)
-      } else toast.error(result.error)
+  async function resend() {
+    setResending(true)
+    const result = await pin.confirm({
+      purpose: `send ${invite.email} a new invite link`,
+      confirmLabel: "Resend invite",
+      run: (transactionPin) => resendInvite(invite._id, transactionPin),
     })
+    setResending(false)
+    if (!result) return
+    if (result.ok) {
+      setCooldownMs(COOLDOWN_MS)
+      toast.success(`New link sent to ${invite.email}. The old one no longer works.`)
+    } else if (result.code === "INVITE_COOLDOWN") {
+      const wait = result.retryAt ? Math.max(1000, new Date(result.retryAt).getTime() - Date.now()) : COOLDOWN_MS
+      setCooldownMs(wait)
+      const seconds = Math.ceil(wait / 1000)
+      toast.info(`This invite was sent moments ago. You can resend it in ${seconds} ${seconds === 1 ? "second" : "seconds"}.`)
+    } else toast.error(result.error)
   }
 
   return (
