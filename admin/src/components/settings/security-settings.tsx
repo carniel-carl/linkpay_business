@@ -131,24 +131,79 @@ function MethodRow({
 
 // ---- Authenticator setup ----
 
+type TotpSecret = { secret: string; otpauthUrl: string }
+
 function TotpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Set up an authenticator app</DialogTitle>
-          <DialogDescription>Scan the code with your app, then enter the 6-digit code it shows.</DialogDescription>
+          <DialogDescription>
+            Confirm your password, scan the code with your app, then enter the 6-digit code it shows.
+          </DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so every setup starts with a fresh secret and empty state. */}
-        {open && <TotpSetup onClose={onClose} />}
+        {open && <TotpFlow onClose={onClose} />}
       </DialogContent>
     </Dialog>
   )
 }
 
-function TotpSetup({ onClose }: { onClose: () => void }) {
-  const [setup, setSetup] = useState<{ secret: string; qr: string } | null>(null)
-  const [loadError, setLoadError] = useState<string>()
+function TotpFlow({ onClose }: { onClose: () => void }) {
+  const [started, setStarted] = useState<TotpSecret | null>(null)
+  return started ? <TotpSetup started={started} onClose={onClose} /> : <TotpPassword onStarted={setStarted} onClose={onClose} />
+}
+
+/** The password comes first, so a stolen session alone can't add or swap the authenticator. */
+function TotpPassword({ onStarted, onClose }: { onStarted: (started: TotpSecret) => void; onClose: () => void }) {
+  const form = useForm<PasswordValues>({ resolver: zodResolver(passwordConfirmSchema), defaultValues: { password: "" } })
+  const { isSubmitting, errors } = form.formState
+
+  async function onSubmit(values: PasswordValues) {
+    const result = await startTotpSetup(values)
+    if (!result.ok && result.error === "That password is incorrect.") {
+      form.setError("password", { message: result.error })
+      return
+    }
+    if (applyResult(form, result)) onStarted(result.data)
+  }
+
+  return (
+    <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-6">
+      <FormError message={errors.root?.message} />
+      <Controller
+        name="password"
+        control={form.control}
+        render={({ field, fieldState }) => (
+          <Field data-invalid={fieldState.invalid}>
+            <FieldLabel htmlFor="totp-password">Password</FieldLabel>
+            <PasswordInput
+              id="totp-password"
+              autoComplete="current-password"
+              autoFocus
+              aria-invalid={fieldState.invalid}
+              {...field}
+            />
+            <FieldError errors={[fieldState.error]} />
+          </Field>
+        )}
+      />
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={isSubmitting}>
+          {isSubmitting && <Spinner />}
+          Continue
+        </Button>
+      </DialogFooter>
+    </form>
+  )
+}
+
+function TotpSetup({ started, onClose }: { started: TotpSecret; onClose: () => void }) {
+  const [qr, setQr] = useState<string>()
   const [code, setCode] = useState("")
   const [error, setError] = useState<string>()
   const [copied, setCopied] = useState(false)
@@ -156,16 +211,13 @@ function TotpSetup({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let cancelled = false
-    startTotpSetup().then(async (result) => {
-      if (cancelled) return
-      if (!result.ok) return setLoadError(result.error)
-      const qr = await QRCode.toDataURL(result.data.otpauthUrl, { margin: 1, width: 320, errorCorrectionLevel: "M" })
-      if (!cancelled) setSetup({ secret: result.data.secret, qr })
+    QRCode.toDataURL(started.otpauthUrl, { margin: 1, width: 320, errorCorrectionLevel: "M" }).then((url) => {
+      if (!cancelled) setQr(url)
     })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [started])
 
   function confirm(value = code) {
     if (value.length !== 6) return setError("Enter the 6-digit code from the app.")
@@ -183,80 +235,67 @@ function TotpSetup({ onClose }: { onClose: () => void }) {
   }
 
   async function copySecret() {
-    if (!setup) return
-    await navigator.clipboard.writeText(setup.secret)
+    await navigator.clipboard.writeText(started.secret)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <>
-        {loadError ? (
-          <FormError message={loadError} />
+    <form
+      className="grid gap-6"
+      onSubmit={(e) => {
+        e.preventDefault()
+        confirm()
+      }}
+    >
+      <div className="grid gap-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-center">
+        {qr ? (
+          // eslint-disable-next-line @next/next/no-img-element -- data URL generated on the client
+          <img
+            src={qr}
+            alt="QR code for your authenticator app"
+            width={160}
+            height={160}
+            className="size-40 rounded-lg border bg-white p-2"
+          />
         ) : (
-          <form
-            className="grid gap-6"
-            onSubmit={(e) => {
-              e.preventDefault()
-              confirm()
-            }}
-          >
-            <div className="grid gap-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-center">
-              {setup ? (
-                // eslint-disable-next-line @next/next/no-img-element -- data URL generated on the client
-                <img
-                  src={setup.qr}
-                  alt="QR code for your authenticator app"
-                  width={160}
-                  height={160}
-                  className="size-40 rounded-lg border bg-white p-2"
-                />
-              ) : (
-                <Skeleton className="size-40 rounded-lg" />
-              )}
-              <div className="grid gap-2 text-sm">
-                <p className="text-muted-foreground">Can&apos;t scan? Enter this key in the app instead:</p>
-                {setup ? (
-                  <div className="flex items-center gap-1 rounded-lg border bg-muted/50 py-1 pr-1 pl-3">
-                    <code className="min-w-0 flex-1 font-mono text-xs break-all">
-                      {setup.secret.match(/.{1,4}/g)?.join(" ")}
-                    </code>
-                    <Button type="button" variant="ghost" size="icon-sm" onClick={copySecret} aria-label="Copy key">
-                      {copied ? <Check className="text-primary" /> : <Copy />}
-                    </Button>
-                  </div>
-                ) : (
-                  <Skeleton className="h-9 w-full" />
-                )}
-              </div>
-            </div>
-
-            <Field data-invalid={!!error}>
-              <FieldLabel htmlFor="totp-code">Code from the app</FieldLabel>
-              <CodeInput
-                id="totp-code"
-                value={code}
-                onChange={setCode}
-                onComplete={confirm}
-                disabled={!setup || pending}
-                invalid={!!error}
-                autoFocus={false}
-              />
-              {error && <FieldError>{error}</FieldError>}
-            </Field>
-
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!setup || pending || code.length !== 6}>
-                {pending && <Spinner />}
-                Turn on
-              </Button>
-            </DialogFooter>
-          </form>
+          <Skeleton className="size-40 rounded-lg" />
         )}
-    </>
+        <div className="grid gap-2 text-sm">
+          <p className="text-muted-foreground">Can&apos;t scan? Enter this key in the app instead:</p>
+          <div className="flex items-center gap-1 rounded-lg border bg-muted/50 py-1 pr-1 pl-3">
+            <code className="min-w-0 flex-1 font-mono text-xs break-all">{started.secret.match(/.{1,4}/g)?.join(" ")}</code>
+            <Button type="button" variant="ghost" size="icon-sm" onClick={copySecret} aria-label="Copy key">
+              {copied ? <Check className="text-primary" /> : <Copy />}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <Field data-invalid={!!error}>
+        <FieldLabel htmlFor="totp-code">Code from the app</FieldLabel>
+        <CodeInput
+          id="totp-code"
+          value={code}
+          onChange={setCode}
+          onComplete={confirm}
+          disabled={pending}
+          invalid={!!error}
+          autoFocus={false}
+        />
+        {error && <FieldError>{error}</FieldError>}
+      </Field>
+
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={pending || code.length !== 6}>
+          {pending && <Spinner />}
+          Turn on
+        </Button>
+      </DialogFooter>
+    </form>
   )
 }
 

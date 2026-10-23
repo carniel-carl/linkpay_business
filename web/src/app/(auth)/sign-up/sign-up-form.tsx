@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { applyResult } from "@/lib/forms"
 import { signUpSchema } from "@/lib/schemas"
-import { signUp } from "../actions"
+import { signUp } from "./actions"
 
 type Values = z.infer<typeof signUpSchema>
 

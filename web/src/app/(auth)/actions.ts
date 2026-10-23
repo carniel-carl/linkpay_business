@@ -7,8 +7,8 @@ import { ApiError, friendlyMessage } from "@/lib/api/errors"
 import type { AuthSession, TwoFactorChallenge } from "@/lib/api/types"
 import type { ActionResult } from "@/lib/action-result"
 import { safeNext } from "@/lib/safe-next"
-import { clearSession, getChallenge, setChallenge, setSession } from "@/lib/session"
-import { code, email, emailOnlySchema, signInSchema, signUpSchema } from "@/lib/schemas"
+import { clearSession, getChallenge, getSessionToken, setChallenge, setSession } from "@/lib/session"
+import { code, email, emailOnlySchema, signInSchema } from "@/lib/schemas"
 
 type LoginResponse = AuthSession | TwoFactorChallenge
 
@@ -21,26 +21,6 @@ async function finishLogin(res: LoginResponse, userEmail: string, next?: string)
   }
   await setSession(res.accessToken)
   redirect(target ?? "/dashboard")
-}
-
-export async function signUp(input: unknown): Promise<ActionResult> {
-  const body = signUpSchema.parse(input)
-  const result = await runAction(() => api("/api/auth/register", { method: "POST", json: body, auth: false }))
-  if (!result.ok) {
-    if (result.code === "EMAIL_TAKEN") return { ...result, fieldErrors: { email: result.error } }
-    return result
-  }
-  redirect(`/verify-email?email=${encodeURIComponent(body.email)}`)
-}
-
-export async function verifyEmail(input: { email: string; code: string }): Promise<ActionResult> {
-  const body = { email: email.parse(input.email), code: code.parse(input.code) }
-  const result = await runAction(() =>
-    api<AuthSession>("/api/auth/verify-email", { method: "POST", json: body, auth: false }),
-  )
-  if (!result.ok) return result
-  await setSession(result.data.accessToken)
-  redirect("/dashboard")
 }
 
 export async function resendVerification(input: { email: string }): Promise<ActionResult> {
@@ -106,6 +86,8 @@ export async function resendTwoFactor(): Promise<ActionResult> {
 }
 
 export async function signOut() {
+  // Ends the session on the server too, so the token stops working even if it was copied.
+  if (await getSessionToken()) await api("/api/auth/logout", { method: "POST" }).catch(() => {})
   await clearSession()
   redirect("/sign-in")
 }

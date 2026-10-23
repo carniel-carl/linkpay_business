@@ -1,15 +1,12 @@
 import "server-only"
+import { clientIp } from "@/lib/client-ip"
 
 // The payer's side of payment links (no sign-in). Route handlers and the pay page call the backend's
 // public routes with the payer's address, so its rate limits count each payer, not this server.
 const API_URL = process.env.API_URL ?? "http://localhost:4000"
 
-/** The payer's address as this server saw it, for the backend's rate limits. */
-export function forwardedFor(headers: Headers) {
-  const xff = headers.get("x-forwarded-for")
-  const real = headers.get("x-real-ip")
-  return xff ?? real ?? undefined
-}
+/** The payer's address, for the backend's rate limits. Only the platform's own header is believed (lib/client-ip.ts). */
+export const forwardedFor = clientIp
 
 /** Calls a public backend route and hands back its status and JSON body unchanged. */
 export async function publicApi(path: string, init: { method?: "GET" | "POST"; json?: unknown; clientIp?: string } = {}) {

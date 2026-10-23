@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { api } from "./client";
+import { idSegment } from "./paths";
 import type { AppNotification, NotificationList, UnreadCount } from "./types";
 
 // /api/notifications: the signed-in person's notifications across every business they belong to, so the
@@ -44,7 +45,7 @@ type ListData = InfiniteData<NotificationList, string>;
 export function useMarkRead() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (n: Pick<AppNotification, "_id" | "business">) => api<AppNotification>(`/api/notifications/${encodeURIComponent(n._id)}/read`, { method: "POST", json: {} }),
+    mutationFn: (n: Pick<AppNotification, "_id" | "business">) => api<AppNotification>(`/api/notifications/${idSegment(n._id)}/read`, { method: "POST", json: {} }),
     onMutate: (n) => {
       const now = new Date().toISOString();
       let changed = false;
@@ -89,4 +90,10 @@ export function useMarkAllRead() {
 }
 
 /** Marks one read without a hook (a tapped push). Failures don't matter: the badge refreshes anyway. */
-export const markReadById = (id: string) => api(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST", json: {} }).catch(() => undefined);
+export async function markReadById(id: string) {
+  try {
+    await api(`/api/notifications/${idSegment(id)}/read`, { method: "POST", json: {} });
+  } catch {
+    // A push with a bad id lands here too.
+  }
+}

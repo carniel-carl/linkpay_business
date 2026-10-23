@@ -30,7 +30,7 @@ export default function Devices() {
   }
 
   function confirmOthers() {
-    Alert.alert("Sign out all other devices?", "This phone stays signed in. Every other phone signs out straight away.", [
+    Alert.alert("Sign out all other devices?", "This phone stays signed in. Every other phone and browser signs out straight away.", [
       { text: "Cancel", style: "cancel" },
       { text: "Sign out others", style: "destructive", onPress: () => others.mutate() },
     ]);
@@ -44,7 +44,7 @@ export default function Devices() {
     >
       <FocusStatusBar />
       <Text className="px-1 text-[15px] leading-[21px] text-muted-foreground">
-        Phones signed in to your LinkPay account. If you don't recognise one, sign it out and change your password. Signing a phone out also ends its biometric sign-in.
+        Phones and web browsers signed in to your LinkPay account. If you don't recognise one, sign it out and change your password. Signing a phone out also ends its biometric sign-in.
       </Text>
 
       {(one.error || others.error) && <FormError message={friendlyMessage(one.error ?? others.error)} />}
@@ -81,24 +81,28 @@ export default function Devices() {
           Sign out all other devices
         </Button>
       )}
-      <Text className="px-1 text-[13px] leading-[18px] text-muted-foreground">
-        Web dashboard sign-ins aren't listed here yet.
-      </Text>
     </ScrollView>
   );
 }
 
 function DeviceRow({ device: d, divider, onSignOut, busy }: { device: SignedInDevice; divider: boolean; onSignOut: () => void; busy: boolean }) {
   const { colors } = useTheme();
-  const detail = [d.device.model !== d.device.name ? d.device.model : undefined, d.device.osVersion && `${d.device.platform === "ios" ? "iOS" : "Android"} ${d.device.osVersion}`]
-    .filter(Boolean)
-    .join(", ");
+  const web = d.device.platform === "web";
+  const detail = web
+    ? "Web dashboard"
+    : [d.device.model !== d.device.name ? d.device.model : undefined, d.device.osVersion && `${d.device.platform === "ios" ? "iOS" : "Android"} ${d.device.osVersion}`]
+        .filter(Boolean)
+        .join(", ");
   return (
     <View>
       {divider && <View className="ml-[68px] h-px bg-border" />}
       <View className="flex-row items-center gap-3 px-4 py-3.5">
         <View className="h-10 w-10 items-center justify-center rounded-[12px] bg-brand-subtle">
-          <Icon ios="iphone" android="smartphone" size={20} color={colors.primary} />
+          {web ? (
+            <Icon ios="desktopcomputer" android="computer" size={20} color={colors.primary} />
+          ) : (
+            <Icon ios="iphone" android="smartphone" size={20} color={colors.primary} />
+          )}
         </View>
         <View className="flex-1 gap-0.5">
           <View className="flex-row items-center gap-2">

@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { useBusinessContext } from "@/lib/business-context";
 import { formatNaira } from "@/lib/format";
 import { api, MONEY_TIMEOUT_MS } from "./client";
+import { idSegment } from "./paths";
 import type { ApprovalRule, ApprovalTier, Bank, FeeQuote, ResolvedAccount, Transfer, TransferList, TransferStatus } from "./types";
 
 // /api/transfers. Copy (status and kind labels) matches the web's Transfers page.
@@ -124,7 +125,7 @@ export function useTransfer(id: string) {
   const business = useBusinessKey();
   return useQuery({
     queryKey: [business, "transfer", id],
-    queryFn: () => api<Transfer>(`/api/transfers/${id}`),
+    queryFn: () => api<Transfer>(`/api/transfers/${idSegment(id)}`),
     // In progress: check again every 10 s until it settles.
     refetchInterval: (q) => (q.state.data?.status === "processing" ? 10_000 : false),
   });
@@ -136,7 +137,7 @@ export function useTransferAction() {
   const business = useBusinessKey();
   return useMutation({
     mutationFn: ({ id, action, note }: { id: string; action: "approve" | "reject" | "cancel" | "refresh"; note?: string }) =>
-      api<Transfer>(`/api/transfers/${id}/${action}`, {
+      api<Transfer>(`/api/transfers/${idSegment(id)}/${action}`, {
         method: "POST",
         json: action === "approve" || action === "reject" ? { note: note || undefined } : {},
         // The last approval sends the payout in the same request.

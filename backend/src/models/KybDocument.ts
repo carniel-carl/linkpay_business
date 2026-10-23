@@ -27,5 +27,9 @@ const kybDocumentSchema = new Schema(
   },
 );
 
+// One file per type, per person for government_id: an upload replaces the previous one (controllers/business.ts).
+// Business-level documents have no person, which the index treats as null, so they're one per type too.
+kybDocumentSchema.index({ business: 1, type: 1, person: 1 }, { unique: true });
+
 export type KybDocument = InferSchemaType<typeof kybDocumentSchema>;
 export const KybDocumentModel = model("KybDocument", kybDocumentSchema);

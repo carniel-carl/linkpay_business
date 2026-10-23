@@ -22,6 +22,7 @@ import { TransferModel } from "../models/Transfer";
 import { audit, serializeAuditEntry, staffActor } from "../services/audit";
 import { banBusiness, complianceStatusOf, raiseFlag, reinstateBusiness, resolveFlag, suspendBusiness, unbanBusiness } from "../services/compliance";
 import { runRiskChecks } from "../services/risk";
+import { assertNoConflictOfInterest } from "../services/staff";
 import { HttpError } from "../utils/HttpError";
 import { serializeAdminTransfers } from "./adminActivity";
 import { serializeTransactions } from "./transactions";
@@ -35,6 +36,13 @@ async function findBusiness(id: string) {
   if (!isValidObjectId(id)) throw new HttpError(400, "Invalid id");
   const business = await BusinessModel.findById(id);
   if (!business) throw new HttpError(404, "Business not found");
+  return business;
+}
+
+/** A business the signed-in staff member may make a decision about: not one they own or work at. */
+async function findDecidableBusiness(staffId: string, id: string) {
+  const business = await findBusiness(id);
+  await assertNoConflictOfInterest(staffId, business);
   return business;
 }
 
@@ -246,6 +254,8 @@ export const createFlag: RequestHandler<IdParams> = async (req, res) => {
 export const resolveFlagHandler: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ outcome: z.enum(FLAG_OUTCOMES), note }).parse(req.body);
   const flag = await findFlag(req.params.id);
+  const business = await BusinessModel.findById(flag.business).select("owner");
+  if (business) await assertNoConflictOfInterest(req.staffId!, business);
   const resolved = await resolveFlag(await staffActor(req), flag, body.outcome, body.note);
   res.json((await serializeFlags([resolved]))[0]);
 };
@@ -295,25 +305,25 @@ const respondWithState = async (res: Parameters<RequestHandler>[1], business: Bu
 
 export const suspend: RequestHandler<IdParams> = async (req, res) => {
   const body = restriction.parse(req.body);
-  const business = await findBusiness(req.params.id);
+  const business = await findDecidableBusiness(req.staffId!, req.params.id);
   await respondWithState(res, await suspendBusiness(await staffActor(req), business, body));
 };
 
 export const reinstate: RequestHandler<IdParams> = async (req, res) => {
   const body = liftNote.parse(req.body);
-  const business = await findBusiness(req.params.id);
+  const business = await findDecidableBusiness(req.staffId!, req.params.id);
   await respondWithState(res, await reinstateBusiness(await staffActor(req), business, body.note));
 };
 
 export const ban: RequestHandler<IdParams> = async (req, res) => {
   const body = restriction.parse(req.body);
-  const business = await findBusiness(req.params.id);
+  const business = await findDecidableBusiness(req.staffId!, req.params.id);
   await respondWithState(res, await banBusiness(await staffActor(req), business, body));
 };
 
 export const unban: RequestHandler<IdParams> = async (req, res) => {
   const body = liftNote.parse(req.body);
-  const business = await findBusiness(req.params.id);
+  const business = await findDecidableBusiness(req.staffId!, req.params.id);
   await respondWithState(res, await unbanBusiness(await staffActor(req), business, body.note));
 };
 

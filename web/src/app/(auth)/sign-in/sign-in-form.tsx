@@ -52,7 +52,12 @@ export function SignInForm({ next, email }: { next?: string; email?: string }) {
             control={form.control}
             render={({ field, fieldState }) => (
               <Field data-invalid={fieldState.invalid}>
-                <FieldLabel htmlFor="password">Password</FieldLabel>
+                <div className="flex items-baseline justify-between gap-3">
+                  <FieldLabel htmlFor="password">Password</FieldLabel>
+                  <Link href="/forgot-password" className="text-sm font-medium text-primary underline-offset-4 hover:underline">
+                    Forgot password?
+                  </Link>
+                </div>
                 <PasswordInput
                   id="password"
                   autoComplete="current-password"

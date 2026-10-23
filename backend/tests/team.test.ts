@@ -6,7 +6,7 @@ import { UserModel } from "../src/models/User";
 import { setEmailProvider, type EmailMessage } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 let adminToken: string;
@@ -22,7 +22,7 @@ afterAll(() => t.stop());
 let seq = 0;
 async function user(name = "User") {
   seq++;
-  const u = await UserModel.create({ name, email: `${name.toLowerCase()}${seq}@test.ng`, password: await Bun.password.hash("password123"), emailVerified: true });
+  const u = await withPin(await UserModel.create({ name, email: `${name.toLowerCase()}${seq}@test.ng`, password: await Bun.password.hash("password123"), emailVerified: true }));
   return { user: u, token: await signAccessToken(u.id) };
 }
 
@@ -62,6 +62,7 @@ async function joinAsNew(ownerToken: string, role: string, branches?: string[]) 
   expect((await invite(ownerToken, { email, role, branches })).status).toBe(201);
   const res = await t.api("POST", `/api/invites/${inviteToken(email)}/register`, { body: { name: "New Staff", password: "password123" } });
   expect(res.status).toBe(201);
+  await withPin((await UserModel.findOne({ email }))!);
   return { email, token: res.body.accessToken as string, membershipId: undefined as string | undefined };
 }
 

@@ -114,10 +114,21 @@ async function deliver(audience: NotificationAudience, recipients: string[], con
 /**
  * Notifies business users. Never throws: a notification failing must not undo or fail the action
  * that caused it, so errors are logged.
+ *
+ * About a business, only people still on its team hear, and with `branch` only those who can see that
+ * branch: someone removed or moved off the branch stops getting its news even when named directly (as the
+ * creator of a link, an invoice or a transfer). `formerMembers` is for telling someone they were removed.
  */
-export async function notifyUsers(userIds: (Id | null | undefined)[], content: NotificationContent, business?: { _id: Id; name: string } | null) {
+export async function notifyUsers(
+  userIds: (Id | null | undefined)[],
+  content: NotificationContent,
+  business?: { _id: Id; name: string; owner?: Id | null } | null,
+  { branch, formerMembers = false }: { branch?: Id | null; formerMembers?: boolean } = {},
+) {
   try {
-    return await deliver("user", unique(userIds), content, business ?? undefined);
+    let recipients = unique(userIds);
+    if (business && !formerMembers) recipients = await stillOnTeam(business, recipients, branch);
+    return await deliver("user", recipients, content, business ?? undefined);
   } catch (err) {
     console.error(`Couldn't create ${content.type} notifications:`, err);
     return [];
@@ -154,6 +165,32 @@ export async function membersWith(
   ids.push(String(business.owner));
   const skip = new Set(unique(except ?? []));
   return [...new Set(ids)].filter((id) => !skip.has(id));
+}
+
+/**
+ * Of `userIds`, the ones still on the business's team (the owner, or anyone with a membership) who can see
+ * `branch` when given. Read fresh each time, so a removal or a new branch scope applies to the next event.
+ */
+export async function stillOnTeam(business: { _id: Id; owner?: Id | null }, userIds: string[], branch?: Id | null) {
+  if (!userIds.length) return [];
+  const owner = business.owner ?? (await BusinessModel.findById(business._id).select("owner"))?.owner;
+  const memberships = await MembershipModel.find({ business: business._id, user: { $in: userIds } });
+  const allowed = new Set(memberships.filter((m) => !branch || canAccessBranch(m, branch)).map((m) => String(m.user)));
+  if (owner) allowed.add(String(owner));
+  return userIds.filter((id) => allowed.has(id));
+}
+
+/**
+ * Which of a user's notifications they can still see: personal ones, ones about businesses they're still on
+ * the team of, and the notice that they were removed. Used by the list, the unread count and the stream.
+ */
+export async function visibleToUser(userId: Id) {
+  const [owned, memberships] = await Promise.all([
+    BusinessModel.find({ owner: userId }).select("_id"),
+    MembershipModel.find({ user: userId }).select("business"),
+  ]);
+  const businesses = [...owned.map((b) => b._id), ...memberships.map((m) => m.business)];
+  return { $or: [{ business: null }, { business: { $in: businesses } }, { type: "team.removed" }] };
 }
 
 /** Active staff whose role has `permission`. */

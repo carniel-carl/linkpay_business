@@ -7,7 +7,6 @@ import { AuthScreen, FooterPrompt } from "@/components/auth/auth-screen";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { PasswordField, TextField, type TextInputRef } from "@/components/ui/text-field";
-import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { register } from "@/lib/auth/api";
 import { applyError } from "@/lib/forms";
 import { signUpSchema } from "@/lib/schemas";
@@ -22,11 +21,11 @@ export default function SignUp() {
 
   async function onSubmit(values: Values) {
     try {
+      // The same answer whether or not the email has an account, so every sign-up goes on to the code.
       await register(values);
       router.push({ pathname: "/verify-email", params: { email: values.email } });
     } catch (err) {
-      if (err instanceof ApiError && err.code === "EMAIL_TAKEN") form.setError("email", { message: friendlyMessage(err) });
-      else applyError(form, err);
+      applyError(form, err);
     }
   }
 

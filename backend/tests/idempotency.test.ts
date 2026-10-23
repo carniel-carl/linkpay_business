@@ -13,7 +13,7 @@ import { todayInLagos } from "../src/services/pockets";
 import { addDays } from "../src/services/safelocks";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 let adminToken: string;
@@ -34,7 +34,7 @@ let seq = 0;
 /** Approved business with a head office and a Kano branch, ₦500,000 each. */
 async function setup() {
   seq++;
-  const owner = await UserModel.create({ name: "Owner", email: `owner${seq}@idem.ng`, password: "x", emailVerified: true });
+  const owner = await withPin(await UserModel.create({ name: "Owner", email: `owner${seq}@idem.ng`, password: "x", emailVerified: true }));
   const token = await signAccessToken(owner.id);
   const business = await BusinessModel.create({
     owner: owner._id,

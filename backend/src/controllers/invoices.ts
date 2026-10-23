@@ -298,7 +298,7 @@ export const deleteInvoice: RequestHandler<IdParams> = async (req, res) => {
 export const sendInvoiceHandler: RequestHandler<IdParams> = async (req, res) => {
   // email: false marks it as sent without emailing, to share the link another way.
   const body = z
-    .object({ email: z.boolean().default(true), to: email.optional(), message: z.string().trim().max(1000).optional() })
+    .object({ email: z.boolean().default(true), to: email.max(200).optional(), message: z.string().trim().max(1000).optional() })
     .parse(req.body ?? {});
   const invoice = await findInvoice(req, req.params.id);
   await sendOne(res, await sendInvoice(req.business!, invoice, body));

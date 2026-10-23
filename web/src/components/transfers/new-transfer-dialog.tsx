@@ -246,15 +246,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
                         <Spinner /> Checking the account
                       </span>
                     ) : resolved ? (
-                      <span className="inline-flex items-center gap-1.5 font-medium">
-                        <Check className="size-4 text-success-foreground" aria-hidden />
-                        {resolved.accountName}
-                        {resolved.kind !== "bank" && resolved.label && (
-                          <span className="font-normal text-muted-foreground">
-                            {resolved.kind === "internal" ? `, your ${resolved.label} branch` : `, ${resolved.label} on LinkPay`}
-                          </span>
-                        )}
-                      </span>
+                      <ResolvedName account={resolved} />
                     ) : resolveError ? (
                       <span className="text-destructive">{resolveError}</span>
                     ) : null}
@@ -369,12 +361,27 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
   )
 }
 
-function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) {
+export function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-6 px-4 py-3">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
       <dd className="min-w-0 text-right break-words">{value}</dd>
     </div>
+  )
+}
+
+/** The name from the bank's name enquiry, with the branch or LinkPay business behind the account. */
+export function ResolvedName({ account }: { account: ResolvedAccount }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 font-medium">
+      <Check className="size-4 shrink-0 text-success-foreground" aria-hidden />
+      {account.accountName}
+      {account.kind !== "bank" && account.label && (
+        <span className="font-normal text-muted-foreground">
+          {account.kind === "internal" ? `, your ${account.label} branch` : `, ${account.label} on LinkPay`}
+        </span>
+      )}
+    </span>
   )
 }
 

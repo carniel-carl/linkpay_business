@@ -1,5 +1,6 @@
 import type { Request } from "express";
-import type { Types } from "mongoose";
+import { decodeJwt } from "jose";
+import { Types } from "mongoose";
 import { z } from "zod";
 import { env } from "../config/env";
 import { BiometricKeyModel, type BiometricRevokeReason } from "../models/BiometricKey";
@@ -7,9 +8,13 @@ import { DEVICE_PLATFORMS, SessionModel, type SessionDocument } from "../models/
 import { UserModel, type UserDocument } from "../models/User";
 import { HttpError } from "../utils/HttpError";
 import { newDeviceSignIn } from "./notificationEvents";
-import { signAccessToken } from "./tokens";
+import { signAccessToken, verifyAccessToken } from "./tokens";
 
 const DAY = 24 * 60 * 60 * 1000;
+// A browser session ends after this long without a request. Its maximum age is the token's (JWT_EXPIRES_IN).
+export const WEB_SESSION_IDLE_MS = 12 * 60 * 60 * 1000;
+// A browser session's lastUsedAt and idle expiry are written at most this often.
+const WEB_TOUCH_INTERVAL_MS = 60 * 1000;
 // A rotated-out token is accepted once more within this window: the client may never have received the new pair.
 const ROTATION_GRACE_MS = 30_000;
 // How many retired tokens to remember for reuse detection.
@@ -53,8 +58,58 @@ function newRefreshToken() {
   return `lprt_${Buffer.from(bytes).toString("base64url")}`;
 }
 
-function clientInfo(req: Request) {
+type ClientInfo = { ip?: string; userAgent?: string };
+
+function clientInfo(req: Request): ClientInfo {
   return { ip: req.ip, userAgent: req.get("user-agent")?.slice(0, 300) };
+}
+
+const BROWSERS: [RegExp, string][] = [
+  [/Edg\//, "Edge"],
+  [/OPR\//, "Opera"],
+  [/Firefox\/|FxiOS/, "Firefox"],
+  [/Chrome\/|CriOS/, "Chrome"],
+  [/Safari\//, "Safari"],
+];
+// iPhones also say "Mac OS X", and Android also says "Linux", so they're checked first.
+const SYSTEMS: [RegExp, string][] = [
+  [/iPhone|iPad/, "iOS"],
+  [/Android/, "Android"],
+  [/Windows/, "Windows"],
+  [/Mac OS X/, "macOS"],
+  [/Linux/, "Linux"],
+];
+
+/** "Chrome on Windows", for the sessions list. The web forwards the browser's user agent when signing in. */
+function browserName(ua = "") {
+  const browser = BROWSERS.find(([pattern]) => pattern.test(ua))?.[1] ?? "Web browser";
+  const os = SYSTEMS.find(([pattern]) => pattern.test(ua))?.[1];
+  return os ? `${browser} on ${os}` : browser;
+}
+
+/**
+ * Opens a browser session (the web dashboard) and returns its access token, which lasts the session's maximum age.
+ * Each request through it counts as activity (see touchSession), and it ends like any other session.
+ */
+export async function startWebSession(
+  userId: string,
+  client: ClientInfo = {},
+): Promise<{ accessToken: string; sessionId: string }> {
+  const now = Date.now();
+  const _id = new Types.ObjectId();
+  const accessToken = await signAccessToken(userId, _id.toString(), env.jwtExpiresIn);
+  const absoluteExpiresAt = new Date(decodeJwt(accessToken).exp! * 1000);
+  await SessionModel.create({
+    _id,
+    user: userId,
+    kind: "web",
+    refreshTokenHash: hash(newRefreshToken()),
+    device: { name: browserName(client.userAgent), platform: "web" },
+    ...client,
+    expiresAt: new Date(Math.min(now + WEB_SESSION_IDLE_MS, absoluteExpiresAt.getTime())),
+    absoluteExpiresAt,
+  });
+  return { accessToken, sessionId: _id.toString() };
 }
 
 async function tokensFor(session: SessionDocument, refreshToken: string) {
@@ -66,15 +121,15 @@ async function tokensFor(session: SessionDocument, refreshToken: string) {
 }
 
 /**
- * The body every sign-in returns. Without `device` it is the long-lived web token as before; with it,
- * a device session is created and the response also carries `refreshToken` and `sessionId`.
+ * The body every sign-in returns. Without `device` a browser session is opened and only its access token is
+ * returned; with it, a device session is created and the response also carries `refreshToken` and `sessionId`.
  */
 export async function signInResponse(req: Request, user: UserDocument, device: DeviceInfo) {
   // For staff looking at who is active on a business. A failure here mustn't block the sign-in.
   await UserModel.updateOne({ _id: user._id }, { lastSignInAt: new Date(), lastSignInIp: req.ip }).catch((err) =>
     console.error("Couldn't record the sign-in time:", err),
   );
-  if (!device) return { accessToken: await signAccessToken(user.id), user };
+  if (!device) return { accessToken: (await startWebSession(user.id, clientInfo(req))).accessToken, user };
 
   const now = Date.now();
   const refreshToken = newRefreshToken();
@@ -98,7 +153,9 @@ export async function signInResponse(req: Request, user: UserDocument, device: D
  * device (just after sign-up), and not when the same installation signs in again.
  */
 async function alertIfNewDevice(user: UserDocument, session: SessionDocument) {
-  const others = await SessionModel.find({ user: user._id, _id: { $ne: session._id } }).select("installationId").lean();
+  const others = await SessionModel.find({ user: user._id, _id: { $ne: session._id }, kind: { $ne: "web" } })
+    .select("installationId")
+    .lean();
   if (!others.length) return;
   if (session.installationId && others.some((o) => o.installationId === session.installationId)) return;
   await newDeviceSignIn(user._id, { name: session.device!.name, platform: session.device!.platform });
@@ -151,10 +208,31 @@ export async function rotateSession(req: Request, refreshToken: string) {
   return tokensFor(session, next);
 }
 
-/** Whether an access token's session is still usable. */
+/** Whether an access token's session is still usable, without counting as activity (for long-lived streams). */
 export async function isSessionActive(sessionId: string, userId: string) {
   const session = await SessionModel.findById(sessionId).select("user revokedAt expiresAt").lean();
   return !!session && session.user.toString() === userId && !session.revokedAt && session.expiresAt.getTime() > Date.now();
+}
+
+/** Whether an access token's session is still usable. A browser session's idle expiry moves back with each request. */
+export async function touchSession(sessionId: string, userId: string) {
+  const session = await SessionModel.findById(sessionId).select("user kind revokedAt expiresAt absoluteExpiresAt lastUsedAt").lean();
+  const now = Date.now();
+  if (!session || session.user.toString() !== userId || session.revokedAt || session.expiresAt.getTime() <= now) return false;
+  if (session.kind === "web" && now - (session.lastUsedAt?.getTime() ?? 0) >= WEB_TOUCH_INTERVAL_MS) {
+    await SessionModel.updateOne(
+      { _id: session._id, revokedAt: null },
+      { lastUsedAt: new Date(now), expiresAt: new Date(Math.min(now + WEB_SESSION_IDLE_MS, session.absoluteExpiresAt.getTime())) },
+    );
+  }
+  return true;
+}
+
+/** Ends the session an access token belongs to (the web signing out). An invalid or expired token is ignored. */
+export async function revokeByAccessToken(accessToken: string) {
+  const { userId, sessionId } = await verifyAccessToken(accessToken).catch(() => ({ userId: null, sessionId: null }));
+  if (!sessionId) return;
+  await SessionModel.updateOne({ _id: sessionId, user: userId, revokedAt: null }, { revokedAt: new Date(), revokedReason: "signed_out" });
 }
 
 /**
@@ -197,6 +275,14 @@ export async function revokeOtherSessions(userId: string, keepSessionId?: string
     { revokedAt: new Date(), revokedReason: "signed_out_everywhere" },
   );
   return result.modifiedCount;
+}
+
+/**
+ * Ends every session of the user and every biometric sign-in key, as after a password reset or deleting
+ * the account. Covers any sign-in kept as a Session document. Returns how many sessions were ended.
+ */
+export function revokeAllSessions(userId: Types.ObjectId | string) {
+  return revokeOtherSessions(userId.toString());
 }
 
 export async function listSessions(userId: string, currentSessionId?: string) {

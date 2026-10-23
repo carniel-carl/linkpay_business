@@ -19,7 +19,7 @@ import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
 import { processOpenTransfers } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 import { inboundTransfer } from "./mockLiquifia";
 
 let t: TestEnv;
@@ -47,7 +47,7 @@ const admin = (method: string, path: string, body?: unknown, token = complianceT
 let seq = 0;
 async function user(name: string) {
   seq++;
-  const u = await UserModel.create({ name, email: `${name.toLowerCase().replace(/\s+/g, "")}${seq}@compliance.test`, password: "x", emailVerified: true });
+  const u = await withPin(await UserModel.create({ name, email: `${name.toLowerCase().replace(/\s+/g, "")}${seq}@compliance.test`, password: "x", emailVerified: true }));
   return { user: u, token: await signAccessToken(u.id) };
 }
 

@@ -9,6 +9,7 @@ import { API_URL } from "@/lib/config";
 import { discardFile } from "@/lib/document-file";
 import type { CheckoutTab, LinkTab } from "@/lib/payment-links";
 import { api } from "./client";
+import { idSegment } from "./paths";
 import type {
   LinkCheckout,
   LinkCheckoutList,
@@ -26,8 +27,8 @@ import type {
 // /api/payment-links (docs/briefs/payment-links.md). Reads need accounts.view; changes need payments.manage.
 
 const useBusinessKey = () => useBusinessContext((s) => s.businessId ?? "default");
-const linkPath = (id: string, rest = "") => `/api/payment-links/${encodeURIComponent(id)}${rest}`;
-const checkoutPath = (id: string, rest = "") => `/api/payment-links/checkouts/${encodeURIComponent(id)}${rest}`;
+const linkPath = (id: string, rest = "") => `/api/payment-links/${idSegment(id)}${rest}`;
+const checkoutPath = (id: string, rest = "") => `/api/payment-links/checkouts/${idSegment(id)}${rest}`;
 const next = (last: { skip: number; items: unknown[]; total: number }) =>
   last.skip + last.items.length < last.total ? last.skip + last.items.length : undefined;
 

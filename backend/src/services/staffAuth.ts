@@ -37,11 +37,17 @@ async function verify(token: string, typ: StaffTokenType) {
   }
 }
 
-/** Short-lived token proving the password step passed; exchanged for an access token after the second step. */
-export const signStaffChallengeToken = (staffId: string) => sign(staffId, "staff_2fa_challenge", "10m");
+/**
+ * Short-lived token proving the password step passed; exchanged for an access token after the second step.
+ * Its `jti` is what wrong authenticator codes are counted against.
+ */
+export const signStaffChallengeToken = (staffId: string) =>
+  sign(staffId, "staff_2fa_challenge", "10m", { jti: crypto.randomUUID() });
 
 export async function verifyStaffChallengeToken(token: string) {
-  return (await verify(token, "staff_2fa_challenge")).sub!;
+  const payload = await verify(token, "staff_2fa_challenge");
+  if (typeof payload.jti !== "string") throw new HttpError(401, "Invalid or expired staff token", "INVALID_STAFF_TOKEN");
+  return { staffId: payload.sub!, challengeId: payload.jti };
 }
 
 export async function verifyStaffAccessToken(token: string) {

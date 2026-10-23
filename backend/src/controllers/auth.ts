@@ -8,6 +8,7 @@ import {
   signInWithBiometricKey,
 } from "../services/biometricKeys";
 import { createOtp, verifyOtp } from "../services/otp";
+import { confirmEmail, passwordSchema, registrationTokenSchema, startRegistration } from "../services/passwords";
 import {
   sendLoginCodeEmail,
   sendTwoFactorCodeEmail,
@@ -17,6 +18,7 @@ import {
   deviceSchema,
   listSessions,
   refreshTokenSchema,
+  revokeByAccessToken,
   revokeByRefreshToken,
   revokeOtherSessions,
   revokeSession,
@@ -24,13 +26,13 @@ import {
   signInResponse,
   type DeviceInfo,
 } from "../services/sessions";
-import { signChallengeToken, verifyToken } from "../services/tokens";
+import { signChallengeToken, verifyChallengeToken, verifyToken } from "../services/tokens";
 import { generateTotpSecret, verifyTotp } from "../services/totp";
 import { HttpError } from "../utils/HttpError";
 
 const email = z.email().trim().toLowerCase();
 const code = z.string().trim().regex(/^\d{6}$/, "Code must be 6 digits");
-const password = z.string().min(8, "Password must be at least 8 characters").max(128);
+const password = passwordSchema;
 
 // Compared against when the email doesn't exist, so failed logins take the same time either way.
 const DUMMY_HASH = await Bun.password.hash("dummy-password-for-timing");
@@ -75,31 +77,34 @@ async function findUserOrThrow(id: string | undefined, select = "") {
 
 async function checkPassword(userId: string | undefined, plain: string) {
   const user = await findUserOrThrow(userId, "+password");
-  if (!(await Bun.password.verify(plain, user.password))) throw new HttpError(401, "Incorrect password");
+  // No password (removed at verification, see services/passwords.ts) never matches.
+  if (!user.password || !(await Bun.password.verify(plain, user.password))) throw new HttpError(401, "Incorrect password");
   return user;
 }
 
 // ---- Registration & email verification ----
 
+/**
+ * The same answer for a new email, an unverified one (its pending name and password are replaced) and a
+ * verified one (left alone; the owner is emailed), so sign-up never shows which emails have accounts.
+ * The client keeps `registrationToken` for verify-email: it's what keeps the password chosen here.
+ */
 export const register: RequestHandler = async (req, res) => {
   const body = z.object({ name: z.string().trim().min(1).max(100), email, password }).parse(req.body);
 
-  if (await UserModel.exists({ email: body.email })) {
-    throw new HttpError(409, "An account with this email already exists", "EMAIL_TAKEN");
-  }
-
-  const user = await UserModel.create({ ...body, password: await Bun.password.hash(body.password) });
-  await sendVerificationEmail(user.email, await createOtp(user.email, "verify_email"));
-
-  res.status(201).json({ message: "Account created. Check your email for a verification code.", user });
+  const registrationToken = await startRegistration(body);
+  res.status(201).json({ message: "Check your email for a 6-digit code.", registrationToken });
 };
 
+/** Without the sign-up's registration token the email is still verified, but its password is removed. */
 export const verifyEmail: RequestHandler = async (req, res) => {
-  const body = z.object({ email, code, device: deviceSchema }).parse(req.body);
+  const body = z
+    .object({ email, code, registrationToken: registrationTokenSchema.optional(), device: deviceSchema })
+    .parse(req.body);
 
   if (!(await verifyOtp(body.email, "verify_email", body.code))) throw invalidCode();
 
-  const user = await UserModel.findOneAndUpdate({ email: body.email }, { emailVerified: true }, { returnDocument: "after" });
+  const user = await confirmEmail(body.email, body.registrationToken);
   if (!user) throw invalidCode();
   await issueSession(req, res, user, body.device);
 };
@@ -109,7 +114,8 @@ export const resendVerification: RequestHandler = async (req, res) => {
 
   const user = await UserModel.findOne({ email: body.email });
   if (user && !user.emailVerified) {
-    await sendVerificationEmail(user.email, await createOtp(user.email, "verify_email"));
+    // Within the cooldown the code already sent stands: a 429 here would show the account exists.
+    await sendIgnoringCooldown(async () => sendVerificationEmail(user.email, await createOtp(user.email, "verify_email")));
   }
   // Same response whether or not the account exists, to avoid leaking registered emails.
   res.json({ message: "If that account needs verification, a new code has been sent." });
@@ -138,7 +144,8 @@ export const requestLoginOtp: RequestHandler = async (req, res) => {
   const body = z.object({ email }).parse(req.body);
 
   if (await UserModel.exists({ email: body.email })) {
-    await sendLoginCodeEmail(body.email, await createOtp(body.email, "login"));
+    // Within the cooldown the code already sent stands: a 429 here would show the account exists.
+    await sendIgnoringCooldown(async () => sendLoginCodeEmail(body.email, await createOtp(body.email, "login")));
   }
   res.json({ message: "If an account exists for that email, a sign-in code has been sent." });
 };
@@ -148,13 +155,10 @@ export const verifyLoginOtp: RequestHandler = async (req, res) => {
 
   if (!(await verifyOtp(body.email, "login", body.code))) throw invalidCode();
 
-  const user = await UserModel.findOne({ email: body.email });
+  // Receiving the code proves ownership of the inbox, not that this person chose a pending sign-up's
+  // password: an unverified account is verified and its password removed.
+  const user = await confirmEmail(body.email);
   if (!user) throw invalidCode();
-  // Receiving the code proves ownership of the inbox.
-  if (!user.emailVerified) {
-    user.emailVerified = true;
-    await user.save();
-  }
   // Email 2FA would just repeat the factor already proven, so only TOTP users get a second step.
   await completeFirstFactor(req, res, user, body.device, { skipEmailFactor: true });
 };
@@ -164,14 +168,14 @@ export const verifyLoginOtp: RequestHandler = async (req, res) => {
 export const verifyTwoFactor: RequestHandler = async (req, res) => {
   const body = z.object({ challengeToken: z.string(), code, device: deviceSchema }).parse(req.body);
 
-  const userId = await verifyToken(body.challengeToken, "2fa_challenge");
+  const { userId, challengeId } = await verifyChallengeToken(body.challengeToken);
   const user = await findUserOrThrow(userId, "+twoFactor.totpSecret");
   const { enabled, method, totpSecret } = user.twoFactor ?? {};
   if (!enabled) throw new HttpError(400, "Two-factor authentication is not enabled");
 
   const ok =
     method === "totp"
-      ? !!totpSecret && verifyTotp(user.email, totpSecret, body.code)
+      ? !!totpSecret && (await verifyTotp(user, totpSecret, body.code, { challengeId }))
       : await verifyOtp(user.email, "two_factor", body.code);
   if (!ok) throw invalidCode();
 
@@ -198,8 +202,23 @@ export const me: RequestHandler = async (req, res) => {
   res.json(user);
 };
 
+// Adding or swapping an authenticator needs the password, or a code from the one already set up, so a stolen
+// session alone can't take over two-step verification.
+const reauthSchema = z
+  .object({ password: z.string().min(1).optional(), code: code.optional() })
+  .refine((b) => b.password || b.code, { message: "Enter your password", path: ["password"] });
+
+async function confirmIdentity(userId: string | undefined, body: z.infer<typeof reauthSchema>) {
+  if (body.password) return checkPassword(userId, body.password);
+  const user = await findUserOrThrow(userId, "+twoFactor.totpSecret");
+  const { enabled, method, totpSecret } = user.twoFactor ?? {};
+  if (!enabled || method !== "totp" || !totpSecret) throw new HttpError(400, "Enter your password", "PASSWORD_REQUIRED");
+  if (!(await verifyTotp(user, totpSecret, body.code!))) throw invalidCode();
+  return user;
+}
+
 export const setupTotp: RequestHandler = async (req, res) => {
-  const user = await findUserOrThrow(req.userId);
+  const user = await confirmIdentity(req.userId, reauthSchema.parse(req.body ?? {}));
   const { secret, otpauthUrl } = generateTotpSecret(user.email);
 
   user.set("twoFactor.pendingTotpSecret", secret);
@@ -215,7 +234,7 @@ export const enableTotp: RequestHandler = async (req, res) => {
   const user = await findUserOrThrow(req.userId, "+twoFactor.pendingTotpSecret");
   const pending = user.twoFactor?.pendingTotpSecret;
   if (!pending) throw new HttpError(400, "Start authenticator setup first");
-  if (!verifyTotp(user.email, pending, body.code)) throw invalidCode();
+  if (!(await verifyTotp(user, pending, body.code, { enrolling: true }))) throw invalidCode();
 
   user.set({
     "twoFactor.enabled": true,
@@ -255,7 +274,7 @@ export const disableTwoFactor: RequestHandler = async (req, res) => {
   res.json({ message: "Two-factor authentication disabled.", user });
 };
 
-// ---- Device sessions (mobile) ----
+// ---- Sessions (devices and browsers) ----
 
 export const refresh: RequestHandler = async (req, res) => {
   const body = z.object({ refreshToken: refreshTokenSchema }).parse(req.body);
@@ -263,12 +282,16 @@ export const refresh: RequestHandler = async (req, res) => {
 };
 
 /**
- * Signs this device out. Takes the refresh token, so it works even after the access token has expired.
- * `forgetDevice` also ends the phone's biometric sign-in.
+ * Signs this device or browser out. The app sends its refresh token, so it works even after the access token
+ * has expired; `forgetDevice` also ends the phone's biometric sign-in. The web sends its access token instead.
  */
 export const logout: RequestHandler = async (req, res) => {
-  const body = z.object({ refreshToken: refreshTokenSchema, forgetDevice: z.boolean().optional() }).parse(req.body);
-  await revokeByRefreshToken(body.refreshToken, { forgetDevice: body.forgetDevice });
+  const body = z
+    .object({ refreshToken: refreshTokenSchema.optional(), forgetDevice: z.boolean().optional() })
+    .parse(req.body ?? {});
+  const header = req.headers.authorization;
+  if (body.refreshToken) await revokeByRefreshToken(body.refreshToken, { forgetDevice: body.forgetDevice });
+  else if (header?.startsWith("Bearer ")) await revokeByAccessToken(header.slice(7));
   res.status(204).end();
 };
 
@@ -284,7 +307,7 @@ export const revokeDeviceSession: RequestHandler<{ id: string }> = async (req, r
   res.status(204).end();
 };
 
-/** Signs out every other device session. The web's long-lived token isn't a session and is unaffected. */
+/** Signs out every other session, phones and browsers. */
 export const revokeOtherDeviceSessions: RequestHandler = async (req, res) => {
   res.json({ revoked: await revokeOtherSessions(req.userId!, req.sessionId) });
 };

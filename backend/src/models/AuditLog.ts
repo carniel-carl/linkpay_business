@@ -5,7 +5,10 @@ export const AUDIT_ACTIONS = [
   "kyb.approved",
   "kyb.changes_requested",
   "kyb.rejected",
+  // A staff member opened a KYB document (they hold personal data).
+  "kyb.document_opened",
   "account.provision_retried",
+  "transactions.synced",
   // Compliance
   "flag.raised",
   "flag.resolved",
@@ -22,6 +25,7 @@ export const AUDIT_ACTIONS = [
   "donation.shown",
   // Staff management
   "staff.invited",
+  "staff.invite_resent",
   "staff.invite_revoked",
   "staff.role_changed",
   "staff.disabled",

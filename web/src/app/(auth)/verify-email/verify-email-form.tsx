@@ -7,7 +7,8 @@ import { FormError } from "@/components/common/form-error"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
-import { resendVerification, verifyEmail } from "../actions"
+import { resendVerification } from "../actions"
+import { verifyEmail } from "./actions"
 
 export function VerifyEmailForm({ email }: { email: string }) {
   const [code, setCode] = useState("")

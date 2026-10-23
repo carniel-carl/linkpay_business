@@ -63,6 +63,64 @@ export const sendLoginCodeEmail = (to: string, code: string) =>
 export const sendTwoFactorCodeEmail = (to: string, code: string) =>
   codeEmail(to, `Your ${env.appName} verification code`, `Use this code to finish signing in to ${env.appName}.`, code);
 
+export const sendPasswordResetEmail = (to: string, code: string) =>
+  codeEmail(to, `Reset your ${env.appName} password`, `Use this code to choose a new password for ${env.appName}.`, code);
+
+/** Signing up again with an email that already has an account: the owner hears about it, nobody else does. */
+export const sendAccountExistsEmail = (to: string) => {
+  const signIn = `${env.webUrl}/sign-in`;
+  const reset = `${env.webUrl}/forgot-password`;
+  return sendEmail({
+    to,
+    subject: `You already have a ${env.appName} account`,
+    text:
+      `Someone tried to open a ${env.appName} account with this email, but it already has one.\n\n` +
+      `Sign in: ${signIn}\nForgotten your password? Reset it: ${reset}\n\nIf this wasn't you, you can ignore this email.`,
+    html:
+      `<p>Someone tried to open a ${escapeHtml(env.appName)} account with this email, but it already has one.</p>` +
+      `<p><a href="${escapeHtml(signIn)}">Sign in</a> or, if you've forgotten your password, <a href="${escapeHtml(reset)}">reset it</a>.</p>` +
+      `<p>If this wasn't you, you can ignore this email.</p>`,
+  });
+};
+
+/** After a reset every device is signed out; after a change, every device but the one that made it. */
+export const sendPasswordChangedEmail = (to: string, { reset }: { reset: boolean }) => {
+  const signedOut = reset ? "Every device signed in to your account was signed out." : "Your other signed-in devices were signed out.";
+  const link = `${env.webUrl}/forgot-password`;
+  return sendEmail({
+    to,
+    subject: `Your ${env.appName} password was changed`,
+    text: `Your ${env.appName} password was just changed. ${signedOut}\n\nIf this wasn't you, reset your password now: ${link}\nThen contact support.`,
+    html:
+      `<p>Your ${escapeHtml(env.appName)} password was just changed. ${escapeHtml(signedOut)}</p>` +
+      `<p>If this wasn't you, <a href="${escapeHtml(link)}">reset your password now</a>, then contact support.</p>`,
+  });
+};
+
+// ---- Transaction PIN (services/transactionPin.ts) ----
+
+export const sendTransactionPinResetCodeEmail = (to: string, code: string) =>
+  codeEmail(to, `Reset your ${env.appName} transaction PIN`, `Use this code to reset your ${env.appName} transaction PIN.`, code);
+
+export type TransactionPinEvent = "set" | "changed" | "reset" | "locked";
+
+/** Tells the user their PIN changed or locked, so a change they didn't make doesn't go unnoticed. */
+export const sendTransactionPinSecurityEmail = (to: string, event: TransactionPinEvent, opts: { lockedUntil?: Date } = {}) => {
+  const notYou = `If this wasn't you, sign out your other devices and contact support straight away.`;
+  const until = opts.lockedUntil?.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Lagos" });
+  const content = {
+    set: [`Your ${env.appName} transaction PIN is set`, `You set a transaction PIN. You'll enter it to send money, approve transfers and change security settings.`],
+    changed: [`Your ${env.appName} transaction PIN was changed`, `Your transaction PIN was just changed.`],
+    reset: [`Your ${env.appName} transaction PIN was reset`, `Your transaction PIN was just reset with a code sent to this email.`],
+    locked: [
+      `Your ${env.appName} transaction PIN is locked`,
+      `Your transaction PIN was entered wrongly too many times, so it's locked until ${until} (Lagos time). ` +
+        `You can't send money or approve transfers until then, or until you reset your PIN.`,
+    ],
+  }[event];
+  return sendEmail({ to, subject: content[0]!, text: `${content[1]}\n\n${notYou}` });
+};
+
 export const sendBusinessSubmittedEmail = (to: string, businessName: string) =>
   sendEmail({
     to,

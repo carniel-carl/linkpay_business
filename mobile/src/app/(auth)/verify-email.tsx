@@ -1,5 +1,5 @@
 import { Redirect, router, useLocalSearchParams } from "expo-router";
-import { Text } from "react-native";
+import { Text, View } from "react-native";
 import { AuthScreen, FooterPrompt, Strong } from "@/components/auth/auth-screen";
 import { CodeForm } from "@/components/auth/code-form";
 import { ResendCode } from "@/components/auth/resend-code";
@@ -21,9 +21,15 @@ export default function VerifyEmail() {
         </Text>
       }
       footer={
-        <FooterPrompt text="Wrong email?">
-          <TextButton onPress={() => router.replace("/sign-up")}>Start again</TextButton>
-        </FooterPrompt>
+        <View className="gap-3">
+          <FooterPrompt text="Wrong email?">
+            <TextButton onPress={() => router.replace("/sign-up")}>Start again</TextButton>
+          </FooterPrompt>
+          {/* Signing up with an email that already has an account emails its owner instead of sending a code. */}
+          <FooterPrompt text="Already have an account?">
+            <TextButton onPress={() => router.replace({ pathname: "/sign-in", params: { email } })}>Sign in</TextButton>
+          </FooterPrompt>
+        </View>
       }
     >
       <CodeForm

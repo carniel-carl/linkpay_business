@@ -35,7 +35,7 @@ async function signIn(email: string, extra: Record<string, unknown> = { device }
 }
 
 describe("device sessions", () => {
-  test("without device the web token is unchanged", async () => {
+  test("without device there's no refresh token", async () => {
     const res = await signIn(await makeUser(), {});
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toBeString();
@@ -140,17 +140,17 @@ describe("device sessions", () => {
     const third = (await signIn(email, { device: { name: "Old phone", platform: "android" } })).body;
     const web = (await signIn(email, {})).body;
 
-    expect((await t.api("GET", "/api/auth/sessions", { token: phone.accessToken })).body).toHaveLength(3);
+    // The browser is listed too.
+    expect((await t.api("GET", "/api/auth/sessions", { token: phone.accessToken })).body).toHaveLength(4);
 
     expect((await t.api("DELETE", `/api/auth/sessions/${tablet.sessionId}`, { token: phone.accessToken })).status).toBe(204);
     expect((await t.api("GET", "/api/auth/me", { token: tablet.accessToken })).status).toBe(401);
 
     const others = await t.api("POST", "/api/auth/sessions/revoke-others", { token: phone.accessToken });
-    expect(others.body.revoked).toBe(1);
+    expect(others.body.revoked).toBe(2);
     expect((await t.api("GET", "/api/auth/me", { token: third.accessToken })).status).toBe(401);
     expect((await t.api("GET", "/api/auth/me", { token: phone.accessToken })).status).toBe(200);
-    // The web token isn't a session.
-    expect((await t.api("GET", "/api/auth/me", { token: web.accessToken })).status).toBe(200);
+    expect((await t.api("GET", "/api/auth/me", { token: web.accessToken })).body.code).toBe("SESSION_REVOKED");
   });
 
   test("can't revoke someone else's session", async () => {

@@ -9,7 +9,8 @@ const virtualAccountSchema = new Schema(
     provider: { type: String, enum: ["liquifia"], default: "liquifia" },
     providerAccountId: { type: String, required: true, unique: true },
     providerCustomerId: { type: String, required: true },
-    accountNumber: { type: String, required: true },
+    // Indexed: every transfer looks the recipient up by number to spot one of our own accounts.
+    accountNumber: { type: String, required: true, index: true },
     accountName: { type: String },
     bankName: { type: String },
     currency: { type: String, default: "NGN" },

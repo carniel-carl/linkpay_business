@@ -107,7 +107,7 @@ describe("test mode", () => {
     expect(match.body.code).toBe("CHECKOUT_IS_TEST");
   });
 
-  test("the payer simulates the payment: paid, a receipt and notification marked as tests, and no totals", async () => {
+  test("the payer simulates the payment: paid, a notification marked as a test, no receipt email, and no totals", async () => {
     const { owner, headOfficeId } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 25_000_00, mode: "test", redirectUrl: "https://adaeze.ng/thanks", maxPayments: 1 });
     const checkout = (await start(link.slug, { ...payer(), clientReference: "ORDER-7" })).body;
@@ -122,12 +122,20 @@ describe("test mode", () => {
     // The business's server sees it's a test when it confirms.
     expect((await t.api("GET", `/api/public/checkouts/${checkout.token}`)).body).toMatchObject({ status: "paid", mode: "test", clientReference: "ORDER-7" });
 
-    const receipts = outbox.filter((m) => m.to === payer().email);
+    // Anyone can start a test checkout with anyone's email, so a payment simulated on the public page emails nobody.
+    expect(outbox.filter((m) => m.to === payer().email)).toHaveLength(0);
+    expect((await CheckoutModel.findOne({ token: checkout.token }))!.receiptSentAt).toBeUndefined();
+    const note = await NotificationModel.findOne({ recipient: owner.user._id, type: "payment_link.paid" }).sort({ _id: -1 });
+    expect(note!.title).toContain("(test)");
+
+    // A team member simulating it from the dashboard still sends the test receipt, so they can see it.
+    const second = (await start(link.slug, payer(2))).body;
+    const secondId = (await CheckoutModel.findOne({ token: second.token }))!.id;
+    expect((await t.api("POST", `/api/payment-links/checkouts/${secondId}/simulate`, { token: owner.token, body: { outcome: "paid" } })).status).toBe(200);
+    const receipts = outbox.filter((m) => m.to === payer(2).email);
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.subject).toStartWith("[Test] ");
     expect(receipts[0]!.text).toContain("No money was sent");
-    const note = await NotificationModel.findOne({ recipient: owner.user._id, type: "payment_link.paid" }).sort({ _id: -1 });
-    expect(note!.title).toContain("(test)");
 
     // Totals, the 30-day summary and the payment limit only count live payments.
     const after = (await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body;

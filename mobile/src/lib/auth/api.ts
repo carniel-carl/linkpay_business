@@ -1,4 +1,5 @@
 import { api } from "@/lib/api/client";
+import { idSegment } from "@/lib/api/paths";
 import type { DeviceSession, SignedInDevice, SignInResponse } from "@/lib/api/types";
 import { deviceInfo } from "@/lib/device";
 
@@ -10,11 +11,23 @@ const publicPost = <T>(path: string, json: unknown) => api<T>(path, { method: "P
 export const signInWithPassword = (email: string, password: string) =>
   publicPost<SignInResponse>("/api/auth/login", { email, password, device: deviceInfo() });
 
-export const register = (body: { name: string; email: string; password: string }) =>
-  publicPost<{ message: string }>("/api/auth/register", body);
+// The token from this phone's last sign-up, in memory only. Verifying with it keeps the password chosen at
+// sign-up; without it the email is verified but the account has no password until one is set with a reset.
+// It never comes from route params, so a link can't verify with someone else's sign-up.
+let registration: { email: string; token: string } | undefined;
 
-export const verifyEmail = (email: string, code: string) =>
-  publicPost<DeviceSession>("/api/auth/verify-email", { email, code, device: deviceInfo() });
+export async function register(body: { name: string; email: string; password: string }) {
+  const res = await publicPost<{ message: string; registrationToken: string }>("/api/auth/register", body);
+  registration = { email: body.email, token: res.registrationToken };
+  return res;
+}
+
+export async function verifyEmail(email: string, code: string) {
+  const registrationToken = registration?.email === email ? registration.token : undefined;
+  const session = await publicPost<DeviceSession>("/api/auth/verify-email", { email, code, registrationToken, device: deviceInfo() });
+  registration = undefined;
+  return session;
+}
 
 export const resendVerification = (email: string) => publicPost("/api/auth/verify-email/resend", { email });
 
@@ -28,6 +41,17 @@ export const verifyTwoFactor = (challengeToken: string, code: string) =>
 
 export const resendTwoFactor = (challengeToken: string) => publicPost("/api/auth/login/2fa/resend", { challengeToken });
 
+/** The same answer whether or not the email has an account. */
+export const requestPasswordReset = (email: string) => publicPost("/api/auth/password/reset", { email });
+
+/** Ends every session and biometric sign-in key on the server, this phone's included. Signs nobody in. */
+export const resetPassword = (email: string, code: string, newPassword: string) =>
+  publicPost("/api/auth/password/reset/confirm", { email, code, newPassword });
+
+/** Signed in: the current password is checked. Other devices are signed out; this phone stays signed in. */
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  api("/api/auth/password", { method: "POST", json: { currentPassword, newPassword } });
+
 export const signInWithBiometricKey = (secret: string) =>
   publicPost<DeviceSession>("/api/auth/biometric/login", { secret, device: deviceInfo() });
 
@@ -38,6 +62,6 @@ export const endBiometricKey = () => api("/api/auth/biometric", { method: "DELET
 
 export const listDevices = () => api<SignedInDevice[]>("/api/auth/sessions");
 
-export const signOutDevice = (id: string) => api(`/api/auth/sessions/${id}`, { method: "DELETE" });
+export const signOutDevice = async (id: string) => api(`/api/auth/sessions/${idSegment(id)}`, { method: "DELETE" });
 
 export const signOutOtherDevices = () => api<{ revoked: number }>("/api/auth/sessions/revoke-others", { method: "POST" });

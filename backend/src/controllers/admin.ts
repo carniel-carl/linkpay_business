@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import { isValidObjectId } from "mongoose";
 import { z } from "zod";
+import { DOCUMENT_TYPES, type DocumentType } from "../config/kyb";
 import { BUSINESS_STATUSES, BusinessModel, type BusinessDocument } from "../models/Business";
 import { KybDocumentModel } from "../models/KybDocument";
 import { UserModel } from "../models/User";
@@ -12,6 +13,7 @@ import {
 import { provisionBranchAccount, provisionBusinessAccount } from "../services/accounts";
 import { audit, staffActor } from "../services/audit";
 import { kybDecided } from "../services/notificationEvents";
+import { assertNoConflictOfInterest } from "../services/staff";
 import { syncInboundTransfers } from "../services/transactions";
 import { HttpError } from "../utils/HttpError";
 import { findBranch } from "./branches";
@@ -37,8 +39,10 @@ function assertReviewable(business: BusinessDocument) {
   }
 }
 
-async function findSubmittedBusiness(id: string) {
+/** A submitted business the signed-in staff member may decide on (not their own). */
+async function findSubmittedBusiness(id: string, staffId: string) {
   const business = await findBusiness(id);
+  await assertNoConflictOfInterest(staffId, business);
   assertReviewable(business);
   return business;
 }
@@ -144,10 +148,23 @@ export const getBusiness: RequestHandler<IdParams> = async (req, res) => {
 
 export const downloadBusinessDocument: RequestHandler<DocParams> = async (req, res) => {
   const business = await findBusiness(req.params.id);
+  if (!isValidObjectId(req.params.documentId)) throw new HttpError(400, "Invalid id");
+  const doc = await KybDocumentModel.findOne({ _id: req.params.documentId, business: business._id }).select("type person");
+  if (!doc) throw new HttpError(404, "Document not found");
+  // Recorded before the file goes out: who looked at whose personal documents.
+  const person = doc.person ? business.people.id(doc.person)?.fullName : null;
+  await audit(await staffActor(req), {
+    action: "kyb.document_opened",
+    business: business._id,
+    target: { kind: "business", id: business._id },
+    summary: `Opened ${DOCUMENT_TYPES[doc.type as DocumentType]}${person ? ` for ${person}` : ""}`,
+    details: { documentId: doc.id, type: doc.type, ...(doc.person && { person: String(doc.person) }) },
+  });
   await streamDocument(res, business._id, req.params.documentId);
 };
 
 export const approveBusiness: RequestHandler<IdParams> = async (req, res) => {
+  await assertNoConflictOfInterest(req.staffId!, await findBusiness(req.params.id));
   const business = await decideSubmittedBusiness(req.params.id, {
     status: "approved",
     reviewedAt: new Date(),
@@ -212,7 +229,7 @@ export const requestChanges: RequestHandler<IdParams> = async (req, res) => {
       documents: z.array(z.object({ id: z.string(), reason: z.string().trim().min(1) })).default([]),
     })
     .parse(req.body);
-  const submitted = await findSubmittedBusiness(req.params.id);
+  const submitted = await findSubmittedBusiness(req.params.id, req.staffId!);
   // Checked before deciding, so a wrong id leaves the review untouched.
   for (const { id } of body.documents) {
     if (!(await KybDocumentModel.exists({ _id: id, business: submitted._id }))) {
@@ -244,6 +261,7 @@ export const requestChanges: RequestHandler<IdParams> = async (req, res) => {
 
 export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ reason: z.string().trim().min(1) }).parse(req.body);
+  await assertNoConflictOfInterest(req.staffId!, await findBusiness(req.params.id));
   const business = await decideSubmittedBusiness(req.params.id, {
     status: "rejected",
     reviewNote: body.reason,
@@ -264,6 +282,7 @@ export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
 };
 
 /** Pulls incoming transfers from Liquifia now (normally done every minute in the background). */
-export const syncTransactions: RequestHandler = async (_req, res) => {
+export const syncTransactions: RequestHandler = async (req, res) => {
+  await audit(await staffActor(req), { action: "transactions.synced", summary: "Pulled incoming payments from the bank partner" });
   res.json(await syncInboundTransfers());
 };

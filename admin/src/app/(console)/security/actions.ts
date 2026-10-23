@@ -11,9 +11,11 @@ async function done<T>(result: Awaited<ReturnType<typeof runAction<T>>>) {
   return result
 }
 
-export async function startTotpSetup() {
+/** Needs the password, so a stolen session alone can't add or swap the authenticator. */
+export async function startTotpSetup(input: unknown) {
+  const body = passwordConfirmSchema.parse(input)
   return runAction(() =>
-    api<{ secret: string; otpauthUrl: string }>("/api/admin/auth/2fa/totp/setup", { method: "POST" }),
+    api<{ secret: string; otpauthUrl: string }>("/api/admin/auth/2fa/totp/setup", { method: "POST", json: body }),
   )
 }
 

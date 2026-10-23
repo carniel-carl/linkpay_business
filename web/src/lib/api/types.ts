@@ -14,6 +14,8 @@ export type User = {
   name: string
   email: string
   emailVerified: boolean
+  /** False when verifying the email removed a password chosen before it was proven. A reset sets one. */
+  hasPassword?: boolean
   twoFactor?: { enabled: boolean; method: TwoFactorMethod | null }
   createdAt: string
   updatedAt: string

@@ -10,7 +10,7 @@ import { setEmailProvider, type EmailMessage } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
 import { resetSyncState, syncIfStale } from "../src/services/transactions";
 import { encrypt } from "../src/utils/crypto";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 import { inboundTransfer } from "./mockLiquifia";
 
 let t: TestEnv;
@@ -34,7 +34,7 @@ let seq = 0;
 /** Approved business with a head office and a "Kano" branch; returns their provider account ids. */
 async function setup(name = "Acme Trading Ltd") {
   seq++;
-  const owner = await UserModel.create({ name: "Owner", email: `owner${seq}@test.ng`, password: "x", emailVerified: true });
+  const owner = await withPin(await UserModel.create({ name: "Owner", email: `owner${seq}@test.ng`, password: "x", emailVerified: true }));
   const token = await signAccessToken(owner.id);
   const business = await BusinessModel.create({
     owner: owner._id,

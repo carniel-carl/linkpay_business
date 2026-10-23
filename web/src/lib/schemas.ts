@@ -138,3 +138,14 @@ export type AccessValues = z.infer<typeof accessSchema>
 /** Mirrors registerFromInvite in backend/src/controllers/invites.ts. The email comes from the invite. */
 export const inviteRegisterSchema = signUpSchema.omit({ email: true })
 export type InviteRegisterValues = z.infer<typeof inviteRegisterSchema>
+
+// ---- Passwords (backend/src/controllers/password.ts) ----
+
+export const resetPasswordSchema = z.object({ code, newPassword: password })
+export type ResetPasswordValues = z.infer<typeof resetPasswordSchema>
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Enter your current password."),
+  newPassword: password,
+})
+export type ChangePasswordValues = z.infer<typeof changePasswordSchema>

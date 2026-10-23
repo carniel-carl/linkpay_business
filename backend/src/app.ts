@@ -12,6 +12,7 @@ import { invitesRouter } from "./routes/invites";
 import { invoicesRouter } from "./routes/invoices";
 import { membershipsRouter } from "./routes/memberships";
 import { notificationsRouter } from "./routes/notifications";
+import { passwordRouter } from "./routes/password";
 import { pocketsRouter } from "./routes/pockets";
 import { safelocksRouter } from "./routes/safelocks";
 import { beneficiariesRouter } from "./routes/beneficiaries";
@@ -19,6 +20,7 @@ import { payoutListsRouter } from "./routes/payoutLists";
 import { paymentLinksRouter } from "./routes/paymentLinks";
 import { publicRouter } from "./routes/public";
 import { teamRouter } from "./routes/team";
+import { transactionPinRouter } from "./routes/transactionPin";
 import { transactionsRouter } from "./routes/transactions";
 import { transfersRouter } from "./routes/transfers";
 import { webhooksRouter } from "./routes/webhooks";
@@ -27,8 +29,13 @@ import { errorHandler, notFound } from "./middleware/errorHandler";
 
 export const app = express();
 
-// Rate limits key on req.ip. The web calls the public routes for payers (pay pages, invoices) and passes
-// their address in X-Forwarded-For; only proxies listed here are believed (default: this machine).
+// Rate limits key on req.ip. The web and admin servers call the API for their visitors (sign-in, pay pages,
+// invoices) and pass the visitor's address in X-Forwarded-For; only proxies listed here are believed (default:
+// this machine). It must be a list of addresses: the app reaches the API without the web in front, so with
+// `true` or a hop count a phone could choose its own address.
+if (/^\s*(true|\d+)\s*$/i.test(env.trustProxy)) {
+  throw new Error("TRUST_PROXY must list proxy addresses or subnets (e.g. 10.0.0.0/8), not true or a hop count");
+}
 app.set("trust proxy", env.trustProxy);
 
 app.use(cors());
@@ -43,6 +50,8 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// Before /api/auth, so its own middleware never runs for these.
+app.use("/api/auth/password", passwordRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/business", businessRouter);
 app.use("/api/branches", branchesRouter);
@@ -62,6 +71,7 @@ app.use("/api/invites", invitesRouter);
 app.use("/api/memberships", membershipsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/users", usersRouter);
+app.use("/api/transaction-pin", transactionPinRouter);
 app.use("/api/admin", adminRouter);
 
 app.use(notFound);

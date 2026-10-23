@@ -230,23 +230,15 @@ export const uploadDocument: RequestHandler = async (req, res) => {
   const storageKey = `kyb/${business.id}/${crypto.randomUUID()}.${ext}`;
   await saveFile(storageKey, req.file.buffer);
 
-  // Uploading again replaces the previous file of the same type (and person).
-  const filter = { business: business._id, type: body.type, person: body.personId ?? null };
-  const previous = await KybDocumentModel.findOne(filter);
-  if (previous) {
-    await removeFile(previous.storageKey);
-    await previous.deleteOne();
-  }
-
-  await KybDocumentModel.create({
-    ...filter,
-    person: body.personId,
-    storageKey,
-    originalName: req.file.originalname,
-    mimeType: mime,
-    size: req.file.size,
-    uploadedBy: req.userId,
-  });
+  // Uploading again replaces the previous file of the same type (and person), in one upsert, so two uploads
+  // at once can't leave two documents (a unique index backs this up). It goes back to pending review.
+  const filter = { business: business._id, type: body.type, person: body.personId ?? { $exists: false } };
+  const file = { storageKey, originalName: req.file.originalname, mimeType: mime, size: req.file.size, uploadedBy: req.userId, status: "pending" };
+  const replace = () =>
+    KybDocumentModel.findOneAndUpdate(filter, { $set: file, $unset: { rejectionReason: 1 } }, { upsert: true, returnDocument: "before" });
+  // Two first uploads at once both insert; the index refuses the second, which then replaces the first.
+  const previous = await replace().catch((err) => (err?.code === 11000 ? replace() : Promise.reject(err)));
+  if (previous) await removeFile(previous.storageKey);
   await sendBusinessOverview(res, business, { status: 201 });
 };
 

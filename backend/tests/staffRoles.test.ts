@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Types } from "mongoose";
 import { env } from "../src/config/env";
 import { STAFF_ROLES, staffPermissionsOf, type StaffPermission, type StaffRole } from "../src/config/staffPermissions";
+import { AuditLogModel } from "../src/models/AuditLog";
 import { BusinessModel } from "../src/models/Business";
 import { StaffModel } from "../src/models/Staff";
 import { StaffInviteModel } from "../src/models/StaffInvite";
@@ -379,6 +380,9 @@ describe("staff invites", () => {
     expect(resent.status).toBe(200);
     const newToken = inviteTokenFor(email)!;
     expect(newToken).not.toBe(oldToken);
+    expect(await AuditLogModel.findOne({ action: "staff.invite_resent", "target.id": created.body._id })).toMatchObject({
+      summary: `Resent the invite to ${email}`,
+    });
     expect((await preview(oldToken)).body.code).toBe("INVITE_NOT_FOUND");
     expect((await preview(newToken)).status).toBe(200);
   });
@@ -410,6 +414,47 @@ describe("LAST_SUPER_ADMIN", () => {
     } finally {
       await StaffModel.updateMany({ _id: { $in: others.map((o) => o._id) } }, { status: "active" });
     }
+  });
+});
+
+describe("LAST_SUPER_ADMIN under concurrency", () => {
+  // Two super admins demoting (or disabling) each other at the same moment: at worst both are refused,
+  // never both let through. Run a few times to hit different interleavings.
+  test("two super admins acting on each other at once always leave one", async () => {
+    const others = await StaffModel.find({ role: "super_admin", status: "active" }).select("_id");
+    await StaffModel.updateMany({ _id: { $in: others.map((o) => o._id) } }, { status: "disabled" });
+    try {
+      for (let round = 0; round < 6; round++) {
+        const [a, b] = [`pair-a${round}@linkpay.test`, `pair-b${round}@linkpay.test`] as const;
+        const tokens = [await signStaffToken(a, "super_admin"), await signStaffToken(b, "super_admin")];
+        const ids = [await staffIdOf(a), await staffIdOf(b)];
+        const disable = round % 2 === 1;
+        const act = (i: 0 | 1) =>
+          disable
+            ? staffApi("POST", `/${ids[1 - i]}/disable`, tokens[i]!)
+            : staffApi("PATCH", `/${ids[1 - i]}`, tokens[i]!, { role: "support" });
+        const results = await Promise.all([act(0), act(1)]);
+        expect(results.filter((r) => r.status === 200).length).toBeLessThanOrEqual(1);
+        // The loser is refused: by the count, or (when the winner landed first) because it's no longer an
+        // active super admin with a live session.
+        const refusals = ["409 LAST_SUPER_ADMIN", "403 STAFF_PERMISSION_DENIED", "403 STAFF_DISABLED", "401 STAFF_SESSION_ENDED"];
+        for (const r of results.filter((r) => r.status !== 200)) expect(refusals).toContain(`${r.status} ${r.body.code}`);
+        expect(await StaffModel.countDocuments({ role: "super_admin", status: "active" })).toBeGreaterThanOrEqual(1);
+        await StaffModel.updateMany({ _id: { $in: ids } }, { status: "disabled" });
+      }
+    } finally {
+      await StaffModel.updateMany({ _id: { $in: others.map((o) => o._id) } }, { status: "active" });
+    }
+  });
+
+  test("a change to someone edited since it was read is refused, not applied over the top", async () => {
+    const { changeStaffAccess } = await import("../src/services/staff");
+    await signStaffToken("stale@linkpay.test", "support");
+    const stale = (await StaffModel.findOne({ email: "stale@linkpay.test" }))!;
+    await StaffModel.updateOne({ _id: stale._id }, { role: "operations" });
+    const err = await changeStaffAccess(stale, { status: "disabled" }).catch((e) => e);
+    expect(err?.code).toBe("STAFF_CHANGED");
+    expect((await StaffModel.findById(stale._id))!.status).toBe("active");
   });
 });
 

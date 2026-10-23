@@ -29,6 +29,13 @@ export default async function VerifyEmailPage({ searchParams }: PageProps<"/veri
           Start again
         </Link>
       </p>
+      {/* Signing up with an email that already has an account emails its owner instead of sending a code. */}
+      <p className="mt-2 text-sm text-muted-foreground">
+        Already have an account?{" "}
+        <Link href="/sign-in" className="font-medium text-primary underline-offset-4 hover:underline">
+          Sign in
+        </Link>
+      </p>
     </AuthFrame>
   )
 }

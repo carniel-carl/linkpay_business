@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
+import { ApiError, friendlyMessage } from "@/lib/api/errors"
 import type { Bank, FeeQuote, ResolvedAccount, Transfer, TransferBatch, TransferSettings } from "@/lib/api/types"
+import { BULK_CHECK_SLICE } from "@/lib/transfers"
 
 const id = z.string().regex(/^[a-f\d]{24}$/i)
 const accountNumber = z.string().regex(/^\d{10}$/)
@@ -28,6 +30,53 @@ export async function resolveAccount(input: { accountNumber: string; bankUuid: s
 export async function quoteFee(kobo: number) {
   const amount = amountKobo.parse(kobo)
   return runAction(() => api<FeeQuote>(`/api/transfers/fee?amountKobo=${amount}`))
+}
+
+/** Runs `fn` on every item, at most `limit` at a time, keeping the order. */
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const out = new Array<R>(items.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++
+        out[i] = await fn(items[i])
+      }
+    }),
+  )
+  return out
+}
+
+/** One row's answer: the account or fee, or why it couldn't be checked. */
+type Checked<T> = { data: T; error?: undefined } | { data?: undefined; error: string }
+
+/** A failed check for one row, without failing the rest. An expired session (or anything unexpected) still fails the whole call. */
+async function checkOne<T>(fn: () => Promise<T>): Promise<Checked<T>> {
+  try {
+    return { data: await fn() }
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.sessionExpired) throw err
+    return { error: friendlyMessage(err) }
+  }
+}
+
+/**
+ * Name enquiries for one slice of a bulk transfer, 5 at a time. The browser sends the rows a slice at a
+ * time (Server Actions run one after another), so it can show progress.
+ */
+export async function resolveAccounts(input: { accountNumber: string; bankUuid: string }[]) {
+  const rows = z.array(z.object({ accountNumber, bankUuid: z.string().min(1) })).min(1).max(BULK_CHECK_SLICE).parse(input)
+  return runAction(() =>
+    mapLimited(rows, 5, (row) =>
+      checkOne(() => api<ResolvedAccount>("/api/transfers/resolve-account", { method: "POST", json: row })),
+    ),
+  )
+}
+
+/** Fees for a slice of the distinct amounts in a bulk transfer, 5 at a time. */
+export async function quoteFees(input: number[]) {
+  const amounts = z.array(amountKobo).min(1).max(BULK_CHECK_SLICE).parse(input)
+  return runAction(() => mapLimited(amounts, 5, (kobo) => checkOne(() => api<FeeQuote>(`/api/transfers/fee?amountKobo=${kobo}`))))
 }
 
 const createInput = z.object({

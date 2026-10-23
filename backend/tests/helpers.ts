@@ -5,6 +5,7 @@ import { env } from "../src/config/env";
 import type { Request } from "express";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
+import { TransactionPinModel } from "../src/models/TransactionPin";
 import { startStaffSession } from "../src/services/staffAuth";
 import { startMockLiquifia, type MockLiquifia } from "./mockLiquifia";
 
@@ -12,11 +13,14 @@ export type TestEnv = {
   liquifia: MockLiquifia;
   /** The app's base URL, for requests `api()` can't make (multipart uploads, binary responses). */
   url: string;
-  /** Calls the API; `token` becomes a Bearer header. */
+  /**
+   * Calls the API; `token` becomes a Bearer header. `pin` goes in X-Transaction-Pin: TEST_PIN unless given,
+   * `null` sends none. Only routes that need the PIN read it, and only users given one by `withPin` have it.
+   */
   api: (
     method: string,
     path: string,
-    opts?: { token?: string; body?: unknown; headers?: Record<string, string> },
+    opts?: { token?: string; body?: unknown; headers?: Record<string, string>; pin?: string | null },
   ) => Promise<{ status: number; body: any }>;
   stop: () => Promise<void>;
 };
@@ -39,11 +43,12 @@ export async function startTestEnv(): Promise<TestEnv> {
   });
   const { port } = server.address() as { port: number };
 
-  const api: TestEnv["api"] = async (method, path, { token, body, headers } = {}) => {
+  const api: TestEnv["api"] = async (method, path, { token, body, headers, pin = TEST_PIN } = {}) => {
     const res = await fetch(`http://127.0.0.1:${port}${path}`, {
       method,
       headers: {
         ...(token && { Authorization: `Bearer ${token}` }),
+        ...(pin !== null && { "X-Transaction-Pin": pin }),
         ...(body !== undefined && { "Content-Type": "application/json" }),
         ...headers,
       },
@@ -72,4 +77,19 @@ export async function signStaffToken(email = "staff@test.ng", role: StaffRole = 
     (await StaffModel.findOne({ email })) ?? (await StaffModel.create({ name: "Staff", email, role, password: "x" }));
   const req = { ip: "127.0.0.1", get: () => "bun-test" } as unknown as Request;
   return (await startStaffSession(req, staff)).accessToken;
+}
+
+/** The transaction PIN `withPin` gives test users, and that `api()` sends unless told otherwise. */
+export const TEST_PIN = "2580";
+let testPinHash: Promise<string> | undefined;
+
+/** Gives a test user a transaction PIN (TEST_PIN), as a real user sets one before sending money. */
+export async function withPin<T extends { _id: mongoose.Types.ObjectId }>(user: T): Promise<T> {
+  testPinHash ??= Bun.password.hash(TEST_PIN, { algorithm: "argon2id" });
+  await TransactionPinModel.updateOne(
+    { user: user._id },
+    { $setOnInsert: { pinHash: await testPinHash, changedAt: new Date() } },
+    { upsert: true },
+  );
+  return user;
 }

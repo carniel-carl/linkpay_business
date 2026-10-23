@@ -22,6 +22,7 @@ const ENDED: Record<string, string> = {
   expired: "Your session ended. Sign in again to continue.",
   revoked: "This phone was signed out from another device. Sign in again to continue.",
   tooManyAttempts: "Too many wrong passcodes, so we signed this phone out. Sign in again to choose a new passcode.",
+  passwordSet: "Your password is set, and every device was signed out. Sign in with it to continue.",
 };
 
 export default function SignIn() {
@@ -105,6 +106,11 @@ export default function SignIn() {
           />
         )}
       />
+      <View className="-mt-2 flex-row justify-end">
+        <TextButton onPress={() => router.push({ pathname: "/forgot-password", params: { email: form.getValues("email") } })}>
+          Forgot password?
+        </TextButton>
+      </View>
       <Button loading={isSubmitting} onPress={() => void form.handleSubmit(onSubmit)()}>
         Sign in
       </Button>
