@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { rateLimit } from "express-rate-limit";
 import {
   biometricLogin,
   disableBiometricSignIn,
@@ -23,19 +22,13 @@ import {
   verifyLoginOtp,
   verifyTwoFactor,
 } from "../controllers/auth";
-import { env } from "../config/env";
 import { requireAuth } from "../middleware/auth";
+import { authLimits, limiter } from "../middleware/rateLimits";
 
 export const authRouter = Router();
 
-// Per-IP limit on the unauthenticated endpoints to slow down password and code guessing.
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 30,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-  skip: () => env.nodeEnv === "test",
-});
+// Per address and per account, on every endpoint that checks a password or code, to slow down guessing.
+const authLimiter = authLimits();
 
 authRouter.post("/register", authLimiter, register);
 authRouter.post("/verify-email", authLimiter, verifyEmail);
@@ -53,13 +46,7 @@ authRouter.post("/biometric", requireAuth, enableBiometricSignIn);
 authRouter.delete("/biometric", requireAuth, disableBiometricSignIn);
 
 // Refreshes come every few minutes from every signed-in phone, often many behind one carrier IP.
-const refreshLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 300,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-  skip: () => env.nodeEnv === "test",
-});
+const refreshLimiter = limiter({ limit: 300 });
 
 authRouter.post("/refresh", refreshLimiter, refresh);
 authRouter.post("/logout", refreshLimiter, logout);
@@ -68,7 +55,7 @@ authRouter.post("/sessions/revoke-others", requireAuth, revokeOtherDeviceSession
 authRouter.delete("/sessions/:id", requireAuth, revokeDeviceSession);
 
 authRouter.get("/me", requireAuth, me);
-authRouter.post("/2fa/totp/setup", requireAuth, setupTotp);
-authRouter.post("/2fa/totp/enable", requireAuth, enableTotp);
-authRouter.post("/2fa/email/enable", requireAuth, enableEmailTwoFactor);
-authRouter.post("/2fa/disable", requireAuth, disableTwoFactor);
+authRouter.post("/2fa/totp/setup", requireAuth, authLimiter, setupTotp);
+authRouter.post("/2fa/totp/enable", requireAuth, authLimiter, enableTotp);
+authRouter.post("/2fa/email/enable", requireAuth, authLimiter, enableEmailTwoFactor);
+authRouter.post("/2fa/disable", requireAuth, authLimiter, disableTwoFactor);

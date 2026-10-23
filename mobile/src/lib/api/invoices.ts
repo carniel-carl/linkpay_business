@@ -6,6 +6,7 @@ import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
 import { API_URL } from "@/lib/config";
 import type { InvoiceTab } from "@/lib/invoices";
 import { api } from "./client";
+import { idSegment } from "./paths";
 import { ApiError } from "./errors";
 import type {
   Invoice,
@@ -20,7 +21,7 @@ import type {
 // /api/invoices. Reads need accounts.view; everything that changes an invoice needs invoices.manage.
 
 const useBusinessKey = () => useBusinessContext((s) => s.businessId ?? "default");
-const path = (id: string, rest = "") => `/api/invoices/${encodeURIComponent(id)}${rest}`;
+const path = (id: string, rest = "") => `/api/invoices/${idSegment(id)}${rest}`;
 
 export function useInvoices(tab: InvoiceTab, { q, enabled = true }: { q?: string; enabled?: boolean } = {}) {
   const business = useBusinessKey();
@@ -144,7 +145,7 @@ function run(change: Change): Promise<Invoice | undefined> {
     case "record-payment":
       return api<Invoice>(path(change.id, "/payments"), { method: "POST", json: change.input });
     case "remove-payment":
-      return api<Invoice>(path(change.id, `/payments/${encodeURIComponent(change.paymentId)}`), { method: "DELETE" });
+      return api<Invoice>(path(change.id, `/payments/${idSegment(change.paymentId)}`), { method: "DELETE" });
   }
 }
 

@@ -5,6 +5,7 @@ import { BusinessModel } from "../models/Business";
 import { InviteModel, type InviteDocument } from "../models/Invite";
 import { MembershipModel } from "../models/Membership";
 import { UserModel, type UserDocument } from "../models/User";
+import { passwordSchema } from "../services/passwords";
 import { deviceSchema, signInResponse } from "../services/sessions";
 import { teamMemberJoined } from "../services/notificationEvents";
 import { describeMembership } from "../services/team";
@@ -58,7 +59,8 @@ export const getInvite: RequestHandler<TokenParams> = async (req, res) => {
   const [business, inviter, accountExists, branches] = await Promise.all([
     BusinessModel.findById(invite.business).select("name"),
     UserModel.findById(invite.invitedBy).select("name"),
-    UserModel.exists({ email: invite.email }),
+    // An unverified account may be a stranger's sign-up with this email: the invitee signs up over it.
+    UserModel.exists({ email: invite.email, emailVerified: true }),
     branchSummaries(invite.branches),
   ]);
   res.json({
@@ -89,28 +91,34 @@ export const acceptInvite: RequestHandler<TokenParams> = async (req, res) => {
 
 /**
  * New users sign up straight from the invite. The link was emailed to them, which proves they own the
- * address, so the account is created already verified and signed in.
+ * address, so the account is created already verified and signed in. An unverified account with that email
+ * (anyone can sign up with any email) is taken over: its name and password become the invitee's. It has
+ * never been signed in to, so there's nothing else on it.
  */
 export const registerFromInvite: RequestHandler<TokenParams> = async (req, res) => {
   const body = z
     .object({
       name: z.string().trim().min(1).max(100),
-      password: z.string().min(8, "Password must be at least 8 characters").max(128),
+      password: passwordSchema,
       device: deviceSchema,
     })
     .parse(req.body);
   const invite = await findByToken(req.params.token);
   assertOpen(invite);
 
-  if (await UserModel.exists({ email: invite.email })) {
-    throw new HttpError(409, "You already have an account. Sign in to accept the invite.", "EMAIL_TAKEN");
-  }
-  const user = await UserModel.create({
-    name: body.name,
-    email: invite.email,
-    password: await Bun.password.hash(body.password),
-    emailVerified: true,
-  });
+  const taken = () => new HttpError(409, "You already have an account. Sign in to accept the invite.", "EMAIL_TAKEN");
+  if (await UserModel.exists({ email: invite.email, emailVerified: true })) throw taken();
+  const fields = { name: body.name, password: await Bun.password.hash(body.password), hasPassword: true, emailVerified: true };
+  const user =
+    (await UserModel.findOneAndUpdate(
+      { email: invite.email, emailVerified: false },
+      { ...fields, $unset: { registration: 1 } },
+      { returnDocument: "after" },
+    )) ??
+    (await UserModel.create({ email: invite.email, ...fields }).catch((err) => {
+      if (err?.code === 11000) throw taken();
+      throw err;
+    }));
   const result = await acceptFor(invite, user);
   res.status(201).json({ ...(await signInResponse(req, user, body.device)), ...result });
 };

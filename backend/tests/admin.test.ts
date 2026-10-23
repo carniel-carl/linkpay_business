@@ -1,10 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Types } from "mongoose";
+import { env } from "../src/config/env";
 import { AuditLogModel } from "../src/models/AuditLog";
 import { BranchModel } from "../src/models/Branch";
 import { BusinessModel, type BusinessStatus } from "../src/models/Business";
 import { KybDocumentModel } from "../src/models/KybDocument";
+import { MembershipModel } from "../src/models/Membership";
 import { NotificationModel } from "../src/models/Notification";
+import { StaffModel } from "../src/models/Staff";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
@@ -232,5 +237,124 @@ describe("KYB decisions", () => {
     } finally {
       setEmailProvider({ send: async () => {} });
     }
+  });
+});
+
+describe("staff can't decide on a business they own or work at", () => {
+  test("matched by id (as migrate-staff creates them) or email: verification, restrictions and flags; others can", async () => {
+    const biz = await business("Own Shop Ltd", "submitted", new Date());
+    // scripts/migrate-staff.ts gives a migrated admin the same _id as their business user.
+    await StaffModel.create({ _id: biz.owner, name: "Owner Staff", email: "owner-staff@linkpay.test", role: "super_admin", password: "x" });
+    const ownerStaff = await signStaffToken("owner-staff@linkpay.test");
+    // A team member who is also staff under the same email.
+    const member = await UserModel.create({ name: "Member", email: "member-staff@linkpay.test", password: "x", emailVerified: true });
+    await MembershipModel.create({ business: biz._id, user: member._id, role: "viewer" });
+    const memberStaff = await signStaffToken("member-staff@linkpay.test", "compliance");
+
+    const as = (token: string, action: string, body?: unknown) => t.api("POST", `/api/admin/businesses/${biz.id}/${action}`, { token, body });
+    const refused = (res: { status: number; body: any }) => {
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("CONFLICT_OF_INTEREST");
+    };
+
+    refused(await as(ownerStaff, "approve"));
+    refused(await as(memberStaff, "reject", { reason: "No" }));
+    refused(await as(memberStaff, "request-changes", { note: "Fix it" }));
+    expect((await BusinessModel.findById(biz._id))!.status).toBe("submitted");
+    expect(await AuditLogModel.countDocuments({ business: biz._id })).toBe(0);
+    expect((await as(adminToken, "approve")).status).toBe(200);
+
+    const restriction = { reason: "suspicious_transactions", note: "Looking into it" };
+    refused(await as(memberStaff, "suspend", restriction));
+    expect((await as(adminToken, "suspend", restriction)).status).toBe(200);
+    refused(await as(memberStaff, "reinstate", { note: "It's fine" }));
+    refused(await as(ownerStaff, "reinstate", { note: "It's fine" }));
+    expect((await as(adminToken, "ban", restriction)).status).toBe(200);
+    refused(await as(ownerStaff, "unban", { note: "Mine" }));
+    expect((await BusinessModel.findById(biz._id))!.compliance?.status).toBe("banned");
+
+    const flag = await t.api("POST", `/api/admin/businesses/${biz.id}/flags`, {
+      token: adminToken,
+      body: { category: "other", severity: "low", summary: "Odd payments" },
+    });
+    expect(flag.status).toBe(201);
+    const resolve = (token: string) =>
+      t.api("POST", `/api/admin/compliance/flags/${flag.body._id}/resolve`, { token, body: { outcome: "cleared", note: "Fine" } });
+    refused(await resolve(memberStaff));
+    expect((await resolve(adminToken)).status).toBe(200);
+  });
+});
+
+describe("KYB documents", () => {
+  const upload = async (token: string, name: string) => {
+    const form = new FormData();
+    form.append("type", "cac_certificate");
+    form.append("file", new Blob([`%PDF-1.4 ${name}`], { type: "application/pdf" }), name);
+    const res = await fetch(`${t.url}/api/business/documents`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+    return res.status;
+  };
+
+  test("uploading again replaces the document, even several at once, and only the latest file is kept", async () => {
+    const biz = await business("Upload Race Ltd", "draft");
+    const token = await signAccessToken(String(biz.owner));
+    expect(await Promise.all(["a.pdf", "b.pdf", "c.pdf"].map((n) => upload(token, n)))).toEqual([201, 201, 201]);
+    const docs = await KybDocumentModel.find({ business: biz._id });
+    expect(docs).toHaveLength(1);
+    expect(readdirSync(join(env.uploadDir, "kyb", biz.id))).toEqual([docs[0]!.storageKey.split("/").at(-1)!]);
+
+    // A document sent back for changes is reviewed again once replaced.
+    await KybDocumentModel.updateOne({ _id: docs[0]!._id }, { status: "rejected", rejectionReason: "Blurry" });
+    expect(await upload(token, "d.pdf")).toBe(201);
+    const replaced = (await KybDocumentModel.findOne({ business: biz._id }).lean())!;
+    expect(replaced).toMatchObject({ status: "pending", originalName: "d.pdf" });
+    expect(replaced.rejectionReason).toBeUndefined();
+    expect("person" in replaced).toBe(false);
+    expect(await KybDocumentModel.countDocuments({ business: biz._id })).toBe(1);
+  });
+
+  test("staff opening a document is audited first; unknown documents aren't", async () => {
+    const biz = await business("Audited Docs Ltd", "draft");
+    expect(await upload(await signAccessToken(String(biz.owner)), "cac.pdf")).toBe(201);
+    const doc = (await KybDocumentModel.findOne({ business: biz._id }))!;
+    const open = (id: string) => fetch(`${t.url}/api/admin/businesses/${biz.id}/documents/${id}/file`, { headers: { Authorization: `Bearer ${adminToken}` } });
+
+    const res = await open(doc.id);
+    expect(res.status).toBe(200);
+    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    const entries = await AuditLogModel.find({ business: biz._id, action: "kyb.document_opened" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      summary: "Opened CAC certificate of registration",
+      actor: { type: "staff", name: "Staff" },
+      details: { documentId: doc.id, type: "cac_certificate" },
+    });
+    expect((await open("6a0000000000000000000000")).status).toBe(404);
+    expect(await AuditLogModel.countDocuments({ business: biz._id, action: "kyb.document_opened" })).toBe(1);
+  });
+});
+
+test("a manual payments sync is audited", async () => {
+  expect((await t.api("POST", "/api/admin/transactions/sync", { token: adminToken })).status).toBe(200);
+  const entry = await AuditLogModel.findOne({ action: "transactions.synced" });
+  expect(entry).toMatchObject({ summary: "Pulled incoming payments from the bank partner", actor: { type: "staff" } });
+});
+
+describe("GET /api/admin/users", () => {
+  test("paged newest first like the other lists, without sign-in IPs", async () => {
+    await UserModel.updateMany({}, { lastSignInIp: "102.89.1.1", lastSignInAt: new Date() });
+    const page = (qs: string) => t.api("GET", `/api/admin/users?${qs}`, { token: adminToken });
+    const first = await page("take=2");
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ skip: 0, take: 2, total: await UserModel.countDocuments() });
+    expect(first.body.items).toHaveLength(2);
+    expect(first.body.items[0].lastSignInAt).toBeTruthy();
+    const second = await page("take=2&skip=2");
+    const ids = [...first.body.items, ...second.body.items].map((u: any) => u._id);
+    expect(new Set(ids).size).toBe(4);
+
+    const one = await t.api("GET", `/api/admin/users/${ids[0]}`, { token: adminToken });
+    expect(one.body.email).toBeTruthy();
+    expect(JSON.stringify([first.body, second.body, one.body])).not.toContain("102.89.1.1");
+    expect((await page("take=500")).status).toBe(400);
   });
 });

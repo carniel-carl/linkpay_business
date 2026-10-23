@@ -13,7 +13,7 @@ import { setEmailProvider, type EmailMessage } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
 import { processOpenTransfers, refreshTransfer, submitTransfer } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 let adminToken: string;
@@ -34,7 +34,7 @@ let seq = 0;
 
 async function user(name: string) {
   seq++;
-  const u = await UserModel.create({ name, email: `${name.toLowerCase().replace(/\s+/g, "")}${seq}@test.ng`, password: "x", emailVerified: true });
+  const u = await withPin(await UserModel.create({ name, email: `${name.toLowerCase().replace(/\s+/g, "")}${seq}@test.ng`, password: "x", emailVerified: true }));
   return { user: u, token: await signAccessToken(u.id) };
 }
 

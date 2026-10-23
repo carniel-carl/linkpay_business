@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { api } from "./client";
+import { ApiError } from "./errors";
+import { idSegment } from "./paths";
 import type { Branch, Invite, InviteAccepted, InvitePreview, RolesResponse, TeamMember, DeviceSession } from "./types";
 import { deviceInfo } from "@/lib/device";
 
@@ -41,15 +43,15 @@ export const useInviteMember = () =>
 
 export const useUpdateMember = () =>
   useTeamMutation(({ id, ...v }: AccessValues & { id: string }) =>
-    api<TeamMember>(`/api/team/members/${id}`, { method: "PATCH", json: { role: v.role, branches: branchesFor(v) } }),
+    api<TeamMember>(`/api/team/members/${idSegment(id)}`, { method: "PATCH", json: { role: v.role, branches: branchesFor(v) } }),
   );
 
-export const useRemoveMember = () => useTeamMutation((id: string) => api(`/api/team/members/${id}`, { method: "DELETE" }));
+export const useRemoveMember = () => useTeamMutation((id: string) => api(`/api/team/members/${idSegment(id)}`, { method: "DELETE" }));
 
 /** Sends a fresh link (the old one stops working). One resend a minute; INVITE_COOLDOWN carries `details.retryAt`. */
-export const useResendInvite = () => useTeamMutation((id: string) => api<Invite>(`/api/team/invites/${id}/resend`, { method: "POST" }));
+export const useResendInvite = () => useTeamMutation((id: string) => api<Invite>(`/api/team/invites/${idSegment(id)}/resend`, { method: "POST" }));
 
-export const useRevokeInvite = () => useTeamMutation((id: string) => api(`/api/team/invites/${id}`, { method: "DELETE" }));
+export const useRevokeInvite = () => useTeamMutation((id: string) => api(`/api/team/invites/${idSegment(id)}`, { method: "DELETE" }));
 
 /** Leaves the business in view. The caller switches back to the default business. */
 export const leaveBusiness = () => api("/api/team/leave", { method: "POST" });
@@ -74,19 +76,28 @@ function branchBody(v: BranchValues) {
 export const useSaveBranch = () =>
   useTeamMutation(({ id, values }: { id?: string; values: BranchValues }) =>
     id
-      ? api<Branch>(`/api/branches/${id}`, { method: "PATCH", json: branchBody(values) })
+      ? api<Branch>(`/api/branches/${idSegment(id)}`, { method: "PATCH", json: branchBody(values) })
       : api<Branch>("/api/branches", { method: "POST", json: branchBody(values) }),
   );
 
 // ---- Invite links (public) ----
 
-export const getInvitePreview = (token: string) => api<InvitePreview>(`/api/invites/${encodeURIComponent(token)}`, { auth: false });
+/**
+ * The token from an invite link as a path segment. Tokens are 32 random bytes in base64url; anything else (it
+ * arrives in a deep link) is refused like an unknown invite, before a request is made.
+ */
+function inviteToken(token: string) {
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(token)) throw new ApiError(404, "Invite not found", "INVITE_NOT_FOUND");
+  return token;
+}
 
-export const acceptInvite = (token: string) => api<InviteAccepted>(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST" });
+export const getInvitePreview = async (token: string) => api<InvitePreview>(`/api/invites/${inviteToken(token)}`, { auth: false });
+
+export const acceptInvite = async (token: string) => api<InviteAccepted>(`/api/invites/${inviteToken(token)}/accept`, { method: "POST" });
 
 /** New user from an invite: created verified, joined, and signed in on this phone. */
-export const registerFromInvite = (token: string, body: { name: string; password: string }) =>
-  api<DeviceSession & InviteAccepted>(`/api/invites/${encodeURIComponent(token)}/register`, {
+export const registerFromInvite = async (token: string, body: { name: string; password: string }) =>
+  api<DeviceSession & InviteAccepted>(`/api/invites/${inviteToken(token)}/register`, {
     method: "POST",
     json: { ...body, device: deviceInfo() },
     auth: false,

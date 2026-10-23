@@ -7,7 +7,7 @@ import { TransactionModel } from "../src/models/Transaction";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider, type EmailMessage } from "../src/services/email";
-import { computeTotals, findInvoiceInText, sendScheduledReminders, todayInLagos } from "../src/services/invoices";
+import { MAX_EMAILS_PER_BUSINESS, MAX_EMAILS_PER_INVOICE, computeTotals, findInvoiceInText, sendScheduledReminders, todayInLagos } from "../src/services/invoices";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
@@ -266,6 +266,78 @@ describe("sending and the public link", () => {
     const kano = await draft(owner.token, kanoId);
     expect((await t.api("POST", `/api/invoices/${kano._id}/send`, { token: owner.token, body: {} })).body.code).toBe("ACCOUNT_NOT_READY");
   });
+
+  test("emails to customers are limited: a minute apart and 5 a day per invoice, 200 a day per business", async () => {
+    const { owner, business, headOfficeId } = await setup();
+    const inv = await draft(owner.token, headOfficeId);
+    const send = (to?: string) => t.api("POST", `/api/invoices/${inv._id}/send`, { token: owner.token, body: to ? { to } : {} });
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000);
+    const toCustomers = () => outbox.filter((m) => m.to.endsWith("@example.com"));
+
+    // Any address can be given (the customer's email is whatever was typed anyway); a minute apart.
+    expect((await send()).status).toBe(200);
+    const soon = await send("accounts@example.com");
+    expect(soon.status).toBe(429);
+    expect(soon.body.code).toBe("INVOICE_EMAIL_COOLDOWN");
+    expect(new Date(soon.body.details.retryAt).getTime()).toBeGreaterThan(Date.now());
+    expect(toCustomers()).toHaveLength(1);
+
+    // Two at once (a double click, two tabs): one goes out.
+    await InvoiceModel.updateOne({ _id: inv._id }, { $set: { emailLog: [hoursAgo(2)] } });
+    outbox.length = 0;
+    const both = await Promise.all([send("a@example.com"), send("b@example.com")]);
+    expect(both.map((r) => r.status).sort()).toEqual([200, 429]);
+    expect(toCustomers()).toHaveLength(1);
+
+    // A failed email gives its place back, so trying again straight away works.
+    await InvoiceModel.updateOne({ _id: inv._id }, { $set: { emailLog: [hoursAgo(2)] } });
+    setEmailProvider({ send: async () => Promise.reject(new Error("SMTP down")) });
+    try {
+      expect((await send()).status).toBe(500);
+    } finally {
+      setEmailProvider({ send: async (m) => void outbox.push(m) });
+    }
+    expect((await InvoiceModel.findById(inv._id))!.emailLog).toEqual([hoursAgo(2)].map(() => expect.any(Date)));
+    expect((await send()).status).toBe(200);
+
+    // At most 5 per invoice in any 24 hours; once the oldest is a day old, another can go.
+    const five = [5, 4, 3, 2, 1].map(hoursAgo);
+    await InvoiceModel.updateOne({ _id: inv._id }, { $set: { emailLog: five } });
+    const capped = await send();
+    expect(capped.status).toBe(429);
+    expect(capped.body.code).toBe("INVOICE_EMAIL_LIMIT");
+    expect(new Date(capped.body.details.retryAt).getTime()).toBe(five[0]!.getTime() + 24 * 60 * 60 * 1000);
+    await InvoiceModel.updateOne({ _id: inv._id }, { $set: { "emailLog.0": hoursAgo(25) } });
+    expect((await send()).status).toBe(200);
+    expect((await InvoiceModel.findById(inv._id))!.emailLog).toHaveLength(MAX_EMAILS_PER_INVOICE);
+
+    // Per business, sends and reminders by hand together. `inv` has 5 in the window; 39 more invoices make 200.
+    const unpaid = await sent(owner.token, headOfficeId);
+    const base = (await InvoiceModel.findById(unpaid._id))!.toObject();
+    await InvoiceModel.insertMany(
+      Array.from({ length: (MAX_EMAILS_PER_BUSINESS - MAX_EMAILS_PER_INVOICE) / MAX_EMAILS_PER_INVOICE }, (_, i) => ({
+        ...base,
+        _id: undefined,
+        number: `BULK-${i}`,
+        seq: 1000 + i,
+        publicToken: `bulk-${business.id}-${i}`,
+        emailLog: five,
+      })),
+    );
+    outbox.length = 0;
+    const remind = await t.api("POST", `/api/invoices/${unpaid._id}/remind`, { token: owner.token });
+    expect(remind.status).toBe(429);
+    expect(remind.body.code).toBe("BUSINESS_EMAIL_LIMIT");
+    expect(toCustomers()).toHaveLength(0);
+    // Refused, so nothing was used up on that invoice.
+    const after = (await InvoiceModel.findById(unpaid._id))!;
+    expect(after.emailLog ?? []).toHaveLength(0);
+    expect(after.reminders?.lastSentAt).toBeUndefined();
+    // Another business isn't affected.
+    const elsewhere = await setup("Other Shop Ltd");
+    const theirs = await draft(elsewhere.owner.token, elsewhere.headOfficeId);
+    expect((await t.api("POST", `/api/invoices/${theirs._id}/send`, { token: elsewhere.owner.token, body: {} })).status).toBe(200);
+  });
 });
 
 describe("payments", () => {
@@ -358,6 +430,46 @@ describe("reminders, lists and summary", () => {
 
     await t.api("PATCH", `/api/invoices/${inv._id}`, { token: owner.token, body: { remindersEnabled: false } });
     expect((await sendScheduledReminders("2026-09-20")).sent).toBe(0);
+  });
+
+  test("two runs at once (two instances, or a slow tick overlapping the next) send each reminder once", async () => {
+    const { owner, headOfficeId } = await setup();
+    const inv = await sent(owner.token, headOfficeId, { issueDate: "2026-08-01", dueDate: "2026-08-20", customer: { name: "Twice", email: "twice@example.com" } });
+    await InvoiceModel.updateOne({ _id: inv._id }, { issuedAt: new Date(Date.now() - 3 * 86_400_000) });
+    // A slow email provider keeps every run in flight together.
+    setEmailProvider({ send: async (m) => void (await Bun.sleep(50), outbox.push(m)) });
+    try {
+      await Promise.all([1, 2, 3].map(() => sendScheduledReminders("2026-08-17")));
+    } finally {
+      setEmailProvider({ send: async (m) => void outbox.push(m) });
+    }
+    expect(outbox.filter((m) => m.to === "twice@example.com")).toHaveLength(1);
+    const saved = (await InvoiceModel.findById(inv._id))!;
+    expect(saved.reminders!.sent).toEqual(["before_due"]);
+    expect(saved.reminders!.lastSentAt).toBeTruthy();
+
+    // Reminding by hand twice at once: one goes.
+    await InvoiceModel.updateOne({ _id: inv._id }, { $unset: { "reminders.lastSentAt": 1 } });
+    outbox.length = 0;
+    const both = await Promise.all([1, 2].map(() => t.api("POST", `/api/invoices/${inv._id}/remind`, { token: owner.token })));
+    expect(both.map((r) => r.status).sort()).toEqual([200, 429]);
+    expect(outbox.filter((m) => m.to === "twice@example.com")).toHaveLength(1);
+  });
+
+  test("a reminder that fails to send is tried again on the next run", async () => {
+    const { owner, headOfficeId } = await setup();
+    const inv = await sent(owner.token, headOfficeId, { issueDate: "2026-08-01", dueDate: "2026-08-21", customer: { name: "Retry", email: "retry@example.com" } });
+    await InvoiceModel.updateOne({ _id: inv._id }, { issuedAt: new Date(Date.now() - 3 * 86_400_000) });
+    setEmailProvider({ send: async (m) => (m.to === "retry@example.com" ? Promise.reject(new Error("SMTP down")) : void outbox.push(m)) });
+    try {
+      await sendScheduledReminders("2026-08-18");
+    } finally {
+      setEmailProvider({ send: async (m) => void outbox.push(m) });
+    }
+    expect((await InvoiceModel.findById(inv._id))!.reminders!.sent).toEqual([]);
+    await sendScheduledReminders("2026-08-18");
+    expect(outbox.filter((m) => m.to === "retry@example.com")).toHaveLength(1);
+    expect((await InvoiceModel.findById(inv._id))!.reminders!.sent).toEqual(["before_due"]);
   });
 
   test("filters and the summary", async () => {

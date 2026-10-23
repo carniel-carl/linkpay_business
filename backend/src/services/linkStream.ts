@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
+import { ipKeyGenerator } from "express-rate-limit";
 import type { Types } from "mongoose";
 import { HttpError } from "../utils/HttpError";
 
@@ -51,20 +52,26 @@ export const HEARTBEAT_MS = 20_000;
 // Streams are recycled after this long (the browser reconnects by itself), so none lives forever.
 export const MAX_STREAM_MS = 30 * 60_000;
 // Per address, across links: a payer has a tab or two open; this stops one address holding many connections.
+// IPv6 addresses count by /56 (one home or phone usually has a whole /64 or more), like the rate limits.
 export const MAX_STREAMS_PER_IP = 20;
+// Across everyone, on this instance: past this, new pages fall back to polling instead of holding a connection.
+export const MAX_STREAMS_TOTAL = 5_000;
 
 const openByIp = new Map<string, number>();
+let openTotal = 0;
 
-/** Test hook: shorter timers. */
+/** Test hook: shorter timers and lower caps. */
 export const linkStreamTimers = { heartbeatMs: HEARTBEAT_MS, maxStreamMs: MAX_STREAM_MS };
+export const linkStreamLimits = { perIp: MAX_STREAMS_PER_IP, total: MAX_STREAMS_TOTAL };
 
 /** Serves the live stream for one link's public page. Sends `ready` once connected, then `link` and `paid`. */
 export function serveLinkStream(req: Request, res: Response, linkId: Types.ObjectId) {
-  const ip = req.ip ?? "unknown";
-  if ((openByIp.get(ip) ?? 0) >= MAX_STREAMS_PER_IP) {
+  const ip = req.ip ? ipKeyGenerator(req.ip) : "unknown";
+  if ((openByIp.get(ip) ?? 0) >= linkStreamLimits.perIp || openTotal >= linkStreamLimits.total) {
     throw new HttpError(429, "Too many open pages. Close a few tabs and try again.", "TOO_MANY_STREAMS");
   }
   openByIp.set(ip, (openByIp.get(ip) ?? 0) + 1);
+  openTotal++;
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -90,6 +97,7 @@ export function serveLinkStream(req: Request, res: Response, linkId: Types.Objec
     clearTimeout(recycle);
     const left = (openByIp.get(ip) ?? 1) - 1;
     left > 0 ? openByIp.set(ip, left) : openByIp.delete(ip);
+    openTotal--;
     res.end();
   }
   req.on("close", close);
@@ -98,5 +106,5 @@ export function serveLinkStream(req: Request, res: Response, linkId: Types.Objec
   write("event: ready\ndata: {}\n\n");
 }
 
-/** Number of open streams from one address, for tests. */
-export const openLinkStreams = (ip: string) => openByIp.get(ip) ?? 0;
+/** Number of open streams from one address (counted with its /56 for IPv6), or from everyone, for tests. */
+export const openLinkStreams = (ip?: string) => (ip === undefined ? openTotal : (openByIp.get(ipKeyGenerator(ip)) ?? 0));

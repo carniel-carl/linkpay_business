@@ -117,6 +117,7 @@ export default function More() {
         ) : (
           <ListRow icon={{ ios: "faceid", android: "fingerprint" }} title="Biometric unlock" detail="Set up Face ID or a fingerprint in your phone's settings to use it here." />
         )}
+        <ListRow icon={{ ios: "key", android: "key" }} title="Password" onPress={() => router.push("/more/password")} />
         <ListRow icon={{ ios: "checkmark.shield", android: "verified_user" }} title="Two-step verification" onPress={() => router.push("/more/security")} />
         <ListRow icon={{ ios: "lock.rotation", android: "password" }} title="Change passcode" onPress={() => router.push("/more/change-passcode")} />
         <ListRow icon={{ ios: "iphone", android: "devices" }} title="Signed-in devices" onPress={() => router.push("/more/devices")} />

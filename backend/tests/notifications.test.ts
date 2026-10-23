@@ -16,12 +16,12 @@ import { setEmailProvider } from "../src/services/email";
 import { notifyStaff, notifyUsers } from "../src/services/notifications";
 import { liveStreamTimerCount, openStreamCount, streamTimers } from "../src/services/notificationStream";
 import { setPushProvider, type PushMessage } from "../src/services/push";
-import { signInResponse } from "../src/services/sessions";
+import { signInResponse, startWebSession } from "../src/services/sessions";
 import { signAccessToken } from "../src/services/tokens";
 import { notifyOverdueInvoices } from "../src/services/invoices";
 import { processOpenTransfers } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 import { inboundTransfer } from "./mockLiquifia";
 
 let t: TestEnv;
@@ -51,7 +51,7 @@ beforeEach(() => {
 let seq = 0;
 async function user(name: string) {
   seq++;
-  const u = await UserModel.create({ name, email: `${name.toLowerCase().replace(/\s+/g, "")}${seq}@notify.ng`, password: "x", emailVerified: true });
+  const u = await withPin(await UserModel.create({ name, email: `${name.toLowerCase().replace(/\s+/g, "")}${seq}@notify.ng`, password: "x", emailVerified: true }));
   return { user: u, id: u.id as string, token: await signAccessToken(u.id) };
 }
 
@@ -80,6 +80,10 @@ async function setup() {
   };
   return { owner, business, headOfficeId: headOffice._id as string, kanoId: kano.body._id as string, headVa, kanoVa, member };
 }
+
+/** A bare business owned by `owner` (no KYB, no accounts), for notifications about it. */
+const ownedBusiness = (owner: { user: { _id: Types.ObjectId } }, name: string) =>
+  BusinessModel.create({ owner: owner.user._id, name, type: "sole_proprietorship", status: "draft" });
 
 const notificationsOf = (recipient: string, type?: string) =>
   NotificationModel.find({ recipient: new Types.ObjectId(recipient), ...(type ? { type } : {}) } as Record<string, unknown>)
@@ -268,6 +272,62 @@ describe("what triggers a notification", () => {
     expect(await typesOf(viewer.id)).toContain("team.removed");
   });
 
+  test("people removed from the team, or moved off a branch, stop hearing about it, even about what they made", async () => {
+    const { owner, business, headOfficeId, kanoId, member } = await setup();
+    const leaver = await member("finance");
+    const kanoOnly = await member("finance", [kanoId]);
+    const items = [{ description: "Fabric", quantity: 1, unitPriceKobo: 10_000_00 }];
+    const invoiceBy = async (m: { token: string }, branch: string) => {
+      const created = await t.api("POST", "/api/invoices", { token: m.token, body: { branch, customer: { name: "Chidi" }, items, vatRateBps: 0 } });
+      expect((await t.api("POST", `/api/invoices/${created.body._id}/send`, { token: m.token, body: { email: false } })).status).toBe(200);
+      return created.body._id as string;
+    };
+    const leaversInvoice = await invoiceBy(leaver, headOfficeId);
+    const kanoInvoice = await invoiceBy(kanoOnly, kanoId);
+    const pay = async (id: string) =>
+      expect((await t.api("POST", `/api/invoices/${id}/payments`, { token: owner.token, body: { amountKobo: 1_000_00, method: "cash" } })).status).toBe(200);
+    /** How many "part paid" notifications `who` has had about `invoice`. */
+    const partPaid = async (who: string, invoice: string) =>
+      (await notificationsOf(who, "invoice.payment_received")).filter((n) => (n.data as any).invoiceId === invoice).length;
+
+    // On the team: the leaver (every branch) hears about both, the Kano member about their own.
+    await pay(leaversInvoice);
+    await pay(kanoInvoice);
+    expect([await partPaid(leaver.id, leaversInvoice), await partPaid(leaver.id, kanoInvoice)]).toEqual([1, 1]);
+    expect([await partPaid(kanoOnly.id, leaversInvoice), await partPaid(kanoOnly.id, kanoInvoice)]).toEqual([0, 1]);
+
+    // One is removed; the other is moved from Kano to the head office.
+    const leaving = (await MembershipModel.findOne({ business: business._id, user: leaver.user._id }))!;
+    expect((await t.api("DELETE", `/api/team/members/${leaving.id}`, { token: owner.token })).status).toBe(204);
+    const moving = (await MembershipModel.findOne({ business: business._id, user: kanoOnly.user._id }))!;
+    expect((await t.api("PATCH", `/api/team/members/${moving.id}`, { token: owner.token, body: { branches: [headOfficeId] } })).status).toBe(200);
+
+    await pay(leaversInvoice);
+    await pay(kanoInvoice);
+    // The customer opening the leaver's invoice used to tell only its creator.
+    await t.api("GET", `/api/public/invoices/${(await InvoiceModel.findById(leaversInvoice))!.publicToken}`);
+    // Nothing new for the leaver; the moved member now hears about the head office, not about Kano (not
+    // even their own invoice).
+    expect([await partPaid(leaver.id, leaversInvoice), await partPaid(leaver.id, kanoInvoice)]).toEqual([1, 1]);
+    expect([await partPaid(kanoOnly.id, leaversInvoice), await partPaid(kanoOnly.id, kanoInvoice)]).toEqual([1, 1]);
+    expect(await notificationsOf(leaver.id, "invoice.viewed")).toHaveLength(0);
+    // The owner still hears about both, every time.
+    expect([await partPaid(owner.id, leaversInvoice), await partPaid(owner.id, kanoInvoice)]).toEqual([2, 2]);
+
+    // The leaver's list and badge keep only the notice that they were removed.
+    const list = await t.api("GET", "/api/notifications", { token: leaver.token });
+    expect(list.body.items.map((n: any) => n.type)).toEqual(["team.removed"]);
+    expect((await t.api("GET", "/api/notifications/unread-count", { token: leaver.token })).body).toEqual({
+      total: 1,
+      byBusiness: { [business.id]: 1 },
+    });
+    const stream = await openStream("/api/notifications/stream", leaver.token);
+    expect((await stream.next("ready")).data).toEqual({ unread: 1 });
+    stream.close();
+    // The member who moved branch is still on the team, so their earlier notifications stay.
+    expect((await t.api("GET", "/api/notifications", { token: kanoOnly.token })).body.items.length).toBeGreaterThan(0);
+  });
+
   test("security: a sign-in from a new phone, but not the first phone or the same one again", async () => {
     const { user: u, id } = await user("Phone Owner");
     const req = { ip: "127.0.0.1", get: () => "bun-test" } as unknown as Request;
@@ -324,8 +384,11 @@ describe("the notifications API", () => {
   test("list, page, unread counts per business, mark one and all read; only your own", async () => {
     const me = await user("Reader");
     const other = await user("Other");
-    const bizA = { _id: new Types.ObjectId(), name: "A Ltd" };
-    const bizB = { _id: new Types.ObjectId(), name: "B Ltd" };
+    // Notifications about a business only reach people on its team: `me` owns A and belongs to B.
+    const bizA = await ownedBusiness(me, "A Ltd");
+    const bizB = await ownedBusiness(await user("B Owner"), "B Ltd");
+    await MembershipModel.create({ business: bizB._id, user: me.user._id, role: "viewer" });
+    await MembershipModel.create({ business: bizA._id, user: other.user._id, role: "viewer" });
     for (let i = 0; i < 3; i++) await notifyUsers([me.id], { type: "payment.received", title: `A${i}`, body: "a" }, bizA);
     await notifyUsers([me.id], { type: "payment.received", title: "B0", body: "b" }, bizB);
     const [foreign] = await notifyUsers([other.id], { type: "payment.received", title: "theirs", body: "x" }, bizA);
@@ -370,7 +433,7 @@ describe("the live stream (SSE)", () => {
     expect(stream.res.headers.get("content-type")).toContain("text/event-stream");
     expect((await stream.next("ready")).data).toEqual({ unread: 1 });
 
-    await notifyUsers([me.id], { type: "invoice.paid", title: "Paid", body: "Invoice paid", link: "/invoices/1" }, { _id: new Types.ObjectId(), name: "Live Ltd" });
+    await notifyUsers([me.id], { type: "invoice.paid", title: "Paid", body: "Invoice paid", link: "/invoices/1" }, await ownedBusiness(me, "Live Ltd"));
     const live = await stream.next("notification");
     expect(live.data).toMatchObject({ type: "invoice.paid", title: "Paid", link: "/invoices/1", business: { name: "Live Ltd" } });
     expect(live.id).toBe(live.data._id);
@@ -407,7 +470,7 @@ describe("the live stream (SSE)", () => {
 
   test("ends when the access token expires or the phone's session is signed out", async () => {
     const me = await user("Ending");
-    const shortToken = await new SignJWT({ typ: "access" })
+    const shortToken = await new SignJWT({ typ: "access", sid: (await startWebSession(me.id)).sessionId })
       .setProtectedHeader({ alg: "HS256" })
       .setSubject(me.id)
       .setIssuedAt()

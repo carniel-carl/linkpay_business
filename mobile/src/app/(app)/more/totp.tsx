@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
 import { useState } from "react";
@@ -8,10 +8,16 @@ import { CodeForm } from "@/components/auth/code-form";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { FocusStatusBar } from "@/components/ui/status-bar";
+import { PasswordField } from "@/components/ui/text-field";
 import { Figure } from "@/components/ui/typography";
-import { startTotpSetup, useEnableTotp } from "@/lib/api/account";
+import { useEnableTotp } from "@/lib/api/account";
+import { api } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { useTheme } from "@/theme/theme";
+
+// Setup needs the password, so a stolen session alone can't add an authenticator.
+const startSetup = (password: string) =>
+  api<{ secret: string; otpauthUrl: string }>("/api/auth/2fa/totp/setup", { method: "POST", json: { password } });
 
 /**
  * Authenticator setup on the phone itself: the authenticator app is usually on this same phone, so instead
@@ -19,10 +25,15 @@ import { useTheme } from "@/theme/theme";
  */
 export default function TotpSetup() {
   const { shadows } = useTheme();
-  // A new secret each time the screen opens; never cached or refetched behind the user's back.
-  const setup = useQuery({ queryKey: ["totp-setup"], queryFn: startTotpSetup, gcTime: 0, staleTime: Infinity, retry: false });
+  // A new secret each time the screen opens, once the password is confirmed; never cached or refetched.
+  const setup = useMutation({ mutationFn: startSetup });
   const enable = useEnableTotp();
+  const [password, setPassword] = useState("");
   const [copied, setCopied] = useState(false);
+
+  function start() {
+    if (password) setup.mutate(password);
+  }
 
   async function openApp() {
     if (!setup.data) return;
@@ -50,27 +61,36 @@ export default function TotpSetup() {
     router.back();
   }
 
-  const grouped = setup.data?.secret.match(/.{1,4}/g)?.join(" ");
+  if (!setup.data) {
+    return (
+      <KeyboardAwareScrollView bottomOffset={24} keyboardShouldPersistTaps="handled" contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-4 px-4 pb-12 pt-4">
+        <FocusStatusBar />
+        <Text className="px-1 text-[15px] leading-[22px] text-foreground">Confirm your password to add an authenticator app.</Text>
+        <FormError message={setup.error ? friendlyMessage(setup.error) : undefined} />
+        <PasswordField label="Password" value={password} onChangeText={setPassword} autoComplete="current-password" textContentType="password" autoFocus returnKeyType="go" onSubmitEditing={start} />
+        <Button loading={setup.isPending} disabled={!password} onPress={start}>
+          Continue
+        </Button>
+      </KeyboardAwareScrollView>
+    );
+  }
+
+  const grouped = setup.data.secret.match(/.{1,4}/g)?.join(" ");
 
   return (
     <KeyboardAwareScrollView bottomOffset={24} keyboardShouldPersistTaps="handled" contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-6 px-4 pb-12 pt-4">
       <FocusStatusBar />
-      {setup.isError && <FormError message={friendlyMessage(setup.error)} />}
       <View className="gap-3">
         <Text className="px-1 text-[15px] font-semibold text-foreground">1. Add LinkPay to your authenticator app</Text>
-        <Button icon={{ ios: "arrow.up.forward.app", android: "open_in_new" }} disabled={!setup.data} onPress={() => void openApp()}>
+        <Button icon={{ ios: "arrow.up.forward.app", android: "open_in_new" }} onPress={() => void openApp()}>
           Open authenticator app
         </Button>
         <View style={{ boxShadow: shadows.surface }} className="gap-2 rounded-surface bg-card px-5 py-4">
           <Text className="text-[13px] text-muted-foreground">Or enter this key in the app</Text>
-          {grouped ? (
-            <Figure size={18} selectable style={{ letterSpacing: 1 }}>
-              {grouped}
-            </Figure>
-          ) : (
-            <View className="h-6 w-4/5 rounded bg-muted" />
-          )}
-          <Button variant="outline" size="sm" className="self-start" disabled={!setup.data} onPress={() => void copy()}>
+          <Figure size={18} selectable style={{ letterSpacing: 1 }}>
+            {grouped}
+          </Figure>
+          <Button variant="outline" size="sm" className="self-start" onPress={() => void copy()}>
             {copied ? "Copied" : "Copy key"}
           </Button>
         </View>

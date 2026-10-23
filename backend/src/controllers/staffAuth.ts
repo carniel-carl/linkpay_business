@@ -38,13 +38,14 @@ async function findStaff(id: string | undefined, select = "") {
   return staff;
 }
 
-/** The staff member behind a challenge token, still active. */
+/** The staff member behind a challenge token, still active, and the challenge's id. */
 async function challengedStaff(challengeToken: string, select = "") {
-  const staff = await StaffModel.findById(await verifyStaffChallengeToken(challengeToken)).select(select);
+  const { staffId, challengeId } = await verifyStaffChallengeToken(challengeToken);
+  const staff = await StaffModel.findById(staffId).select(select);
   if (!staff) throw new HttpError(401, "Invalid or expired staff token", "INVALID_STAFF_TOKEN");
   if (staff.status !== "active") throw disabled();
   if (!isStaffRole(staff.role)) throw noRoleError();
-  return staff;
+  return { staff, challengeId };
 }
 
 async function checkPassword(staffId: string | undefined, plain: string) {
@@ -83,11 +84,11 @@ export const login: RequestHandler = async (req, res) => {
 export const verifyTwoFactor: RequestHandler = async (req, res) => {
   const body = z.object({ challengeToken: z.string(), code }).parse(req.body);
 
-  const staff = await challengedStaff(body.challengeToken, "+twoFactor.totpSecret");
+  const { staff, challengeId } = await challengedStaff(body.challengeToken, "+twoFactor.totpSecret");
   const { method, totpSecret } = staff.twoFactor ?? {};
   const ok =
     method === "totp"
-      ? !!totpSecret && verifyTotp(staff.email, totpSecret, body.code)
+      ? !!totpSecret && (await verifyTotp(staff, totpSecret, body.code, { challengeId }))
       : await verifyOtp(staff.email, OTP_PURPOSE, body.code);
   if (!ok) throw new HttpError(401, "Invalid or expired code", "INVALID_CODE");
 
@@ -97,7 +98,7 @@ export const verifyTwoFactor: RequestHandler = async (req, res) => {
 export const resendTwoFactor: RequestHandler = async (req, res) => {
   const body = z.object({ challengeToken: z.string() }).parse(req.body);
 
-  const staff = await challengedStaff(body.challengeToken);
+  const { staff } = await challengedStaff(body.challengeToken);
   if (staff.twoFactor?.method !== "email") {
     throw new HttpError(400, "Use the code from your authenticator app", "NOT_EMAIL_METHOD");
   }
@@ -183,8 +184,23 @@ export const logout: RequestHandler = async (req, res) => {
   res.status(204).end();
 };
 
+// Adding or swapping an authenticator needs the password, or a code from the one already set up, so a stolen
+// session alone can't take over two-step sign-in.
+const reauthSchema = z
+  .object({ password: z.string().min(1).optional(), code: code.optional() })
+  .refine((b) => b.password || b.code, { message: "Enter your password", path: ["password"] });
+
+async function confirmIdentity(staffId: string | undefined, body: z.infer<typeof reauthSchema>) {
+  if (body.password) return checkPassword(staffId, body.password);
+  const staff = await findStaff(staffId, "+twoFactor.totpSecret");
+  const { method, totpSecret } = staff.twoFactor ?? {};
+  if (method !== "totp" || !totpSecret) throw new HttpError(400, "Enter your password", "PASSWORD_REQUIRED");
+  if (!(await verifyTotp(staff, totpSecret, body.code!))) throw new HttpError(400, "Invalid or expired code", "INVALID_CODE");
+  return staff;
+}
+
 export const setupTotp: RequestHandler = async (req, res) => {
-  const staff = await findStaff(req.staffId);
+  const staff = await confirmIdentity(req.staffId, reauthSchema.parse(req.body ?? {}));
   const { secret, otpauthUrl } = generateTotpSecret(staff.email, TOTP_ISSUER);
 
   staff.set("twoFactor.pendingTotpSecret", secret);
@@ -200,7 +216,9 @@ export const enableTotp: RequestHandler = async (req, res) => {
   const staff = await findStaff(req.staffId, "+twoFactor.pendingTotpSecret");
   const pending = staff.twoFactor?.pendingTotpSecret;
   if (!pending) throw new HttpError(400, "Start authenticator setup first", "TOTP_SETUP_REQUIRED");
-  if (!verifyTotp(staff.email, pending, body.code)) throw new HttpError(400, "Invalid or expired code", "INVALID_CODE");
+  if (!(await verifyTotp(staff, pending, body.code, { enrolling: true }))) {
+    throw new HttpError(400, "Invalid or expired code", "INVALID_CODE");
+  }
 
   staff.set({ "twoFactor.method": "totp", "twoFactor.totpSecret": pending, "twoFactor.pendingTotpSecret": undefined });
   await staff.save();

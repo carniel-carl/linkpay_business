@@ -274,7 +274,8 @@ export const listBusinessMembers: RequestHandler<IdParams> = async (req, res) =>
     UserModel.find({ _id: { $in: userIds } }).select("name email emailVerified twoFactor.enabled twoFactor.method lastSignInAt lastSignInIp createdAt"),
     BranchModel.find({ business: business._id }).select("name"),
     SessionModel.aggregate<{ _id: Types.ObjectId; count: number }>([
-      { $match: { user: { $in: userIds.map((u) => new Types.ObjectId(u)) }, revokedAt: null, expiresAt: { $gt: new Date() } } },
+      // Phones only: web dashboard sign-ins are sessions too now, but this counts devices.
+      { $match: { user: { $in: userIds.map((u) => new Types.ObjectId(u)) }, kind: { $ne: "web" }, revokedAt: null, expiresAt: { $gt: new Date() } } },
       { $group: { _id: "$user", count: { $sum: 1 } } },
     ]),
     InviteModel.find({ business: business._id, status: "pending", expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }),

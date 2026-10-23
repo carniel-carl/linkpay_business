@@ -2,13 +2,14 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
 import { api, MONEY_TIMEOUT_MS } from "./client";
+import { idSegment } from "./paths";
 import type { Safelock, SafelockLimits, SafelockList } from "./types";
 
 // /api/safelocks (docs/briefs/savings.md §6). Reads need accounts.view; create and rename need savings.manage.
 // There are no routes to break, top up, shorten or extend a lock, so there's nothing here for them either.
 
 const useBusinessKey = () => useBusinessContext((s) => s.businessId ?? "default");
-const path = (id: string) => `/api/safelocks/${encodeURIComponent(id)}`;
+const path = (id: string) => `/api/safelocks/${idSegment(id)}`;
 
 export type SafelockStatusFilter = "locked" | "released";
 

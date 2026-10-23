@@ -9,9 +9,11 @@
  *                  onOpen, onCheckout, onUpdate, onSuccess, onClose })
  *
  * Payments are bank transfers: the checkout shows an exact amount and account details, and tells this page
- * when the money lands. Confirm on your server (GET <api>/api/public/checkouts/<token>) before fulfilling.
- * A link in test mode works the same, with simulated payments: the checkout's `mode` is "test", so fulfil
- * only when it is "live".
+ * when the money lands. Anyone can call your callbacks with a checkout, so confirm on your server
+ * (GET <api>/api/public/checkouts/<token>) before fulfilling, and fulfil only when `status` is "paid",
+ * `mode` is "live" (a link in test mode has simulated payments), `link.slug` is your link, `currency` is "NGN",
+ * `priceKobo` is the order total (`paidKobo` is at least that) and `clientReference` is your order id; then
+ * mark the order paid so the same checkout can't be used twice.
  */
 ;(function () {
   "use strict"
@@ -36,14 +38,13 @@
     return "lp" + Date.now().toString(36) + (seq++).toString(36)
   }
 
+  // The payer's name, email and phone aren't put in the frame's address (servers, logs and history keep those):
+  // they're sent to the frame once it says it's ready (see "ready" below).
   function urlFor(slug, kind, frameId, o) {
     var u = new URL("/pay/" + encodeURIComponent(slug), BASE)
     u.searchParams.set("embed", kind)
     u.searchParams.set("frame", frameId)
     u.searchParams.set("origin", location.origin)
-    if (o.name) u.searchParams.set("name", String(o.name))
-    if (o.email) u.searchParams.set("email", String(o.email))
-    if (o.phone) u.searchParams.set("phone", String(o.phone))
     if (o.amountKobo) u.searchParams.set("amount", String(Math.round(Number(o.amountKobo))))
     if (o.clientReference) u.searchParams.set("reference", String(o.clientReference))
     if (o.metadata && typeof o.metadata === "object") {
@@ -87,6 +88,19 @@
         throw e
       })
     }
+  }
+
+  /** Sends the payer's details to the frame (each time it's ready), and only to our own page in it. */
+  function sendPrefill(entry, frameId) {
+    var o = entry.options
+    if (!(o.name || o.email || o.phone)) return
+    var prefill = {}
+    if (o.name) prefill.name = String(o.name)
+    if (o.email) prefill.email = String(o.email)
+    if (o.phone) prefill.phone = String(o.phone)
+    try {
+      entry.iframe.contentWindow.postMessage({ source: "linkpay", type: "prefill", frameId: frameId, prefill: prefill }, BASE)
+    } catch {}
   }
 
   function makeFrame(src, title) {
@@ -203,6 +217,7 @@
       case "ready":
         if (entry.spinner && entry.spinner.parentNode) entry.spinner.parentNode.removeChild(entry.spinner)
         if (entry.overlay) entry.overlay.style.background = "transparent"
+        sendPrefill(entry, d.frameId)
         break
       case "resize":
         if (entry.kind === "inline" && d.height) entry.iframe.style.height = Math.max(200, d.height) + "px"

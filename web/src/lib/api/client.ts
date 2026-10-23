@@ -1,5 +1,8 @@
 import "server-only"
+import { headers as requestHeaders } from "next/headers"
+import { unstable_rethrow } from "next/navigation"
 import { getBusinessCookie, setBusinessCookie } from "@/lib/business-context"
+import { clientIp } from "@/lib/client-ip"
 import { getSessionToken } from "@/lib/session"
 import { ApiError } from "./errors"
 
@@ -29,6 +32,23 @@ async function forgetBusiness() {
   }
 }
 
+/**
+ * The visitor's address and browser, so the API's rate limits count each visitor rather than this server, and
+ * its sessions list shows the browser.
+ */
+async function visitorHeaders(): Promise<Record<string, string>> {
+  try {
+    const incoming = await requestHeaders()
+    const ip = clientIp(incoming)
+    const userAgent = incoming.get("user-agent")
+    return { ...(ip && { "X-Forwarded-For": ip }), ...(userAgent && { "User-Agent": userAgent }) }
+  } catch (err) {
+    // Next's own signals (such as prerendering bailing out) go on up; outside a request there's nothing to forward.
+    unstable_rethrow(err)
+    return {}
+  }
+}
+
 function headersFor(token: string | null, businessId: string | null): Record<string, string> {
   return {
     ...(token && { Authorization: `Bearer ${token}` }),
@@ -45,7 +65,12 @@ async function request<T>(
   form?: FormData,
   extra?: Record<string, string>,
 ) {
-  const headers: Record<string, string> = { Accept: "application/json", ...extra, ...headersFor(token, businessId) }
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...(await visitorHeaders()),
+    ...extra,
+    ...headersFor(token, businessId),
+  }
   if (json !== undefined) headers["Content-Type"] = "application/json"
 
   let res: Response

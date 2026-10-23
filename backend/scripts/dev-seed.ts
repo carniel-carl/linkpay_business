@@ -8,6 +8,7 @@ import { BeneficiaryModel } from "../src/models/Beneficiary";
 import { PayoutListModel } from "../src/models/PayoutList";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
+import { TransactionPinModel } from "../src/models/TransactionPin";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { provisionBusinessAccount } from "../src/services/accounts";
@@ -20,6 +21,7 @@ import sharp from "sharp";
 import { startOfLagosDay } from "../src/services/safelocks";
 import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
+import { processOpenTransfers } from "../src/services/transfers";
 import { raiseFlag, suspendBusiness } from "../src/services/compliance";
 import { audit } from "../src/services/audit";
 import { runRiskChecks } from "../src/services/risk";
@@ -28,6 +30,9 @@ import { inboundTransfer, type MockLiquifia } from "../tests/mockLiquifia";
 
 export const DEMO_EMAIL = "demo@linkpay.test";
 export const DEMO_PASSWORD = "password123";
+// Only swift@ gets a transaction PIN (its seeded transfers go through the API). The demo owner has none, so
+// the set-PIN flow can be tried; set one with DEMO_PASSWORD.
+export const DEMO_PIN = "1357";
 // Sign in to the admin console (admin/, port 3001); the emailed code prints to this console.
 // staff@ is the super admin; the others have one role each, so every role can be tried.
 export const STAFF_EMAIL = "staff@linkpay.test";
@@ -411,13 +416,17 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   liquifia.balances.set(swift.account.providerAccountId, 8_600_000_00);
   await syncInboundTransfers();
   const swiftToken = await signAccessToken(swift.owner.id);
+  await TransactionPinModel.create({ user: swift.owner._id, pinHash: await Bun.password.hash(DEMO_PIN), changedAt: new Date() });
   for (const [accountNumber, amountKobo] of [["0123456789", 4_200_000_00], ["2222222222", 3_500_000_00]] as const) {
     const res = await fetch(`${apiUrl}/api/transfers`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${swiftToken}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${swiftToken}`, "Content-Type": "application/json", "X-Transaction-Pin": DEMO_PIN },
       body: JSON.stringify({ branch: String(swift.account.branch), amountKobo, narration: "Stock", recipient: { type: "bank", accountNumber, bankUuid: "BANK-GTB" } }),
     });
     if (!res.ok) throw new Error(`Seeding a Swift Gadgets transfer failed: ${res.status} ${await res.text()}`);
+    // Settle it before the next one: a payout still processing stays held, and the mock has already debited it.
+    for (const payout of liquifia.payouts) if (payout.status === "pending") liquifia.settlePayout(payout.id, "success");
+    await processOpenTransfers();
   }
   const { raised } = await runRiskChecks();
 
@@ -443,7 +452,7 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   });
   await suspendBusiness(actor, quick.business, { reason: "fraud_report", note: "Pending delivery proof for the reported payment" });
 
-  return `${swift.business.name} (${raised} automatic flags), ${quick.business.name} (flagged and suspended). Owners: swift@linkpay.test, quickcash@linkpay.test / ${DEMO_PASSWORD}.`;
+  return `${swift.business.name} (${raised} automatic flags), ${quick.business.name} (flagged and suspended). Owners: swift@linkpay.test (transaction PIN ${DEMO_PIN}), quickcash@linkpay.test / ${DEMO_PASSWORD}.`;
 }
 
 /** A flat illustration of a primary school with half its roof torn off: zinc on the left, bare rafters on the right. */

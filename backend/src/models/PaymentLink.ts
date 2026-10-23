@@ -136,6 +136,12 @@ const checkoutSchema = new Schema(
     // True while `amountKobo` is reserved on this account (unique among reserved checkouts). Cleared once
     // paid or after `holdUntil`, so the amount can be used again.
     amountReserved: { type: Boolean },
+    // Who started it, for the caps on open checkouts (CHECKOUT_RULES.maxOpenPerIp): the payer's address, with
+    // IPv6 grouped by /56. Never shown to the business or the payer.
+    clientIp: { type: String },
+    // SHA-256 of the random key the payer's browser sent (the pay page keeps one). Only a start with the same
+    // key gets this checkout back, so knowing someone's email isn't enough to take over their checkout.
+    resumeKeyHash: { type: String },
     expiresAt: { type: Date, required: true },
     holdUntil: { type: Date, required: true },
     status: { type: String, enum: CHECKOUT_STATUSES, default: "pending" },

@@ -3,6 +3,7 @@ import { useBusinessContext } from "@/lib/business-context";
 import { periodStart, type Period } from "@/lib/periods";
 import { queryClient } from "@/lib/query";
 import { api } from "./client";
+import { idSegment } from "./paths";
 import { ApiError } from "./errors";
 import type {
   Account,
@@ -108,7 +109,7 @@ export function useTransaction(id: string) {
   const business = useBusinessKey();
   return useQuery({
     queryKey: [business, "transaction", id],
-    queryFn: () => api<Transaction>(`/api/transactions/${id}`),
+    queryFn: () => api<Transaction>(`/api/transactions/${idSegment(id)}`),
     placeholderData: () => {
       for (const [, data] of queryClient.getQueriesData<InfiniteData<TransactionList>>({ queryKey: [business, "transactions"] })) {
         const found = data?.pages?.flatMap((p) => p.items).find((t) => t._id === id);

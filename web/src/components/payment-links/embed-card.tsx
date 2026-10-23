@@ -84,6 +84,7 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
     )
   }
   const code = embed[kind]
+  const slug = /\/pay\/([^/?#]+)/.exec(embed.url)?.[1] ?? ""
   return (
     <section aria-labelledby="embed-title" className="surface grid min-w-0 gap-4 p-6 [&>*]:min-w-0">
       <div className="grid gap-1">
@@ -134,10 +135,25 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
             <CopyButton value={embed.verifyUrl} message="Address copied" label="Copy address" size="icon-xs" />
           </div>
           <p>
-            Fulfil the order only when <span className="font-mono">status</span> is <span className="font-mono">paid</span>,{" "}
-            <span className="font-mono">mode</span> is <span className="font-mono">live</span> and <span className="font-mono">clientReference</span> is your
-            order number.
+            Anyone can pay a cheap link of their own with your order number and pass you that token, so check it&apos;s for this link and
+            this order. Fulfil the order only when:
           </p>
+          <ul className="grid list-disc gap-1 pl-5">
+            <li>
+              <span className="font-mono">status</span> is <span className="font-mono">paid</span> and <span className="font-mono">mode</span> is{" "}
+              <span className="font-mono">live</span>
+            </li>
+            <li>
+              <span className="font-mono">link.slug</span> is <span className="font-mono">{slug}</span> and <span className="font-mono">currency</span> is{" "}
+              <span className="font-mono">NGN</span>
+            </li>
+            <li>
+              <span className="font-mono">priceKobo</span> is the order total in kobo (<span className="font-mono">paidKobo</span> is at least that)
+            </li>
+            <li>
+              <span className="font-mono">clientReference</span> is your order number, and you haven&apos;t already fulfilled that order
+            </li>
+          </ul>
           <p>
             In test mode the code works the same, but payments are simulated and come back with <span className="font-mono">mode: &quot;test&quot;</span>.
             Going live keeps the code, so you don&apos;t have to change your website.

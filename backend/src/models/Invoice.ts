@@ -87,6 +87,9 @@ const invoiceSchema = new Schema(
     issuedAt: { type: Date }, // first sent or marked as sent
     lastSentAt: { type: Date },
     lastSentTo: { type: String },
+    // When the team last emailed this invoice to someone (sends and "remind now"), newest last, at most the
+    // daily cap: the limits in services/invoices.ts count these.
+    emailLog: { type: [{ type: Date }], default: undefined },
     viewedAt: { type: Date }, // first opened on the public page
     overdueNotifiedAt: { type: Date }, // the team was told it's overdue (cleared when the due date changes)
     paidAt: { type: Date },
@@ -115,6 +118,8 @@ invoiceSchema.index({ business: 1, number: 1 }, { unique: true });
 invoiceSchema.index({ business: 1, createdAt: -1 });
 invoiceSchema.index({ business: 1, status: 1, dueDate: 1 });
 invoiceSchema.index({ status: 1, dueDate: 1 });
+// The per-business daily email limit counts recent emailLog entries.
+invoiceSchema.index({ business: 1, emailLog: 1 });
 
 export type Invoice = InferSchemaType<typeof invoiceSchema>;
 export type InvoiceDocument = HydratedDocument<Invoice>;

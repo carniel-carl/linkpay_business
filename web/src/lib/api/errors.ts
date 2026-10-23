@@ -16,15 +16,16 @@ export class ApiError extends Error {
     super(message)
   }
 
-  /** The session token was missing, expired or invalid (not a wrong password). */
+  /** The session token was missing, expired, signed out elsewhere or invalid (not a wrong password). */
   get sessionExpired() {
     if (this.status !== 401) return false
-    return this.code === "UNAUTHENTICATED" || (this.authed && this.code === "INVALID_TOKEN")
+    return this.code === "UNAUTHENTICATED" || (this.authed && (this.code === "INVALID_TOKEN" || this.code === "SESSION_REVOKED"))
   }
 }
 
 const MESSAGES: Record<string, string> = {
-  INVALID_CREDENTIALS: "That email and password don't match. Check them and try again.",
+  // Also what an account with no password gets (see "Forgot password?").
+  INVALID_CREDENTIALS: "That email and password don't match. Check them, or reset your password.",
   EMAIL_NOT_VERIFIED: "Verify your email to continue. We've sent you a new code.",
   EMAIL_TAKEN: "An account with this email already exists. Sign in instead.",
   INVALID_CODE: "That code is wrong or has expired. Check it and try again.",
@@ -106,6 +107,9 @@ const MESSAGES: Record<string, string> = {
   EMBED_NOT_ALLOWED: "This payment link can't be used on this website.",
   TOO_MANY_CHECKOUTS: "Too many attempts. Wait a few minutes and try again.",
   FIELD_REQUIRED: "Fill in the required fields.",
+  // Passwords
+  INCORRECT_PASSWORD: "That password is incorrect.",
+  PASSWORD_NOT_SET: "You haven't set a password yet. Set one with a code we email you.",
 }
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

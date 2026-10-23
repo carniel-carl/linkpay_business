@@ -248,9 +248,108 @@ async function pdfAttachment(business: BusinessDocument, invoice: InvoiceDocumen
   return { filename: `${kind === "receipt" ? "Receipt" : "Invoice"} ${invoice.number}.pdf`, content: pdf, contentType: "application/pdf" };
 }
 
+// Emails the team sends a customer (a send, or "remind now") are limited, since anyone can be put down as the
+// customer: without limits an account could mail strangers through us. Per invoice, one a minute and 5 in any
+// 24 hours; per business, 200 in any 24 hours. Automatic reminders aren't counted: they go once per step.
+const EMAIL_COOLDOWN_MS = 60 * 1000;
+export const MAX_EMAILS_PER_INVOICE = 5;
+export const MAX_EMAILS_PER_BUSINESS = 200;
+const EMAIL_WINDOW_MS = 24 * 60 * 60 * 1000;
+const REMINDER_COOLDOWN_MS = 60 * 60 * 1000;
+
+const reminderCooldown = (last: number) =>
+  new HttpError(429, "A reminder was sent recently. Try again later.", "REMINDER_COOLDOWN", {
+    retryAt: new Date(last + REMINDER_COOLDOWN_MS).toISOString(),
+  });
+
+/** Why claimCustomerEmail couldn't claim, read back from the invoice. */
+async function emailRefusal(invoiceId: Types.ObjectId, kind: "send" | "reminder") {
+  const current = await InvoiceModel.findById(invoiceId).select("emailLog reminders");
+  if (!current) return new HttpError(404, "Invoice not found", "INVOICE_NOT_FOUND");
+  const now = Date.now();
+  const lastReminder = current.reminders?.lastSentAt?.getTime() ?? 0;
+  if (kind === "reminder" && now - lastReminder < REMINDER_COOLDOWN_MS) return reminderCooldown(lastReminder);
+  const log = current.emailLog ?? [];
+  const last = log.at(-1)?.getTime() ?? 0;
+  if (now - last < EMAIL_COOLDOWN_MS) {
+    return new HttpError(429, "This invoice was emailed a moment ago. Try again in a minute.", "INVOICE_EMAIL_COOLDOWN", {
+      retryAt: new Date(last + EMAIL_COOLDOWN_MS).toISOString(),
+    });
+  }
+  const oldest = log[0]?.getTime() ?? 0;
+  if (log.length >= MAX_EMAILS_PER_INVOICE && now - oldest < EMAIL_WINDOW_MS) {
+    return new HttpError(
+      429,
+      `This invoice has been emailed ${MAX_EMAILS_PER_INVOICE} times in the last 24 hours. Share the link instead, or try again later.`,
+      "INVOICE_EMAIL_LIMIT",
+      { retryAt: new Date(oldest + EMAIL_WINDOW_MS).toISOString() },
+    );
+  }
+  // Whatever was in the way cleared between the claim and this read.
+  return new HttpError(409, "This invoice changed while sending. Try again.", "INVOICE_CHANGED");
+}
+
+/**
+ * Takes one email from the invoice's and the business's allowance before it goes out. The invoice's is a
+ * conditional update, so parallel requests can't both pass the cooldown or the cap. The business's is counted
+ * after claiming, so parallel requests each see the others (at worst both are refused, never both let past).
+ * A reminder also claims the hour-long "remind now" cooldown. Returns `release`, which gives it all back if
+ * the email then fails.
+ */
+async function claimCustomerEmail(invoice: InvoiceDocument, kind: "send" | "reminder") {
+  const now = Date.now();
+  const at = new Date(now);
+  const since = new Date(now - EMAIL_WINDOW_MS);
+  const reminder = kind === "reminder";
+  const previousReminder = invoice.reminders?.lastSentAt ?? null;
+  const claimed = await InvoiceModel.updateOne(
+    {
+      _id: invoice._id,
+      emailLog: { $not: { $gt: new Date(now - EMAIL_COOLDOWN_MS) } },
+      // Fewer than the cap in the window: the log keeps only the newest MAX entries, oldest first.
+      $or: [{ [`emailLog.${MAX_EMAILS_PER_INVOICE - 1}`]: { $exists: false } }, { "emailLog.0": { $lte: since } }],
+      ...(reminder && { "reminders.lastSentAt": { $not: { $gt: new Date(now - REMINDER_COOLDOWN_MS) } } }),
+    },
+    {
+      $push: { emailLog: { $each: [at], $slice: -MAX_EMAILS_PER_INVOICE } },
+      ...(reminder && { $set: { "reminders.lastSentAt": at } }),
+    },
+  );
+  if (!claimed.modifiedCount) throw await emailRefusal(invoice._id, kind);
+
+  const release = async () => {
+    await InvoiceModel.updateOne({ _id: invoice._id }, { $pull: { emailLog: at } });
+    if (reminder) {
+      await InvoiceModel.updateOne(
+        { _id: invoice._id, "reminders.lastSentAt": at },
+        previousReminder ? { $set: { "reminders.lastSentAt": previousReminder } } : { $unset: { "reminders.lastSentAt": 1 } },
+      );
+    }
+  };
+
+  const [usage] = await InvoiceModel.aggregate<{ count: number; oldest: Date }>([
+    { $match: { business: invoice.business, emailLog: { $gt: since } } },
+    { $project: { recent: { $filter: { input: "$emailLog", cond: { $gt: ["$$this", since] } } } } },
+    { $unwind: "$recent" },
+    { $group: { _id: null, count: { $sum: 1 }, oldest: { $min: "$recent" } } },
+  ]);
+  if ((usage?.count ?? 0) > MAX_EMAILS_PER_BUSINESS) {
+    await release();
+    throw new HttpError(
+      429,
+      `Your business has emailed ${MAX_EMAILS_PER_BUSINESS} invoices and reminders in the last 24 hours, the most we allow. Share the link instead, or try again later.`,
+      "BUSINESS_EMAIL_LIMIT",
+      { retryAt: new Date(usage!.oldest.getTime() + EMAIL_WINDOW_MS).toISOString() },
+    );
+  }
+  return { at, release };
+}
+
 /**
  * Issues the invoice. With `email`, sends it (link + PDF) to the customer; without, it's just marked as sent
- * so the link can be shared another way (WhatsApp, SMS). Re-sending an issued invoice emails it again.
+ * so the link can be shared another way (WhatsApp, SMS). Re-sending an issued invoice emails it again, within
+ * the limits above. `to` can be any address (a customer's accounts team, say): the customer's own email is
+ * whatever the team typed, so tying `to` to it wouldn't stop anything the limits don't.
  */
 export async function sendInvoice(business: BusinessDocument, invoice: InvoiceDocument, opts: { email: boolean; to?: string; message?: string }) {
   if (invoice.status === "void") throw new HttpError(409, "A void invoice can't be sent", "INVOICE_VOID");
@@ -260,42 +359,51 @@ export async function sendInvoice(business: BusinessDocument, invoice: InvoiceDo
   const to = opts.to ?? invoice.customer?.email ?? undefined;
   if (opts.email && !to) throw new HttpError(400, "Add the customer's email address, or share the link instead", "CUSTOMER_EMAIL_REQUIRED");
 
+  // Before the email: the attached PDF shows the status.
   if (invoice.status === "draft") invoice.status = "open";
   invoice.issuedAt ??= new Date();
   if (opts.email && to) {
-    await sendInvoiceEmail(to, {
-      brand: brandFor(business, invoice),
-      number: invoice.number,
-      totalKobo: invoice.totalKobo,
-      balanceKobo: balanceDue(invoice),
-      dueDate: invoice.dueDate,
-      link: publicInvoiceUrl(invoice),
-      message: opts.message,
-      attachment: await pdfAttachment(business, invoice),
-    });
-    invoice.lastSentAt = new Date();
+    const { at, release } = await claimCustomerEmail(invoice, "send");
+    try {
+      await sendInvoiceEmail(to, {
+        brand: brandFor(business, invoice),
+        number: invoice.number,
+        totalKobo: invoice.totalKobo,
+        balanceKobo: balanceDue(invoice),
+        dueDate: invoice.dueDate,
+        link: publicInvoiceUrl(invoice),
+        message: opts.message,
+        attachment: await pdfAttachment(business, invoice),
+      });
+    } catch (err) {
+      await release();
+      throw err;
+    }
+    invoice.lastSentAt = at;
     invoice.lastSentTo = to;
   }
   await invoice.save();
   return invoice;
 }
 
-const REMINDER_COOLDOWN_MS = 60 * 60 * 1000;
-
-/** A reminder now (from the dashboard). Once an hour at most. */
+/** A reminder now (from the dashboard). Once an hour at most, and it counts towards the email limits. */
 export async function remindNow(business: BusinessDocument, invoice: InvoiceDocument) {
   if (!UNPAID_INVOICE_STATUSES.includes(invoice.status as any)) throw new HttpError(409, "Only unpaid invoices get reminders", "INVOICE_NOT_UNPAID");
   if (!invoice.customer?.email) throw new HttpError(400, "This customer has no email address", "CUSTOMER_EMAIL_REQUIRED");
   const last = invoice.reminders?.lastSentAt?.getTime() ?? 0;
-  if (Date.now() - last < REMINDER_COOLDOWN_MS) {
-    const retryAt = new Date(last + REMINDER_COOLDOWN_MS);
-    throw new HttpError(429, "A reminder was sent recently. Try again later.", "REMINDER_COOLDOWN", { retryAt: retryAt.toISOString() });
+  if (Date.now() - last < REMINDER_COOLDOWN_MS) throw reminderCooldown(last);
+  const { at, release } = await claimCustomerEmail(invoice, "reminder");
+  try {
+    await emailReminder(business, invoice, isOverdue(invoice) ? "overdue" : "upcoming");
+  } catch (err) {
+    await release();
+    throw err;
   }
-  await sendReminder(business, invoice, isOverdue(invoice) ? "overdue" : "upcoming");
+  invoice.set("reminders.lastSentAt", at);
   return invoice;
 }
 
-async function sendReminder(business: BusinessDocument, invoice: InvoiceDocument, tone: "upcoming" | "due_today" | "overdue") {
+async function emailReminder(business: BusinessDocument, invoice: InvoiceDocument, tone: "upcoming" | "due_today" | "overdue") {
   await sendInvoiceReminderEmail(invoice.customer!.email!, {
     brand: brandFor(business, invoice),
     number: invoice.number,
@@ -305,8 +413,6 @@ async function sendReminder(business: BusinessDocument, invoice: InvoiceDocument
     link: publicInvoiceUrl(invoice),
     attachment: await pdfAttachment(business, invoice),
   });
-  invoice.set("reminders.lastSentAt", new Date());
-  await invoice.save();
 }
 
 // Automatic reminders, by days relative to the due date. Each is sent at most once per due date.
@@ -317,7 +423,7 @@ const SCHEDULE = [
   { kind: "overdue_10", offset: 10, tone: "overdue" },
 ] as const;
 
-/** Sends the reminders that are due. Runs in the background a few times a day; safe to run more often. */
+/** Sends the reminders that are due. Runs in the background a few times a day; safe to run more often, or twice at once. */
 export async function sendScheduledReminders(today = todayInLagos()) {
   const candidates = await InvoiceModel.find({
     status: { $in: UNPAID_INVOICE_STATUSES },
@@ -339,13 +445,34 @@ export async function sendScheduledReminders(today = todayInLagos()) {
     const business = businesses.get(key);
     // No reminders from a suspended or closed business (its invoice links are down too).
     if (!business || (business.compliance?.status ?? "active") !== "active") continue;
+
+    // Claim the step before sending, so two runs (two instances, or a slow tick overlapping the next) can't
+    // both send it. Only while the invoice is as we read it: still unpaid, same due date, reminders on.
+    const claimed = await InvoiceModel.updateOne(
+      {
+        _id: invoice._id,
+        status: { $in: UNPAID_INVOICE_STATUSES },
+        dueDate: invoice.dueDate,
+        "reminders.enabled": true,
+        "reminders.sent": { $ne: step.kind },
+      },
+      { $addToSet: { "reminders.sent": step.kind } },
+    );
+    if (!claimed.modifiedCount) continue;
     try {
-      invoice.reminders!.sent.push(step.kind);
-      await sendReminder(business, invoice, step.tone);
-      sent++;
+      await emailReminder(business, invoice, step.tone);
     } catch (err) {
       console.error(`Couldn't send reminder for invoice ${invoice.id}:`, err);
+      // Give the step back so the next run tries again.
+      await InvoiceModel.updateOne({ _id: invoice._id }, { $pull: { "reminders.sent": step.kind } }).catch((e) =>
+        console.error(`Couldn't release reminder ${step.kind} for invoice ${invoice.id}:`, e),
+      );
+      continue;
     }
+    sent++;
+    await InvoiceModel.updateOne({ _id: invoice._id }, { $set: { "reminders.lastSentAt": new Date() } }).catch((err) =>
+      console.error(`Couldn't record the reminder time for invoice ${invoice.id}:`, err),
+    );
   }
   return { sent };
 }

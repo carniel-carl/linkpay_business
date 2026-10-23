@@ -69,8 +69,9 @@ async function createLink(token: string, body: Record<string, unknown>) {
 
 const payer = (n: number | string = 1) => ({ name: "Chidi Okonkwo", email: `chidi${n}@example.com` });
 
-async function startCheckout(slug: string, body: Record<string, unknown> = payer()) {
-  return t.api("POST", `/api/public/pay/${slug}/checkouts`, { body });
+/** Starts a checkout as the web does, optionally from another payer address (X-Forwarded-For). */
+async function startCheckout(slug: string, body: Record<string, unknown> = payer(), ip?: string) {
+  return t.api("POST", `/api/public/pay/${slug}/checkouts`, { body, ...(ip && { headers: { "X-Forwarded-For": ip } }) });
 }
 
 /** A payment into `va` that Liquifia reports, then a sync. */
@@ -223,10 +224,11 @@ describe("the public page", () => {
 });
 
 describe("checkouts", () => {
-  test("each payer gets a unique amount; the same payer gets their open checkout back", async () => {
+  test("each payer gets a unique amount; the same payer in the same browser gets their open checkout back", async () => {
     const { owner, headOfficeId, headVa } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 5_000_00 });
-    const first = await startCheckout(link.slug, payer("a"));
+    const browser = { resumeKey: "browser-a-0123456789abcdef" };
+    const first = await startCheckout(link.slug, { ...payer("a"), ...browser });
     expect(first.status).toBe(201);
     expect(first.body).toMatchObject({
       status: "pending",
@@ -241,9 +243,14 @@ describe("checkouts", () => {
     expect(offset).toBeGreaterThanOrEqual(1);
     expect(offset).toBeLessThanOrEqual(99);
 
-    const again = await startCheckout(link.slug, { ...payer("a"), name: "Chidi O." });
+    const again = await startCheckout(link.slug, { ...payer("a"), ...browser });
     expect(again.status).toBe(200);
-    expect(again.body).toMatchObject({ token: first.body.token, amountKobo: first.body.amountKobo, payer: { name: "Chidi O." } });
+    expect(again.body).toMatchObject({ token: first.body.token, amountKobo: first.body.amountKobo });
+    // Changed details are a new checkout; the open one is never rewritten.
+    const changed = await startCheckout(link.slug, { ...payer("a"), name: "Chidi O.", ...browser });
+    expect(changed.status).toBe(201);
+    expect(changed.body.token).not.toBe(first.body.token);
+    expect((await t.api("GET", `/api/public/checkouts/${first.body.token}`)).body.payer.name).toBe("Chidi Okonkwo");
 
     const amounts = new Set([first.body.amountKobo]);
     for (const n of [1, 2, 3, 4, 5]) amounts.add((await startCheckout(link.slug, payer(`b${n}`))).body.amountKobo);
@@ -257,14 +264,15 @@ describe("checkouts", () => {
   test("when all 99 amounts for a price are held, the next payer is asked to try later", async () => {
     const { owner, headOfficeId } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 7_000_00 });
-    for (let n = 0; n < 99; n++) expect((await startCheckout(link.slug, payer(`busy${n}`))).status).toBe(201);
-    const busy = await startCheckout(link.slug, payer("one-too-many"));
+    // 99 payers on 99 addresses (one address can only hold a few, see the abuse limits).
+    for (let n = 0; n < 99; n++) expect((await startCheckout(link.slug, payer(`busy${n}`), `10.7.0.${n + 1}`)).status).toBe(201);
+    const busy = await startCheckout(link.slug, payer("one-too-many"), "10.7.1.1");
     expect(busy.status).toBe(503);
     expect(busy.body.code).toBe("CHECKOUT_BUSY");
 
     // Once a hold ends, its amount is free again.
     await CheckoutModel.updateOne({ link: link._id }, { holdUntil: new Date(Date.now() - 1000) });
-    expect((await startCheckout(link.slug, payer("one-too-many"))).status).toBe(201);
+    expect((await startCheckout(link.slug, payer("one-too-many"), "10.7.1.1")).status).toBe(201);
   });
 });
 
@@ -430,6 +438,10 @@ describe("embedding on the business's website", () => {
     expect(embed.body.button).toContain("Pay ₦25,000");
     expect(embed.body.inline).toContain(`/pay/${link.slug}?embed=inline`);
     expect(embed.body.javascript).toContain(`link: "${link.slug}"`);
+    // The server-side check binds the payment to this link, the order's amount and its id, not just "paid".
+    for (const check of ['status is "paid"', 'mode is "live"', `link.slug is "${link.slug}"`, 'currency is "NGN"', "priceKobo is your order total", "clientReference is your order"]) {
+      expect(embed.body.javascript.replace(/\n\s*\/\/\s*/g, " ")).toContain(check);
+    }
     expect(embed.body.verifyUrl).toEndWith("/api/public/checkouts/{token}");
 
     // null lets any site embed it again.
@@ -446,7 +458,7 @@ describe("embedding on the business's website", () => {
       allowedOrigins: ["https://*.adaeze.ng"],
       redirectUrl: "https://shop.adaeze.ng/thanks",
     });
-    const embed = (extra: Record<string, unknown>) => ({ ...payer("e"), source: "embed", ...extra });
+    const embed = (extra: Record<string, unknown>) => ({ ...payer("e"), source: "embed", resumeKey: "shop-browser-0123456789", ...extra });
 
     for (const origin of [undefined, "https://evil.example", "https://adaeze.ng"]) {
       const refused = await startCheckout(link.slug, embed({ embedOrigin: origin }));
@@ -467,7 +479,7 @@ describe("embedding on the business's website", () => {
     const first = await startCheckout(link.slug, embed(order));
     expect(first.status).toBe(201);
     expect(first.body).toMatchObject({ source: "embed", clientReference: "ORDER #1042", metadata: { cartId: "c_88", items: "3", gift: "true" } });
-    // Same order again: the same checkout. A different order: a new one, with its own amount.
+    // Same order again from the same browser: the same checkout. A different order: a new one, with its own amount.
     expect((await startCheckout(link.slug, embed(order))).body.token).toBe(first.body.token);
     const second = await startCheckout(link.slug, embed({ ...order, clientReference: "ORDER #1043" }));
     expect(second.status).toBe(201);
@@ -486,7 +498,16 @@ describe("embedding on the business's website", () => {
     // Paid: the redirect and the receipt carry the order reference; the business's server can confirm by token.
     await receive(headVa, first.body.amountKobo);
     const paid = await t.api("GET", `/api/public/checkouts/${first.body.token}`);
-    expect(paid.body).toMatchObject({ status: "paid", paidKobo: first.body.amountKobo, clientReference: "ORDER #1042", metadata: { cartId: "c_88" } });
+    expect(paid.body).toMatchObject({
+      status: "paid",
+      mode: "live",
+      link: { slug: link.slug },
+      priceKobo: 5_000_00,
+      paidKobo: first.body.amountKobo,
+      currency: "NGN",
+      clientReference: "ORDER #1042",
+      metadata: { cartId: "c_88" },
+    });
     expect(new URL(paid.body.redirectUrl).searchParams.get("client_reference")).toBe("ORDER #1042");
     expect(outbox.find((m) => m.to === "chidie@example.com")?.text).toContain("Your order: ORDER #1042.");
   });

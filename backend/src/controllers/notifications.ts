@@ -7,7 +7,7 @@ import { NotificationModel, type NotificationDocument } from "../models/Notifica
 import { PushTokenModel } from "../models/PushToken";
 import { StaffModel } from "../models/Staff";
 import { UserModel } from "../models/User";
-import { publishToRecipient, serializeNotification } from "../services/notifications";
+import { publishToRecipient, serializeNotification, visibleToUser } from "../services/notifications";
 import { serveNotificationStream } from "../services/notificationStream";
 import { isSessionActive } from "../services/sessions";
 import { isStaffSessionLive } from "../services/staffAuth";
@@ -25,9 +25,14 @@ function tokenExpiry(req: Request) {
 
 /**
  * The same notification endpoints for business users (/api/notifications) and staff (/api/admin/notifications).
- * Everyone only ever sees their own notifications.
+ * Everyone only ever sees their own notifications. `visible` narrows the list and unread count further
+ * (business users: not about businesses they've left).
  */
-function handlersFor(audience: NotificationAudience, recipientOf: (req: Request) => string) {
+function handlersFor(
+  audience: NotificationAudience,
+  recipientOf: (req: Request) => string,
+  visible: (recipient: string) => Promise<Record<string, unknown>> = async () => ({}),
+) {
   const mine = (req: Request) => ({ audience, recipient: recipientOf(req) });
 
   /** Newest first. Page with `before` (the last id of the previous page). */
@@ -42,6 +47,7 @@ function handlersFor(audience: NotificationAudience, recipientOf: (req: Request)
       .parse(req.query);
     const filter = {
       ...mine(req),
+      ...(await visible(recipientOf(req))),
       ...(q.business && { business: q.business }),
       ...(q.unread === "true" && { readAt: null }),
       ...(q.before && { _id: { $lt: q.before } }),
@@ -54,7 +60,7 @@ function handlersFor(audience: NotificationAudience, recipientOf: (req: Request)
   /** `{ total, byBusiness: { [businessId]: n } }`; byBusiness is empty for staff. */
   const unreadCount: RequestHandler = async (req, res) => {
     const rows = await NotificationModel.aggregate<{ _id: unknown; count: number }>([
-      { $match: { audience, recipient: new Types.ObjectId(recipientOf(req)), readAt: null } },
+      { $match: { audience, recipient: new Types.ObjectId(recipientOf(req)), readAt: null, ...(await visible(recipientOf(req))) } },
       { $group: { _id: "$business", count: { $sum: 1 } } },
     ]);
     const byBusiness: Record<string, number> = {};
@@ -91,7 +97,7 @@ function handlersFor(audience: NotificationAudience, recipientOf: (req: Request)
 // ---- Business users ----
 
 export const userNotifications = {
-  ...handlersFor("user", (req) => req.userId!),
+  ...handlersFor("user", (req) => req.userId!, visibleToUser),
 
   stream: (async (req, res) => {
     const userId = req.userId!;
@@ -99,6 +105,7 @@ export const userNotifications = {
     await serveNotificationStream(req, res, {
       audience: "user",
       recipient: userId,
+      visible: await visibleToUser(userId),
       closeAt: tokenExpiry(req),
       recheck: async () => {
         if (sessionId && !(await isSessionActive(sessionId, userId))) return "session_ended";

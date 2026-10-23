@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { normaliseWebsite, type BusinessDetailsValues, type PersonValues } from "@/lib/schemas";
 import { api } from "./client";
+import { idSegment } from "./paths";
 import type { Overview } from "./types";
 import type { BusinessType } from "@/lib/kyb";
 
@@ -61,9 +62,9 @@ function send(change: Change) {
     case "addPerson":
       return api<Overview>("/api/business/people", { method: "POST", json: personBody(change.values) });
     case "updatePerson":
-      return api<Overview>(`/api/business/people/${encodeURIComponent(change.id)}`, { method: "PATCH", json: personBody(change.values) });
+      return api<Overview>(`/api/business/people/${idSegment(change.id)}`, { method: "PATCH", json: personBody(change.values) });
     case "removePerson":
-      return api<Overview>(`/api/business/people/${encodeURIComponent(change.id)}`, { method: "DELETE" });
+      return api<Overview>(`/api/business/people/${idSegment(change.id)}`, { method: "DELETE" });
     case "upload": {
       const form = new FormData();
       form.append("type", change.type);
@@ -73,7 +74,7 @@ function send(change: Change) {
       return api<Overview>("/api/business/documents", { method: "POST", form, timeoutMs: 90_000 });
     }
     case "removeDocument":
-      return api<Overview>(`/api/business/documents/${encodeURIComponent(change.id)}`, { method: "DELETE" });
+      return api<Overview>(`/api/business/documents/${idSegment(change.id)}`, { method: "DELETE" });
     case "submit":
       return api<Overview>("/api/business/submit", { method: "POST" });
   }

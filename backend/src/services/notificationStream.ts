@@ -37,6 +37,8 @@ export async function serveNotificationStream(
   opts: {
     audience: NotificationAudience;
     recipient: string;
+    /** Narrows the replay and the unread count (business users: not about businesses they've left). */
+    visible?: Record<string, unknown>;
     /** When the access token expires; the stream ends then so a revoked or expired token can't keep it open. */
     closeAt: Date;
     /** Returns why the stream must end now (session revoked, account disabled, ...), or null to keep going. */
@@ -91,7 +93,7 @@ export async function serveNotificationStream(
     write("retry: 5000\n\n");
     const sent = new Set<string>();
     if (after) {
-      const missed = (await NotificationModel.find({ audience, recipient, _id: { $gt: after } })
+      const missed = (await NotificationModel.find({ audience, recipient, ...opts.visible, _id: { $gt: after } })
         .sort({ _id: 1 })
         .limit(REPLAY_LIMIT)) as NotificationDocument[];
       for (const n of missed) {
@@ -99,7 +101,7 @@ export async function serveNotificationStream(
         send("notification", serializeNotification(n), n.id);
       }
     }
-    const unread = await NotificationModel.countDocuments({ audience, recipient, readAt: null });
+    const unread = await NotificationModel.countDocuments({ audience, recipient, readAt: null, ...opts.visible });
     for (const e of queue) if (e.kind !== "notification" || !sent.has(e.notification._id)) sendEvent(e);
     queue = null;
     send("ready", { unread });

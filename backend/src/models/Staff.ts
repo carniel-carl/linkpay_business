@@ -25,6 +25,8 @@ const staffSchema = new Schema(
       totpSecret: { type: String, select: false },
       // Holds the secret between /2fa/totp/setup and /2fa/totp/enable.
       pendingTotpSecret: { type: String, select: false },
+      // The 30-second step of the last authenticator code accepted. That step and earlier ones aren't accepted again.
+      totpLastStep: { type: Number, select: false },
     },
   },
   {
@@ -36,6 +38,7 @@ const staffSchema = new Schema(
         if (ret.twoFactor) {
           delete ret.twoFactor.totpSecret;
           delete ret.twoFactor.pendingTotpSecret;
+          delete ret.twoFactor.totpLastStep;
         }
         return ret;
       },

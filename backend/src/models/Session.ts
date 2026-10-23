@@ -3,13 +3,17 @@ import { Schema, Types, model, type HydratedDocument, type InferSchemaType } fro
 export const DEVICE_PLATFORMS = ["ios", "android", "web", "other"] as const;
 
 /**
- * A signed-in device. Clients that send `device` when signing in (the mobile app) get a short-lived
- * access token tied to one of these plus a rotating refresh token, so the session can be listed and
- * revoked. Only hashes of refresh tokens are stored.
+ * A signed-in device or browser, so every sign-in can be listed and revoked. Clients that send `device` when
+ * signing in (the mobile app) get a short-lived access token tied to one of these plus a rotating refresh token.
+ * Browsers (the web dashboard) get one access token for the session's life, checked against it on every request.
+ * Only hashes of refresh tokens are stored.
  */
 const sessionSchema = new Schema(
   {
     user: { type: Types.ObjectId, ref: "User", required: true, index: true },
+    // "web": no refresh token; each request pushes the idle expiry back instead. Missing on older device sessions.
+    kind: { type: String, enum: ["device", "web"], default: "device" },
+    // Web sessions have none: they store the hash of a random value nobody holds, since this index predates them.
     refreshTokenHash: { type: String, required: true, unique: true },
     // The token this one replaced, accepted once more for a short grace period in case the client
     // never received the rotated pair (a dropped response).

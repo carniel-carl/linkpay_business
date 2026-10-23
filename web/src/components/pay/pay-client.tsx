@@ -50,7 +50,10 @@ import {
 
 export type EmbedMode = "popup" | "inline" | null
 
-/** What the business's website passed in (embed.js or the page's own query string). */
+/**
+ * What the business's website passed in: the page's own query string, or (name, email and phone from embed.js)
+ * a `prefill` message once the frame is ready, so the payer's details stay out of the frame's address.
+ */
 export type Prefill = {
   name?: string
   email?: string
@@ -58,7 +61,10 @@ export type Prefill = {
   amountKobo?: number
   clientReference?: string
   metadata?: Record<string, string>
-  /** The website's origin as embed.js saw it; the browser's own answer wins when there is one. */
+  /**
+   * The website's origin as embed.js says (`?origin=`). Anyone who writes the frame's address can set it, so
+   * it only picks where our messages go when the browser doesn't say; it's never sent as `embedOrigin`.
+   */
   origin?: string
 }
 
@@ -86,18 +92,51 @@ const summary = (c: PublicCheckout) => ({
   metadata: c.metadata,
 })
 
-/** The website we're embedded in: the browser's ancestor list, then what embed.js said, then the referrer. */
-function parentOrigin(param?: string) {
+/**
+ * The website we're embedded in, as the browser tells us: its ancestor list, then the referrer. Still only
+ * advisory for the backend (`embedOrigin`); frame-ancestors is what keeps the page off other websites.
+ */
+function parentOrigin() {
   try {
     const ancestors = (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins
     if (ancestors?.length) return ancestors[0]
   } catch {}
-  if (param) return param
   try {
     return document.referrer ? new URL(document.referrer).origin : undefined
   } catch {
     return undefined
   }
+}
+
+/**
+ * A random key for this link in this tab, sent when starting a checkout: only a start with the same key gets
+ * the payer's open checkout back, so someone who only knows their email can't. Kept for the tab's session
+ * (a reload, "Change my details", the popup opened again); in memory when storage is blocked.
+ */
+const memoryKeys = new Map<string, string>()
+function resumeKey(slug: string) {
+  const name = `linkpay:resume:${slug}`
+  try {
+    const saved = window.sessionStorage.getItem(name)
+    if (saved && /^[A-Za-z0-9_-]{16,64}$/.test(saved)) return saved
+  } catch {}
+  let key = memoryKeys.get(name)
+  if (!key) {
+    const bytes = crypto.getRandomValues(new Uint8Array(24))
+    key = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+    memoryKeys.set(name, key)
+  }
+  try {
+    window.sessionStorage.setItem(name, key)
+  } catch {}
+  return key
+}
+
+/** The payer's details from embed.js's `prefill` message, with the same limits as the query string. */
+function prefillFromMessage(data: unknown): Pick<Prefill, "name" | "email" | "phone"> {
+  const p = data && typeof data === "object" ? (data as Record<string, unknown>) : {}
+  const text = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined)
+  return { name: text(p.name, 100), email: text(p.email, 200), phone: text(p.phone, 20) }
 }
 
 const POLL_MS = 5_000
@@ -107,7 +146,7 @@ const PAY_WINDOW_MS = 30 * 60_000
 /** The backend keeps matching a checkout's amount for 2 hours from the start (30 minutes to pay + 90). */
 const WATCH_AFTER_EXPIRY_MS = 90 * 60_000
 
-export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, prefill }: Props) {
+export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, prefill: initialPrefill }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -123,10 +162,23 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
     [embed, frameId],
   )
 
+  // embed.js answers `ready` with the payer's details (never put in the frame's address). Only from the page
+  // that holds this frame, for this frame, and from its origin when we know it.
+  const [prefill, setPrefill] = useState(initialPrefill)
   useEffect(() => {
     if (!embed) return
-    target.current = parentOrigin(prefill.origin) ?? "*"
+    const parent = parentOrigin() ?? initialPrefill.origin
+    target.current = parent ?? "*"
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== window.parent || (parent && e.origin !== parent)) return
+      const d = e.data as { source?: unknown; type?: unknown; frameId?: unknown; prefill?: unknown } | null
+      if (!d || d.source !== "linkpay" || d.type !== "prefill" || d.frameId !== frameId) return
+      const sent = prefillFromMessage(d.prefill)
+      setPrefill((prev) => ({ ...prev, name: sent.name ?? prev.name, email: sent.email ?? prev.email, phone: sent.phone ?? prev.phone }))
+    }
+    window.addEventListener("message", onMessage)
     post("ready", initialCheckout ? { checkout: summary(initialCheckout) } : {})
+    return () => window.removeEventListener("message", onMessage)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -551,6 +603,14 @@ function PayForm({
   const [name, setName] = useState(prefill.name ?? "")
   const [email, setEmail] = useState(prefill.email ?? "")
   const [phone, setPhone] = useState(prefill.phone ?? "")
+  // embed.js's details arrive just after the form shows: fill in whatever the payer hasn't typed yet.
+  const [shownPrefill, setShownPrefill] = useState(prefill)
+  if (shownPrefill !== prefill) {
+    setShownPrefill(prefill)
+    if (!name && prefill.name) setName(prefill.name)
+    if (!email && prefill.email) setEmail(prefill.email)
+    if (!phone && prefill.phone) setPhone(prefill.phone)
+  }
   const [amount, setAmount] = useState(prefill.amountKobo && open ? koboToInput(prefill.amountKobo).replace(/\.00$/, "") : "")
   const [fields, setFields] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -606,8 +666,9 @@ function PayForm({
       ...(donation && { anonymous, ...(message.trim() && { message: message.trim() }) }),
       ...(embed && {
         source: "embed",
-        embedOrigin: parentOrigin(prefill.origin),
+        embedOrigin: parentOrigin(),
       }),
+      resumeKey: resumeKey(link.slug),
       ...(prefill.clientReference && {
         clientReference: prefill.clientReference,
       }),
@@ -627,7 +688,7 @@ function PayForm({
     const json = await res.json().catch(() => null)
     setBusy(false)
     if (res.ok && json) return onStarted(json as PublicCheckout)
-    setError(payErrorMessage(json?.code, json?.error))
+    setError(payErrorMessage(json?.code, json?.error, json?.details?.reason))
     const field = json?.details?.field as string | undefined
     if (json?.code === "FIELD_REQUIRED" && field)
       setErrors({
@@ -829,12 +890,16 @@ function PayForm({
 const giftAmount = (kobo: number) => (kobo % 100 ? formatNaira(kobo) : naira(kobo))
 
 /** Copy for the payer, who has no LinkPay account: never mentions roles or the dashboard. */
-function payErrorMessage(code?: string, fallback?: string) {
+function payErrorMessage(code?: string, fallback?: string, reason?: string) {
   switch (code) {
     case "PAYMENT_LINK_UNAVAILABLE":
       return "This link isn't taking payments right now."
     case "CHECKOUT_BUSY":
-      return "Lots of people are paying this amount right now. Try again in a few minutes."
+      return reason === "places_held"
+        ? "The last places are being paid for right now. Try again in a few minutes."
+        : "Lots of people are paying this amount right now. Try again in a few minutes."
+    case "TOO_MANY_OPEN_CHECKOUTS":
+      return "You've started several payments that are still waiting. Pay one of them, or try again later."
     case "EMBED_NOT_ALLOWED":
       return "This payment can't be made from this website. Open the business's payment link directly."
     case "TOO_MANY_CHECKOUTS":
@@ -1234,7 +1299,7 @@ function Paid({
             <>
               No money was sent.{" "}
               {donation ? "Your test gift is on the roll and in the total until the fundraiser goes live. " : ""}
-              We&apos;ve emailed a test receipt to <span className="text-foreground">{c.payer.email}</span>.
+              Test payments made on this page don&apos;t email a receipt.
             </>
           ) : donation ? (
             <>

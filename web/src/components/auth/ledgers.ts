@@ -45,3 +45,16 @@ export const openingLedger = (current: "login" | "email"): Ledger => ({
 })
 
 export const teamLedger: Ledger = { label: "How team access works", rows: TEAM_ROWS }
+
+const RESET_ROWS: LedgerRow[] = [
+  { key: "email", title: "Your email", detail: "We send a 6-digit code, valid for 10 minutes" },
+  { key: "password", title: "A new password", detail: "The code and at least 8 characters" },
+  { key: "sign-in", title: "Sign in again", detail: "Every device is signed out, so sign in with the new password" },
+]
+
+export const resetLedger = (current: "email" | "password" | "sign-in"): Ledger => ({
+  label: "Resetting your password",
+  rows: RESET_ROWS,
+  current,
+  numbered: true,
+})

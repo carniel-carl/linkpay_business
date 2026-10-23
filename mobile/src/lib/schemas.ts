@@ -5,10 +5,12 @@ import { BUSINESS_TYPES, ID_TYPES, PERSON_ROLES } from "@/lib/kyb";
 export const email = z.email("Enter a valid email address.").trim().toLowerCase();
 export const code = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code.");
 
+const newPassword = z.string().min(8, "Use at least 8 characters.").max(128, "Use 128 characters or fewer.");
+
 export const signUpSchema = z.object({
   name: z.string().trim().min(1, "Enter your full name."),
   email,
-  password: z.string().min(8, "Use at least 8 characters.").max(128, "Use 128 characters or fewer."),
+  password: newPassword,
 });
 
 export const signInSchema = z.object({ email, password: z.string().min(1, "Enter your password.") });
@@ -29,6 +31,10 @@ export const branchSchema = z.object({
 export const inviteRegisterSchema = signUpSchema.omit({ email: true });
 
 export const passwordSchema = z.object({ password: z.string().min(1, "Enter your password.") });
+
+// Mirror backend/src/controllers/password.ts.
+export const resetPasswordSchema = z.object({ code, newPassword });
+export const changePasswordSchema = z.object({ currentPassword: z.string().min(1, "Enter your current password."), newPassword });
 
 // ---- Verification (KYB): mirrors web/src/lib/schemas.ts and backend/src/controllers/business.ts ----
 

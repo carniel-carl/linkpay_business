@@ -31,8 +31,9 @@ async function makeStaff(extra: Record<string, unknown> = {}) {
 }
 
 const lastCode = (email: string) => outbox.findLast((m) => m.to === email)?.text.match(/\b(\d{6})\b/)?.[1];
-const totpCode = (email: string, secret: string) =>
-  new TOTP({ issuer: "LinkPay Staff", label: email, secret: Secret.fromBase32(secret) }).generate();
+/** `ahead` ms from now: each 30-second step's code is accepted only once. */
+const totpCode = (email: string, secret: string, ahead = 0) =>
+  new TOTP({ issuer: "LinkPay Staff", label: email, secret: Secret.fromBase32(secret) }).generate({ timestamp: Date.now() + ahead });
 
 const login = (email: string, password = PASSWORD) =>
   t.api("POST", "/api/admin/auth/login", { body: { email, password } });
@@ -137,7 +138,7 @@ describe("staff sign-in", () => {
     const email = await makeStaff();
     const token = await signIn(email);
 
-    const setup = await t.api("POST", "/api/admin/auth/2fa/totp/setup", { token });
+    const setup = await t.api("POST", "/api/admin/auth/2fa/totp/setup", { token, body: { password: PASSWORD } });
     expect(setup.status).toBe(200);
     expect(setup.body.otpauthUrl).toContain("LinkPay%20Staff");
 
@@ -159,7 +160,7 @@ describe("staff sign-in", () => {
     });
     expect(resend.body.code).toBe("NOT_EMAIL_METHOD");
     const second = await t.api("POST", "/api/admin/auth/login/2fa", {
-      body: { challengeToken: first.body.challengeToken, code: totpCode(email, setup.body.secret) },
+      body: { challengeToken: first.body.challengeToken, code: totpCode(email, setup.body.secret, 30_000) },
     });
     expect(second.status).toBe(200);
 

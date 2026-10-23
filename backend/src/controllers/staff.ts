@@ -8,7 +8,7 @@ import { sendStaffInviteEmail } from "../services/email";
 import {
   STAFF_INVITE_RESEND_COOLDOWN_MS,
   STAFF_INVITE_TTL_MS,
-  assertKeepsASuperAdmin,
+  changeStaffAccess,
   hashStaffInviteToken,
   newStaffInviteToken,
   parseStaffRole,
@@ -109,12 +109,10 @@ export const listStaff: RequestHandler = async (req, res) => {
 export const updateStaff: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ role: z.unknown() }).parse(req.body);
   const role = parseStaffRole(body.role);
-  const staff = await findOtherStaff(req);
-  await assertKeepsASuperAdmin(staff, { role });
-  const changed = staff.role !== role;
-  const previous = staff.role;
-  staff.role = role;
-  await staff.save();
+  const found = await findOtherStaff(req);
+  const changed = found.role !== role;
+  const previous = found.role;
+  const staff = changed ? await changeStaffAccess(found, { role }) : found;
   if (changed) {
     const actor = await staffActor(req);
     // Audited before telling them, so the change is on record whatever happens next.
@@ -130,10 +128,7 @@ export const updateStaff: RequestHandler<IdParams> = async (req, res) => {
 };
 
 export const disableStaff: RequestHandler<IdParams> = async (req, res) => {
-  const staff = await findOtherStaff(req);
-  await assertKeepsASuperAdmin(staff, { status: "disabled" });
-  staff.status = "disabled";
-  await staff.save();
+  const staff = await changeStaffAccess(await findOtherStaff(req), { status: "disabled" });
   await revokeStaffSessions(staff._id);
   await audit(await staffActor(req), { action: "staff.disabled", target: { kind: "staff", id: staff._id }, summary: `Turned off ${staff.name}'s access` });
   res.json((await serializeStaffList([staff], req.staffId!))[0]);
@@ -215,6 +210,12 @@ export const resendStaffInvite: RequestHandler<IdParams> = async (req, res) => {
   const token = newStaffInviteToken();
   invite.set({ tokenHash: hashStaffInviteToken(token), expiresAt: new Date(Date.now() + STAFF_INVITE_TTL_MS), lastSentAt: new Date() });
   await invite.save();
+  // Audited before sending, like the first invite: the old link has stopped working either way.
+  await audit(await staffActor(req), {
+    action: "staff.invite_resent",
+    target: { kind: "staff_invite", id: invite._id },
+    summary: `Resent the invite to ${invite.email}`,
+  });
   await sendInvite(invite, token, req.staffId!);
   res.json((await serializeInvites([invite]))[0]);
 };

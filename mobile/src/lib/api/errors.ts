@@ -17,7 +17,8 @@ export class ApiError extends Error {
 const MESSAGES: Record<string, string> = {
   NETWORK: "You're offline or the connection dropped. Check your internet and try again.",
   TIMEOUT: "That took too long. Check your connection and try again.",
-  INVALID_CREDENTIALS: "That email and password don't match. Check them and try again.",
+  // Also what an account with no password gets (see "Forgot password?").
+  INVALID_CREDENTIALS: "That email and password don't match. Check them, or reset your password.",
   EMAIL_NOT_VERIFIED: "Verify your email to continue. We've sent you a new code.",
   EMAIL_TAKEN: "An account with this email already exists. Sign in instead.",
   INVALID_CODE: "That code is wrong or has expired. Check it and try again.",
@@ -90,6 +91,9 @@ const MESSAGES: Record<string, string> = {
   TRANSACTION_ALREADY_LINKED: "That transfer is already linked to an invoice or another payment.",
   TRANSACTION_NOT_FOUND: "We couldn't find that transfer. Refresh and try again.",
   POCKET_NOT_FOUND: "We couldn't find that pocket. It may be on a branch you can't see.",
+  // Passwords (same copy as the web)
+  INCORRECT_PASSWORD: "That password is incorrect.",
+  PASSWORD_NOT_SET: "You haven't set a password yet. Set one with a code we email you.",
 };
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

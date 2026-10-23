@@ -12,7 +12,7 @@ import { UserModel } from "../src/models/User";
 import { sendStaffInviteEmail, sendTeamInviteEmail, setEmailProvider, type EmailMessage } from "../src/services/email";
 import { createOtp, MAX_DAILY_FAILURES, verifyOtp } from "../src/services/otp";
 import { signAccessToken } from "../src/services/tokens";
-import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
+import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
 let t: TestEnv;
 const outbox: EmailMessage[] = [];
@@ -26,7 +26,7 @@ afterAll(() => t.stop());
 let seq = 0;
 async function user(name = "User") {
   seq++;
-  const u = await UserModel.create({ name, email: `hardening${seq}@test.ng`, password: await Bun.password.hash("password123"), emailVerified: true });
+  const u = await withPin(await UserModel.create({ name, email: `hardening${seq}@test.ng`, password: await Bun.password.hash("password123"), emailVerified: true }));
   return { user: u, token: await signAccessToken(u.id) };
 }
 
@@ -185,6 +185,10 @@ describe("error handler", () => {
     app.get("/cast", async () => {
       await UserModel.findById("not-an-id");
     });
+    app.post("/duplicate", async () => {
+      await UserModel.create({ name: "Twin", email: "twin@dup.ng", password: "x" });
+      await UserModel.create({ name: "Twin", email: "twin@dup.ng", password: "x" });
+    });
     app.post("/upload", multer().single("file"), (_req, res) => void res.json({ ok: true }));
     app.use(errorHandler);
     server = await new Promise((resolve) => {
@@ -210,6 +214,14 @@ describe("error handler", () => {
     const res = await fetch(`${url}/cast`);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "Invalid id" });
+  });
+
+  test("a duplicate key names the field but never echoes the value", async () => {
+    const res = await fetch(`${url}/duplicate`, { method: "POST" });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body).toEqual({ error: "Duplicate key", fields: ["email"] });
+    expect(JSON.stringify(body)).not.toContain("twin@dup.ng");
   });
 
   test("an upload in the wrong field is a 400, not a 500", async () => {

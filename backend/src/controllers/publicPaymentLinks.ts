@@ -1,4 +1,5 @@
 import type { RequestHandler } from "express";
+import { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
 import { DONATION_LIMITS, EMBED_LIMITS, LINK_REPORT_LIMITS, LINK_REPORT_REASON_KEYS, PAYMENT_LINK_LIMITS } from "../config/paymentLinks";
 import { DONATION_SORTS, listPublicDonations, publicDonationProgress, reportLink } from "../services/donations";
@@ -44,14 +45,18 @@ function describeBusiness(business: BusinessDocument, slug: string) {
   };
 }
 
-/** The payer's view of a checkout: what to send, where, and whether it has arrived. */
+/**
+ * The payer's view of a checkout: what to send, where, and whether it has arrived. The business's server
+ * also confirms a payment with this (GET checkouts/:token): it must check `status`, `mode`, `link.slug`,
+ * `priceKobo`/`paidKobo`, `currency` and `clientReference` against its own order (see `embedSnippets`).
+ */
 async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDocument, business: BusinessDocument) {
   const status = checkoutStatus(checkout);
   const received = status === "paid" || status === "underpaid";
-  // Only while waiting for the money, and never for a business that's been suspended since. Test checkouts
-  // show placeholder details, never the branch's real account.
+  // Only while waiting for the money, and never for a business that's been suspended since or a link LinkPay
+  // has taken down. Test checkouts show placeholder details, never the branch's real account.
   const test = checkout.mode === "test";
-  const waiting = checkout.status === "pending" && !isRestricted(business);
+  const waiting = checkout.status === "pending" && !isRestricted(business) && !link.takenDown?.at;
   const account =
     waiting && !test && checkout.virtualAccount
       ? await VirtualAccountModel.findById(checkout.virtualAccount).select("accountNumber accountName bankName")
@@ -229,6 +234,8 @@ export const startPublicCheckout: RequestHandler<SlugParams> = async (req, res) 
       embedOrigin: z.string().trim().max(200).optional(),
       clientReference: clientReference.optional(),
       metadata: metadata.optional(),
+      // A random key the pay page keeps for this browser: only the same key gets an open checkout back.
+      resumeKey: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
       // Donation links only: hide my name on the page, and my words of support.
       anonymous: z.boolean().optional(),
       message: z.string().trim().max(DONATION_LIMITS.maxMessageLength, `Keep your message under ${DONATION_LIMITS.maxMessageLength} characters`).optional(),
@@ -236,6 +243,8 @@ export const startPublicCheckout: RequestHandler<SlugParams> = async (req, res) 
     .parse(req.body);
   const { link, business } = await findPublicLink(req.params.slug);
   // The browser enforces frame-ancestors; this stops another site starting checkouts it isn't allowed to show.
+  // `embedOrigin` is what the page says it's embedded in, so it's advisory: a record for the business, never
+  // proof of which website a payment came from.
   let embedOrigin: string | undefined;
   if (body.source === "embed") {
     if (!originAllowed(link.allowedOrigins ?? [], body.embedOrigin)) {
@@ -279,7 +288,15 @@ export const startPublicCheckout: RequestHandler<SlugParams> = async (req, res) 
       ...(link.kind === "donation" && { donor: { anonymous: !!body.anonymous, message: body.message || undefined } }),
     },
     priceKobo,
-    { source: body.source, embedOrigin, clientReference: body.clientReference, metadata: body.metadata },
+    {
+      source: body.source,
+      embedOrigin,
+      clientReference: body.clientReference,
+      metadata: body.metadata,
+      // The payer's address (the web forwards it), with IPv6 grouped by /56 like the rate limits.
+      clientIp: req.ip ? ipKeyGenerator(req.ip) : undefined,
+      resumeKey: body.resumeKey,
+    },
   );
   res.status(reused ? 200 : 201).setHeader("Cache-Control", "private, no-store").json(await describeCheckout(checkout, link, business));
 };
@@ -303,7 +320,8 @@ export const getPublicCheckout: RequestHandler<TokenParams> = async (req, res) =
 
 /**
  * Test mode only: the payer (usually the business trying its own page or website) pays the checkout with a
- * simulated transfer. `{ outcome: "paid" | "underpaid" }`. 409 `CHECKOUT_IS_LIVE` on a live checkout.
+ * simulated transfer. `{ outcome: "paid" | "underpaid" }`. 409 `CHECKOUT_IS_LIVE` on a live checkout. No
+ * receipt email: anyone can start a test checkout with anyone's email.
  */
 export const simulatePublicCheckout: RequestHandler<TokenParams> = async (req, res) => {
   const body = z.object({ outcome: z.enum(["paid", "underpaid"]).default("paid") }).parse(req.body ?? {});
@@ -312,7 +330,7 @@ export const simulatePublicCheckout: RequestHandler<TokenParams> = async (req, r
   const checkout = await CheckoutModel.findOne({ token: req.params.token });
   if (!checkout) throw notFound;
   const [link, business] = await Promise.all([PaymentLinkModel.findById(checkout.link), BusinessModel.findById(checkout.business)]);
-  if (!link || !business || isRestricted(business)) throw notFound;
+  if (!link || !business || isRestricted(business) || link.takenDown?.at) throw notFound;
   const settled = await simulateCheckoutPayment(checkout, body.outcome);
   res.setHeader("Cache-Control", "private, no-store").json(await describeCheckout(settled, link, business));
 };

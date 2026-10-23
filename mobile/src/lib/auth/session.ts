@@ -12,7 +12,8 @@ let inFlight: Promise<string> | null = null;
 // Bumped by forgetSession, so a refresh that lands after a sign-out can't put the session back.
 let generation = 0;
 
-export type SessionEndReason = "expired" | "revoked" | "signedOut" | "tooManyAttempts";
+// passwordSet: an account with no password set one from the app, which ends every session, this phone's too.
+export type SessionEndReason = "expired" | "revoked" | "signedOut" | "tooManyAttempts" | "passwordSet";
 let onSessionEnded: (reason: SessionEndReason) => void = () => {};
 export const setSessionEndedHandler = (fn: typeof onSessionEnded) => void (onSessionEnded = fn);
 

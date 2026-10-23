@@ -33,8 +33,9 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   if (err instanceof mongoose.Error.ValidationError) {
     return res.status(400).json({ error: "Validation failed", details: err.errors });
   }
+  // Only the field names: the values (someone's email, say) would echo data back to whoever caused the clash.
   if (err?.code === 11000) {
-    return res.status(409).json({ error: "Duplicate key", fields: err.keyValue });
+    return res.status(409).json({ error: "Duplicate key", fields: Object.keys(err.keyPattern ?? err.keyValue ?? {}) });
   }
   // A malformed id that reached a query (e.g. a filter in the query string).
   if (err instanceof mongoose.Error.CastError) {

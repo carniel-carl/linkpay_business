@@ -8,6 +8,7 @@ import {
 } from "../controllers/safelocks";
 import { requireAuth } from "../middleware/auth";
 import { requireApprovedBusiness, requirePermission } from "../middleware/roles";
+import { requireTransactionPin } from "../middleware/transactionPin";
 
 export const safelocksRouter = Router();
 
@@ -19,6 +20,7 @@ const manage = requirePermission("savings.manage");
 // There's deliberately no way to break, top up or shorten a lock.
 safelocksRouter.get("/limits", view, getSafelockLimits);
 safelocksRouter.get("/", view, listSafelocks);
-safelocksRouter.post("/", manage, createSafelockHandler);
+// A lock can't be undone for up to 1,000 days, so making one needs the transaction PIN.
+safelocksRouter.post("/", manage, requireTransactionPin, createSafelockHandler);
 safelocksRouter.get("/:id", view, getSafelock);
 safelocksRouter.patch("/:id", manage, updateSafelock);

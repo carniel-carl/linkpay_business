@@ -2,12 +2,13 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
 import { api, MONEY_TIMEOUT_MS } from "./client";
+import { idSegment } from "./paths";
 import type { Pocket, PocketActivity, PocketColor, PocketIcon, PocketList, PocketMovement } from "./types";
 
 // /api/pockets (docs/briefs/savings.md). Reads need accounts.view; every write needs savings.manage.
 
 const useBusinessKey = () => useBusinessContext((s) => s.businessId ?? "default");
-const path = (id: string, rest = "") => `/api/pockets/${encodeURIComponent(id)}${rest}`;
+const path = (id: string, rest = "") => `/api/pockets/${idSegment(id)}${rest}`;
 
 export type PocketStatusFilter = "active" | "closed";
 

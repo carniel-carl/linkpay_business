@@ -19,6 +19,7 @@ export default function MoreLayout() {
       <Stack.Screen name="switch-business" options={{ title: "Switch business" }} />
       <Stack.Screen name="profile" options={{ title: "Profile" }} />
       <Stack.Screen name="security" options={{ title: "Two-step verification" }} />
+      <Stack.Screen name="password" options={{ title: "Password" }} />
       <Stack.Screen name="totp" options={{ title: "Authenticator app" }} />
       <Stack.Screen name="help" options={{ title: "Help" }} />
       <Stack.Screen

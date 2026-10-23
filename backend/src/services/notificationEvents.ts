@@ -76,6 +76,7 @@ export async function transfersDecided(business: BizRef, transfers: TransferDocu
             data: transferData(group),
           },
       business,
+      { branch: group[0]!.branch },
     );
   }
 }
@@ -101,6 +102,7 @@ export async function transferSettled(transfer: TransferDocument) {
           data: transferData([transfer]),
         },
     business,
+    { branch: transfer.branch },
   );
 }
 
@@ -173,6 +175,7 @@ export async function paymentLinkPaid(
       data: { paymentLinkId: String(link._id), checkoutId: String(checkout._id), branchId: String(link.branch), mode: test ? "test" : "live" },
     },
     business,
+    { branch: link.branch },
   );
 }
 
@@ -217,7 +220,8 @@ export async function safelockReleased(
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Invoices: the person who created it, plus anyone who manages invoices for that branch.
+// Invoices: the person who created it, plus anyone who manages invoices for that branch. The creator only
+// while they're still on the team and can see the branch (notifyUsers checks).
 // ---------------------------------------------------------------------------------------------------------
 
 async function invoiceTeam(business: BusinessLike, invoice: InvoiceDocument) {
@@ -237,6 +241,7 @@ export async function invoiceViewed(business: BizRef, invoice: InvoiceDocument) 
       data: invoiceData(invoice),
     },
     business,
+    { branch: invoice.branch },
   );
 }
 
@@ -251,6 +256,7 @@ export async function invoicePaymentReceived(business: BusinessLike, invoice: In
       data: invoiceData(invoice),
     },
     business,
+    { branch: invoice.branch },
   );
 }
 
@@ -265,6 +271,7 @@ export async function invoicePaid(business: BusinessLike, invoice: InvoiceDocume
       data: invoiceData(invoice),
     },
     business,
+    { branch: invoice.branch },
   );
 }
 
@@ -279,6 +286,7 @@ export async function invoiceOverdue(business: BusinessLike, invoice: InvoiceDoc
       data: invoiceData(invoice),
     },
     business,
+    { branch: invoice.branch },
   );
 }
 
@@ -371,7 +379,13 @@ export async function teamRoleChanged(business: BusinessLike, userId: Id, role: 
 }
 
 export async function teamMemberRemoved(business: BusinessLike, userId: Id) {
-  await notifyUsers([userId], { type: "team.removed", title: "Removed from a team", body: `You no longer have access to ${business.name}.` }, business);
+  // They're no longer on the team, which is the point.
+  await notifyUsers(
+    [userId],
+    { type: "team.removed", title: "Removed from a team", body: `You no longer have access to ${business.name}.` },
+    business,
+    { formerMembers: true },
+  );
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -508,5 +522,6 @@ export async function paymentLinkModerated(
           data: { paymentLinkId: String(link._id), branchId: String(link.branch) },
         },
     business,
+    { branch: link.branch },
   );
 }

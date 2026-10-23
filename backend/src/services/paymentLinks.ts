@@ -1,4 +1,4 @@
-import { randomBytes, randomInt } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import type { Types } from "mongoose";
 import { env } from "../config/env";
 import { CHECKOUT_RULES } from "../config/paymentLinks";
@@ -145,8 +145,11 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
       `    clientReference: "ORDER-1234", // your order id (optional)`,
       `    email: "customer@example.com", // prefills the form (optional)`,
       `    onSuccess: (checkout) => {`,
-      `      // Confirm on your server: GET ${env.apiPublicUrl}/api/public/checkouts/\${checkout.token}`,
-      `      // and check status "paid" and mode "live" (test payments move no money).`,
+      `      // Anyone can hand your page a checkout, so don't fulfil from here. Send checkout.token to your server,`,
+      `      // GET ${env.apiPublicUrl}/api/public/checkouts/<token> there, and fulfil only if status is "paid",`,
+      `      // mode is "live" (test payments move no money), link.slug is "${link.slug}", currency is "NGN",`,
+      `      // priceKobo is your order total in kobo (paidKobo is at least that) and clientReference is your order`,
+      `      // id. Then mark the order paid, so the same checkout can't be used twice.`,
       `    },`,
       `    onClose: () => {},`,
       `  });`,
@@ -193,13 +196,42 @@ export type CheckoutContext = {
   embedOrigin?: string;
   clientReference?: string;
   metadata?: Record<string, string>;
+  /** The payer's address as a rate-limit key (IPv4, or the IPv6 /56), for the caps on open checkouts. */
+  clientIp?: string;
+  /** A random key the payer's browser keeps; only the same key gets an open checkout back. */
+  resumeKey?: string;
 };
 
 const isDuplicateOn = (err: any, field: string) => err?.code === 11000 && Object.keys(err.keyPattern ?? err.keyValue ?? {}).includes(field);
 
+const hashResumeKey = (key: string) => createHash("sha256").update(key).digest("hex");
+
+/** Whether an open checkout holds exactly what this start asks for, so handing it back changes nothing. */
+function sameDetails(
+  c: CheckoutDocument,
+  person: Omit<PayerInput, "donor">,
+  donor: PayerInput["donor"],
+  extras: { source: string; embedOrigin?: string; metadata?: Record<string, string> },
+) {
+  const p = c.payer!;
+  const fields = (list: { label?: string | null; value?: string | null }[]) => JSON.stringify(list.map((f) => [f.label, f.value]));
+  const metadata = (m?: Record<string, string>) => JSON.stringify(Object.entries(m ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+  return (
+    p.name === person.name &&
+    (p.phone ?? null) === (person.phone ?? null) &&
+    fields(p.fields ?? []) === fields(person.fields) &&
+    !!c.donor?.anonymous === !!donor?.anonymous &&
+    (c.donor?.message ?? null) === (donor?.message ?? null) &&
+    (c.source ?? "page") === extras.source &&
+    (c.embedOrigin ?? null) === (extras.embedOrigin ?? null) &&
+    metadata(c.metadata ? Object.fromEntries(c.metadata) : undefined) === metadata(extras.metadata)
+  );
+}
+
 /**
  * Starts a checkout for `priceKobo`: picks a free unique amount on the branch's account (the price plus 1..99
- * kobo) and reserves it. A payer who already has an open checkout for the same price gets that one back.
+ * kobo) and reserves it. A payer who already has an open checkout for the same price gets that one back, but
+ * only from the same browser (`resumeKey`) and with the same details: an open checkout is never changed.
  * On a test link the checkout has no account and reserves nothing (see `testPayTo`).
  */
 export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput, priceKobo: number, context: CheckoutContext = {}) {
@@ -214,36 +246,41 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
     clientReference: context.clientReference || undefined,
     metadata: context.metadata && Object.keys(context.metadata).length ? context.metadata : undefined,
   };
-
-  // Same person, same price, same order (if the website sent one), with at least 5 minutes left: give them
-  // the same account details again. A different order reference is a different payment.
-  const open = await CheckoutModel.findOne({
-    link: link._id,
-    "payer.email": payer.email.toLowerCase(),
-    priceKobo,
-    clientReference: extras.clientReference ?? null,
-    // A link that has gone live never hands back a test checkout (or the other way round).
-    mode: test ? "test" : { $ne: "test" },
-    status: "pending",
-    expiresAt: { $gt: new Date(now.getTime() + 5 * MINUTE) },
-  }).sort({ createdAt: -1 });
   const { donor, ...person } = payer;
-  if (open) {
-    open.set("payer", { ...person, email: person.email.toLowerCase() });
-    if (donor) open.set("donor", donor);
-    open.set({ source: extras.source, embedOrigin: extras.embedOrigin, metadata: extras.metadata });
-    await open.save();
-    return { checkout: open, reused: true };
+  const email = person.email.toLowerCase();
+  const resumeKeyHash = context.resumeKey ? hashResumeKey(context.resumeKey) : undefined;
+
+  // Same browser, same person, same price, same order (if the website sent one), with at least 5 minutes
+  // left: give them the same account details again. Anyone else (who may only know the payer's email), or
+  // the same payer with changed details, gets a checkout of their own; the open one is left as it is.
+  if (resumeKeyHash) {
+    const open = await CheckoutModel.find({
+      link: link._id,
+      "payer.email": email,
+      priceKobo,
+      clientReference: extras.clientReference ?? null,
+      resumeKeyHash,
+      // A link that has gone live never hands back a test checkout (or the other way round).
+      mode: test ? "test" : { $ne: "test" },
+      status: "pending",
+      expiresAt: { $gt: new Date(now.getTime() + 5 * MINUTE) },
+    })
+      .sort({ createdAt: -1 })
+      .limit(5);
+    const same = open.find((c) => sameDetails(c, person, donor, extras));
+    if (same) return { checkout: same, reused: true };
   }
 
   const fields = {
     business: link.business,
     branch: link.branch,
     link: link._id,
-    payer: person,
+    payer: { ...person, email },
     ...(donor && { donor }),
     priceKobo,
     ...extras,
+    ...(context.clientIp && { clientIp: context.clientIp }),
+    ...(resumeKeyHash && { resumeKeyHash }),
     expiresAt: new Date(now.getTime() + CHECKOUT_RULES.payWithinMinutes * MINUTE),
     holdUntil: new Date(now.getTime() + CHECKOUT_RULES.amountHoldMinutes * MINUTE),
   };
@@ -262,12 +299,36 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
     }
   }
 
+  // A payment limit counts the payers still within their time to pay, so the last places can't be sold twice.
+  const placesTaken = async (upTo?: Types.ObjectId) =>
+    link.paymentsCount +
+    (await CheckoutModel.countDocuments({
+      link: link._id,
+      mode: { $ne: "test" },
+      status: "pending",
+      expiresAt: { $gt: now },
+      ...(upTo && { _id: { $lte: upTo } }),
+    }));
+  const placesBusy = () =>
+    new HttpError(503, "The last places are being paid for right now. Please try again in a few minutes.", "CHECKOUT_BUSY", { reason: "places_held" });
+  if (link.maxPayments && (await placesTaken()) >= link.maxPayments) throw placesBusy();
+
   await releaseHolds(now);
   const reserved = await CheckoutModel.find({
     virtualAccount: account._id,
     amountReserved: true,
     amountKobo: { $gt: priceKobo, $lte: priceKobo + CHECKOUT_RULES.maxOffsetKobo },
-  }).select("amountKobo");
+  }).select("amountKobo clientIp payer.email");
+  // No one address or email can hold more than a slice of the amounts for this price.
+  const heldByIp = context.clientIp ? reserved.filter((c) => c.clientIp === context.clientIp).length : 0;
+  const heldByEmail = reserved.filter((c) => c.payer?.email === email).length;
+  if (heldByIp >= CHECKOUT_RULES.maxOpenPerIp || heldByEmail >= CHECKOUT_RULES.maxOpenPerEmail) {
+    throw new HttpError(
+      429,
+      "You've started several payments that are still waiting. Pay one of them, or try again later.",
+      "TOO_MANY_OPEN_CHECKOUTS",
+    );
+  }
   const taken = new Set(reserved.map((c) => c.amountKobo - priceKobo));
   const free = Array.from({ length: CHECKOUT_RULES.maxOffsetKobo }, (_, i) => i + 1).filter((o) => !taken.has(o));
   // Random order, so the amounts don't hint at how many people are paying.
@@ -288,6 +349,11 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
           amountKobo: priceKobo + offset,
           amountReserved: true,
         });
+        // Two payers who started at the same moment for the last place: the later one steps back.
+        if (link.maxPayments && (await placesTaken(checkout._id)) > link.maxPayments) {
+          await CheckoutModel.deleteOne({ _id: checkout._id });
+          throw placesBusy();
+        }
         return { checkout, reused: false };
       } catch (err) {
         // Someone else took this amount a moment ago: try the next one.
@@ -310,9 +376,15 @@ type Payment = { _id?: Types.ObjectId; amountKobo: number; occurredAt: Date };
 
 /**
  * Marks the checkout as paid by `tx`, updates the link's totals (live payments only), and tells the team and
- * the payer. Returns null when the checkout was no longer pending.
+ * (unless `receipt` is false) the payer. Returns null when the checkout was no longer pending.
  */
-async function settleCheckout(checkoutId: Types.ObjectId, tx: Payment, matchedBy: "amount" | "reference" | "manual" | "simulated", userId?: string) {
+async function settleCheckout(
+  checkoutId: Types.ObjectId,
+  tx: Payment,
+  matchedBy: "amount" | "reference" | "manual" | "simulated",
+  userId?: string,
+  { receipt = true }: { receipt?: boolean } = {},
+) {
   const current = await CheckoutModel.findById(checkoutId).select("priceKobo link");
   if (!current) return null;
   const kind = (await PaymentLinkModel.findById(current.link).select("kind"))?.kind;
@@ -346,7 +418,7 @@ async function settleCheckout(checkoutId: Types.ObjectId, tx: Payment, matchedBy
   const business = await BusinessModel.findById(checkout.business);
   if (link && business) {
     await paymentLinkPaid(business, link, checkout);
-    if (checkout.status === "paid") {
+    if (checkout.status === "paid" && receipt) {
       try {
         await sendPaymentLinkReceiptEmail(checkout.payer!.email, {
           brand: linkBrand(business, link),
@@ -463,16 +535,18 @@ export async function linkTransactionToCheckout(checkout: CheckoutDocument, tran
 
 /**
  * Test mode: pays a test checkout as if the transfer had arrived, with the exact amount (`paid`) or half the
- * price (`underpaid`, as if the payer sent too little and named the reference). Same notification and
- * receipt as a live payment, marked as a test. A pending checkout past its time can still be paid, like a
- * late transfer.
+ * price (`underpaid`, as if the payer sent too little and named the reference). Same notification as a live
+ * payment, marked as a test. A pending checkout past its time can still be paid, like a late transfer.
+ *
+ * The payer's (test) receipt goes only when a team member simulates it (`userId`). From the public page anyone
+ * can start a test checkout with any email and pay it, so that would send our email to whoever they chose.
  */
 export async function simulateCheckoutPayment(checkout: CheckoutDocument, outcome: "paid" | "underpaid", userId?: string) {
   if (checkout.mode !== "test") throw new HttpError(409, "Only test checkouts can be paid with a simulated payment", "CHECKOUT_IS_LIVE");
   const notPending = new HttpError(409, "This checkout has already been paid", "CHECKOUT_NOT_PENDING");
   if (checkout.status !== "pending") throw notPending;
   const amountKobo = outcome === "paid" ? checkout.amountKobo : Math.floor(checkout.priceKobo / 2);
-  const settled = await settleCheckout(checkout._id, { amountKobo, occurredAt: new Date() }, "simulated", userId);
+  const settled = await settleCheckout(checkout._id, { amountKobo, occurredAt: new Date() }, "simulated", userId, { receipt: !!userId });
   if (!settled) throw notPending;
   return settled;
 }

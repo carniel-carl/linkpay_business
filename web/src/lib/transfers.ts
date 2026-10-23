@@ -129,5 +129,11 @@ export function formatNairaInput(input: string): string {
   return `${grouped || "0"}.${text.slice(dot + 1).replace(/\./g, "").slice(0, 2)}`
 }
 
+/** Rows per call when a bulk transfer is checked before sending (name enquiries and fees). */
+export const BULK_CHECK_SLICE = 10
+
+/** The most one transfer can send (the API's limit per transfer, also per bulk row). */
+export const MAX_TRANSFER_KOBO = 100_000_000_00
+
 /** 123456 -> "1234.56", for putting a kobo amount back into an input. */
 export const koboToInput = (kobo: number) => `${Math.trunc(kobo / 100)}.${String(kobo % 100).padStart(2, "0")}`

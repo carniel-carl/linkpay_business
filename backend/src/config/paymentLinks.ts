@@ -38,6 +38,13 @@ export const CHECKOUT_RULES = {
   referenceMatchDays: 7,
   /** Kobo added to the price to make the amount unique: 1..99. */
   maxOffsetKobo: 99,
+  /**
+   * The most of one account's amounts for a price (its 99) that one address (an IPv4 address or an IPv6 /56)
+   * or one payer email can hold at a time with unpaid live checkouts, so nobody can take the whole pool.
+   * Paying a checkout frees its amount.
+   */
+  maxOpenPerIp: 10,
+  maxOpenPerEmail: 3,
 } as const;
 
 // Embedding a link on the business's own website (contract: docs/briefs/payment-links.md §5).

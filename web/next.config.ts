@@ -1,8 +1,28 @@
 import type { NextConfig } from "next"
 
+// Sent with every response. No Content-Security-Policy beyond frame-ancestors: a strict script policy needs a
+// per-request nonce on every page (Next's own inline scripts included), which this app doesn't render yet.
+const SECURITY_HEADERS = [
+  // Not includeSubDomains: other hosts on the domain aren't ours to commit to HTTPS. Ignored over plain http (dev).
+  { key: "Strict-Transport-Security", value: "max-age=31536000" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  // Tokens live in some paths and queries (/i/<token>, /pay/<slug>?checkout=<token>): other sites get the origin only.
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+]
+
+// Nothing here may be shown in a frame, except the payment-link pages: src/proxy.ts gives every /pay/ path its
+// own frame-ancestors (the link's allowed websites). /embed.js is a script, so framing rules don't apply to it.
+const NO_FRAMING = [
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "X-Frame-Options", value: "DENY" },
+]
+
 const nextConfig: NextConfig = {
   async headers() {
     return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      { source: "/", headers: NO_FRAMING },
+      { source: "/:path((?!pay/).*)", headers: NO_FRAMING },
       // The payment-link script on businesses' websites: short cache so fixes reach them quickly.
       { source: "/embed.js", headers: [{ key: "Cache-Control", value: "public, max-age=300, must-revalidate" }] },
     ]
