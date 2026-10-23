@@ -67,6 +67,7 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | `PUSH_PROVIDER`, `EXPO_ACCESS_TOKEN` | Phone pushes. Unset, they print to the console (`📱 Push to ...`); `expo` sends them through Expo's push service (the access token only if the Expo project requires one). |
 | `ADMIN_APP_URL` | Public URL of the admin console (`admin/`), used in staff invite links (`ADMIN_APP_URL/invite/<token>`). Default `http://localhost:3001`. |
 | `API_URL`, `TRUST_PROXY` | `API_URL`: the API's public URL, shown to businesses in payment-link embed code (where their server confirms a payment). `TRUST_PROXY`: proxies whose `X-Forwarded-For` is believed for rate limits (Express "trust proxy", default `loopback`). Set it to a comma-separated list of the web and admin servers' addresses, as the API sees them, plus any load balancer in front of the API; otherwise every visitor shares one limit. `true` or a hop count is refused at startup. If the web runs on a host without fixed outgoing IPs (e.g. Vercel), this can't be set yet: that needs static outgoing IPs or a shared-secret header, which isn't built. Auth routes also limit failed requests per account (10 per 15 minutes) across all IPs. |
+| `ENCRYPTION_REQUIRE_V2` | Set it to `1` once `bun run migrate:encryption --apply` reports nothing left in the old format. From then on, an encrypted value without the `v2:` record binding is refused, and startup logs which mode is on. |
 | `LIQUIFIA_WEBHOOK_SECRET` | Verifies Liquifia webhooks. Until it's set, `POST /api/webhooks/liquifia` returns 503 and incoming payments arrive through the periodic sync only. |
 | `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia (default 60000; 0 turns it off). |
 
@@ -82,7 +83,7 @@ bun dev              # http://localhost:3000
 ```bash
 cd backend && bun run dev:mock    # API on :4000 with in-memory MongoDB + mock Liquifia (never reads backend/.env)
 cd backend && bun run dev:seed   # (same as dev:mock --seed) plus a verified demo business with payments and six invoices (scripts/dev-seed.ts): demo@linkpay.test / password123; staff staff@linkpay.test / password123
-cd mobile && bunx expo run:ios     # development build on the simulator; or run:android
+cd mobile && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 bunx expo run:ios     # development build on the simulator; or run:android. CocoaPods fails with "Unicode Normalization not appropriate for ASCII-8BIT" without a UTF-8 LANG
 ```
 `mobile/.env.example` lists the `EXPO_PUBLIC_*` settings. Screenshots are blocked in the app unless `EXPO_PUBLIC_ALLOW_SCREEN_CAPTURE=1` (development only).
 
@@ -100,7 +101,7 @@ cd mobile && bunx expo run:ios     # development build on the simulator; or run:
 | Express app, MongoDB, error handling | ✅ | `src/app.ts`, `src/config/`, `src/middleware/errorHandler.ts` |
 | Auth: register, email verification, password sign-in, passwordless email-code sign-in | ✅ | `src/controllers/auth.ts` |
 | 2FA: authenticator app (TOTP) or email code; challenge-token login step | ✅ | `src/services/totp.ts`, `src/services/otp.ts` |
-| Rate limiting on auth routes (30 per 15 min per IP; off when `NODE_ENV=test`) | ✅ | `src/routes/auth.ts` |
+| Rate limiting: per IP plus failed requests per account on auth, password and staff sign-in, and on public checkout, invites, transaction PIN and bulk lookups. Counts live in MongoDB (`RateLimitHit`, TTL index), so they hold across instances and restarts. If that store fails, limits fail open and the failure is logged once. Limited responses are JSON `{ code: "RATE_LIMITED" }`. Off in tests unless enabled | ✅ | `src/middleware/{rateLimits,rateLimitStore}.ts`, `src/models/RateLimitHit.ts` |
 | Device sessions (mobile): sign-ins that send `device` get a 15-minute access token tied to a `Session` plus a rotating refresh token (hash stored; reuse of an old token revokes the session; one 30-second grace retry for a dropped response; 30-day idle, 90-day absolute expiry). Refresh, logout, list, revoke one, revoke others. `requireAuth` rejects tokens of revoked sessions (`SESSION_REVOKED`). Web sign-ins (no `device`) are unchanged | ✅ | `src/models/Session.ts`, `src/services/sessions.ts`, `src/middleware/auth.ts`, `tests/sessions.test.ts` |
 | Biometric sign-in (mobile): sign-ins may send `device.installationId`; a signed-in phone can get a biometric key (`POST /auth/biometric`, secret returned once, hash stored, one live key per user and installation, 60-day idle and 180-day absolute expiry); `POST /auth/biometric/login` opens a new device session for that installation with no 2FA step (the key was made inside a session that passed it, and needs the phone plus its enrolled biometrics). Ended by `DELETE /auth/biometric`, `logout` with `forgetDevice`, signing that device out remotely, "sign out other devices" (also phones already signed out) and refresh-token reuse. A plain logout keeps it | ✅ | `src/models/BiometricKey.ts`, `src/services/biometricKeys.ts`, `tests/biometric.test.ts` |
 | Business onboarding: profile, people (BVN encrypted), document upload, checklist, submit | ✅ | `src/controllers/business.ts`, `src/services/kyb.ts`, `src/config/kyb.ts` |
@@ -257,6 +258,10 @@ The business statuses are `draft → submitted → approved | rejected`, with `c
 - **A BVN isn't required** (confirmed by the product owner, 2026-10-20). The first principal's BVN (a director, owner, partner or trustee) is sent only with the business's own customer (the head office); branch customers are created without one, so a BVN is never sent on several customers.
 - **Payouts:** requests and fee quotes are in naira (`toNaira()`/`toKobo()` in the client). The fee quote (`GET /payouts/fee?amount=`) was checked read-only on the live API: a flat ₦20 plus ₦50 stamp duty from ₦10,000, and `fee` already includes the stamp duty. Payout statuses are `pending`, `processing`, `success`, `failed`. Money amounts in payout *responses* are never read (the docs disagree on their unit). No live payout has been sent yet; the first one will confirm the response shape (`provider.data` keeps it).
 - The virtual account's response fields (`id`, `account_number`, `account_name`, `bank_name`) were taken from the docs and are not yet confirmed against a live response. The raw response is saved in `VirtualAccount.providerData` for checking.
+- **Unexpected Liquifia responses (2026-10-23):** these are errors, never "nothing there":
+  - The payout trace returns "no payout" only for Liquifia's own JSON 404. Payouts and balances are checked for id, status and reference.
+  - A malformed balance throws. It used to become `NaN`, which let the available-balance check pass.
+  - The bank list and customer lookups no longer turn an odd answer into an empty list.
 - **Sending payouts safely (2026-10-23):**
   - **Claim and lease:** a transfer is claimed with a 5-minute lease (`provider.submittingUntil`) before anything is sent. The create request, approvals, the sweep, webhooks and `/refresh` can all try, but only the caller holding the claim sends. Every status change is conditional on `status: "processing"`.
   - **Retries:** from the second attempt on, the payout is looked up first with `GET /payouts/{reference}/trace` (`liquifia.findPayoutByReference`, where a 404 means none). After an earlier attempt's outcome was unknown, a 4xx fails the transfer only if that lookup finds no payout. This lookup also covers Liquifia keeping idempotency keys for only 24 hours.
@@ -582,3 +587,49 @@ Add a line per session: date, what was done, and anything left half-finished.
     4. Ship the admin app together with the backend, because of the new `activity.view_ips` permission and the audit labels.
     5. Have the proxy in front of web and admin send `X-Forwarded-Proto: https` (for `upgrade-insecure-requests`). Pages are now rendered per request, so don't cache them on a CDN. Optionally roll the CSP out with `CSP_REPORT_ONLY=1` first.
   - **Left:** see the audit's batch 4 "Still open" list.
+
+- **2026-10-23 (batch 5, follow-ups and hands-on QA):** on branch `fix/audit-batch-5`. Backend: 488/488 tests pass. Web, admin and mobile: typecheck, lint and build are clean.
+  - **Backend:**
+    - Single and bulk sends check for an Idempotency-Key replay before any Liquifia call, so a retry during a bank outage replays.
+    - Startup settles stale pocket movements.
+    - The staff CLI writes audit entries (new `staff.added`).
+    - `ENCRYPTION_REQUIRE_V2`.
+    - Mongo-backed rate limits.
+    - Unexpected Liquifia response shapes raise errors. That fixed a malformed balance passing the balance check.
+    - A KYB document opened again by the same staff member within 5 minutes is audited only once.
+    - `bun audit fix`: backend, web and admin now have no advisories.
+  - **Web and admin QA:** clicked through signed in, in a browser, against `dev:seed`. No CSP violations. Fixed:
+    - removing a member and resending an invite hung (a PIN dialog inside a transition);
+    - sign-out and session-expiry redirects used the server's own address (`localhost:3000`) behind a proxy, and are now relative;
+    - test-mode pay copy promised a receipt.
+
+    Added `/api/csp-report` (web and admin): accepts `application/csp-report` and `reports+json`, 16 KB cap, 10 reports per request, rate-limited in memory, one redacted log line per report. The CSP now carries `report-uri`/`report-to` plus `Reporting-Endpoints`.
+  - **Mobile QA:** the development build ran on the iOS simulator (iPhone 17 Pro) against `dev:seed`, and every new flow passed. Fixed:
+    - the PIN sheet was drawn under the status bar;
+    - a "PIN saved" step when set-up succeeds but the action fails;
+    - pull-to-refresh stuck open after a background refetch (`usePullToRefresh`, 17 screens);
+    - the sign-in email was blank after a password reset;
+    - `unstable_settings.initialRouteName` replaced with `anchor`.
+
+    The app passcode is 4 digits.
+  - **Still per instance** (fine on one instance; needs work before running several):
+    - the SSE notification bus and its 10-streams-per-person cap;
+    - the payment-link live-stream bus and its caps;
+    - the resolve-accounts, bank and fee caches;
+    - the inbound-sync single-flight, follow-up queue and 30 s throttle;
+    - the single-flight guards on transfer follow-ups, risk checks and Safelock releases. Every instance runs every job; conditional writes keep that safe, but the work is duplicated.
+  - **Before deploying batch 5:**
+    1. Make sure the `ratelimithits` indexes build. Limits start from zero once, at this deploy.
+    2. Each limited request now costs one Mongo write.
+    3. Alert on the "rate limit store unavailable" log line, because limits fail open while it's down.
+    4. Ship admin with the backend (the new `staff.added` label).
+    5. After `migrate:encryption --apply` reports nothing left in the old format, set `ENCRYPTION_REQUIRE_V2=1` on every instance.
+    6. Optionally watch `/api/csp-report` logs while running `CSP_REPORT_ONLY=1`.
+  - **Left:**
+    - Mobile still has 3 build-tool advisories with no fix in range.
+    - The reset and verify pages carry the email in the URL query.
+    - The sign-in page can show "Your session ended" next to a wrong-password error.
+    - The mobile "Forgot PIN" goes to the More tab without coming back.
+    - `validateAccount` treats a 200 with no name as `ACCOUNT_NOT_FOUND`.
+    - About 88 CoreGraphics NaN warnings on mobile, probably an SVG drawn with empty data.
+    - Admin's `start` script hardcodes port 3001.
