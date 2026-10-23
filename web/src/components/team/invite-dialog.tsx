@@ -21,8 +21,10 @@ import {
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import type { BranchRef, RoleInfo, RolesResponse } from "@/lib/api/types"
 import { applyResult } from "@/lib/forms"
+import { roleLabel } from "@/lib/permissions"
 import { inviteSchema, type InviteValues } from "@/lib/schemas"
 import { AccessFields } from "./access-fields"
 
@@ -40,10 +42,15 @@ export function InviteDialog({ roles, catalog, branches, adminHidden }: Props) {
   const defaults = (): InviteValues => ({ email: "", role: roles.at(-1)?.role ?? "", allBranches: true, branches: [] })
   const form = useForm<InviteValues>({ resolver: zodResolver(inviteSchema), defaultValues: defaults() })
   const { isSubmitting, errors } = form.formState
+  const pin = useTransactionPin()
 
   async function onSubmit(values: InviteValues) {
-    const result = await inviteMember(values)
-    if (!applyResult(form, result)) return
+    const result = await pin.confirm({
+      purpose: `invite ${values.email} as ${roleLabel(values.role, roles)}`,
+      confirmLabel: "Send invite",
+      run: (transactionPin) => inviteMember(values, transactionPin),
+    })
+    if (!result || !applyResult(form, result)) return
     setOpen(false)
     form.reset(defaults())
     toast.success(`Invite sent to ${result.data.email}. The link works for 7 days.`)
@@ -115,6 +122,7 @@ export function InviteDialog({ roles, catalog, branches, adminHidden }: Props) {
             Send invite
           </Button>
         </DialogFooter>
+        {pin.dialog}
       </DialogContent>
     </Dialog>
   )

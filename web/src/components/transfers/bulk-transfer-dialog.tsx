@@ -21,6 +21,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { Bank, FeeQuote, ResolvedAccount } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
@@ -139,6 +140,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const idempotency = useIdempotencyKey()
+  const pin = useTransactionPin()
   // Bumped to stop a check that's running (the dialog closed, or a newer check started).
   const checkRun = useRef(0)
 
@@ -264,9 +266,17 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
       title: title.trim() || undefined,
       items: rows.map((r) => ({ accountNumber: r.accountNumber, bankUuid: r.bank!.uuid, amountKobo: r.amountKobo!, narration: r.narration })),
     }
-    // The same rows sent again keep the key, whatever went wrong; editing the list or the account gets a new one.
-    const result = await createBulkTransfer({ ...request, idempotencyKey: idempotency.keyFor(request) })
+    // The same rows sent again keep the key, whatever went wrong (a wrong PIN included); editing the list or the
+    // account gets a new one.
+    const idempotencyKey = idempotency.keyFor(request)
+    const count = `${rows.length} ${rows.length === 1 ? "transfer" : "transfers"}`
+    const result = await pin.confirm({
+      purpose: `send ${formatNaira(totalKobo)} to ${rows.length} ${rows.length === 1 ? "person" : "people"}`,
+      confirmLabel: `Send ${count}`,
+      run: (transactionPin) => createBulkTransfer({ ...request, idempotencyKey }, transactionPin),
+    })
     setBusy(false)
+    if (!result) return
     if (!result.ok) {
       setError(result.error)
       if (result.rows) setServerErrors(Object.fromEntries(result.rows.map((r) => [r.row, r.error])))
@@ -537,6 +547,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
             </>
           )}
         </DialogFooter>
+        {pin.dialog}
       </DialogContent>
     </Dialog>
   )

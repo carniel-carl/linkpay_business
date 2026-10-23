@@ -21,6 +21,7 @@ import { Field, FieldDescription, FieldError, FieldLabel, FieldLegend, FieldSet 
 import { Input } from "@/components/ui/input"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { SafelockLimits } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
@@ -58,6 +59,7 @@ export function SafelockFormDialog({
   // One key per thing being locked: a double click, or a retry after any error (a dropped response, the
   // partner being down), locks once. Changing the name, branch, amount or date gets a new key.
   const idempotency = useIdempotencyKey()
+  const pin = useTransactionPin()
 
   const set = <K extends keyof Values>(k: K, value: Values[K]) => setV((prev) => ({ ...prev, [k]: value }))
   const branch = branches.find((b) => b._id === v.branch)
@@ -91,8 +93,15 @@ export function SafelockFormDialog({
     setBusy(true)
     setError(undefined)
     const request = { branch: v.branch, title: v.title.trim(), amountKobo: kobo!, unlockOn: v.unlockOn }
-    const result = await createSafelock({ ...request, idempotencyKey: idempotency.keyFor(request) })
+    // The key belongs to the details, not the PIN, so a retry after a wrong PIN locks once.
+    const idempotencyKey = idempotency.keyFor(request)
+    const result = await pin.confirm({
+      purpose: `lock ${formatNaira(request.amountKobo)} until ${formatDay(request.unlockOn)}`,
+      confirmLabel: `Lock ${formatNaira(request.amountKobo)}`,
+      run: (transactionPin) => createSafelock({ ...request, idempotencyKey }, transactionPin),
+    })
     setBusy(false)
+    if (!result) return
     if (!result.ok) {
       // Back to the form, with the problem next to the field it's about.
       const field =
@@ -289,6 +298,7 @@ export function SafelockFormDialog({
             </DialogFooter>
           </>
         )}
+        {pin.dialog}
       </DialogContent>
     </Dialog>
   )

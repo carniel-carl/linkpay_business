@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { AccountWithBalance, Bank, BranchRef, FeeQuote, ResolvedAccount } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
@@ -46,6 +47,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<"details" | "review">("details")
   const idempotency = useIdempotencyKey()
+  const pin = useTransactionPin()
 
   const [sourceId, setSourceId] = useState(defaultBranchId ?? accounts[0]?.branch._id ?? "")
   const [to, setTo] = useState<"bank" | "branch">("bank")
@@ -141,10 +143,18 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
       narration: narration.trim() || undefined,
       recipient: to === "bank" ? { type: "bank" as const, accountNumber, bankUuid } : { type: "branch" as const, branch: targetBranch },
     }
-    // Sending the same details again keeps the key, whatever went wrong (it may have gone through);
-    // changing anything that's sent gets a new one.
-    const result = await createTransfer({ ...request, idempotencyKey: idempotency.keyFor(request) })
+    // Sending the same details again keeps the key, whatever went wrong (it may have gone through, or the
+    // PIN was wrong); changing anything that's sent gets a new one. The PIN isn't part of the details.
+    const idempotencyKey = idempotency.keyFor(request)
+    const amount = formatNaira(request.amountKobo)
+    const recipient = to === "branch" ? targets.find((a) => a.branch._id === targetBranch)?.branch.name : resolved?.accountName
+    const result = await pin.confirm({
+      purpose: `send ${amount} to ${recipient ?? "this account"}${quote?.needsApproval ? " for approval" : ""}`,
+      confirmLabel: quote?.needsApproval ? "Send for approval" : `Send ${amount}`,
+      run: (transactionPin) => createTransfer({ ...request, idempotencyKey }, transactionPin),
+    })
     setBusy(false)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     const t = result.data
     if (t.status === "pending_approval") {
@@ -356,6 +366,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
             </>
           )}
         </DialogFooter>
+        {pin.dialog}
       </DialogContent>
     </Dialog>
   )

@@ -18,14 +18,19 @@ export async function runAction<T>(fn: () => Promise<T>): Promise<ActionResult<T
         await clearSession()
         redirect("/sign-in?expired=1")
       }
+      const details = err.details as
+        | { retryAt?: string; rows?: { row: number; error: string; code?: string }[]; attemptsLeft?: number; lockedUntil?: string }
+        | undefined
       return {
         ok: false,
         error: friendlyMessage(err),
         code: err.code,
         fieldErrors: fieldErrorsFrom(err.details),
         missing: err.missing,
-        retryAt: (err.details as { retryAt?: string } | undefined)?.retryAt,
-        rows: (err.details as { rows?: { row: number; error: string; code?: string }[] } | undefined)?.rows,
+        retryAt: details?.retryAt,
+        rows: details?.rows,
+        attemptsLeft: typeof details?.attemptsLeft === "number" ? details.attemptsLeft : undefined,
+        lockedUntil: details?.lockedUntil,
       }
     }
     console.error(err)

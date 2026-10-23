@@ -1,4 +1,5 @@
 // Error shape from backend/src/middleware/errorHandler.ts: { error, code?, details? }.
+import { WEAK_PIN_MESSAGE, wrongPinMessage } from "@/lib/transaction-pin"
 import type { ChecklistItem } from "./types"
 
 type ZodIssue = { path: (string | number)[]; message: string }
@@ -110,10 +111,17 @@ const MESSAGES: Record<string, string> = {
   // Passwords
   INCORRECT_PASSWORD: "That password is incorrect.",
   PASSWORD_NOT_SET: "You haven't set a password yet. Set one with a code we email you.",
+  // Transaction PIN (docs/briefs/transaction-pin.md)
+  TRANSACTION_PIN_REQUIRED: "Set a transaction PIN first. You'll use it to confirm transfers, approvals and team changes.",
+  TRANSACTION_PIN_MISSING: "Enter your 4-digit transaction PIN.",
+  TRANSACTION_PIN_LOCKED: "Your transaction PIN is locked after too many wrong tries. Reset it, or wait and try again.",
+  TRANSACTION_PIN_ALREADY_SET: "You already have a transaction PIN. Change it instead.",
+  WEAK_TRANSACTION_PIN: WEAK_PIN_MESSAGE,
 }
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */
 export function friendlyMessage(err: ApiError): string {
+  if (err.code === "TRANSACTION_PIN_INVALID") return wrongPinMessage((err.details as { attemptsLeft?: number } | undefined)?.attemptsLeft)
   if (err.code && MESSAGES[err.code]) return MESSAGES[err.code]
   if (err.status === 429) return "Too many attempts. Wait a few minutes and try again."
   if (err.message === "Incorrect password") return "That password is incorrect."

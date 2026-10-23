@@ -27,6 +27,11 @@ const nextConfig: NextConfig = {
       { source: "/embed.js", headers: [{ key: "Cache-Control", value: "public, max-age=300, must-revalidate" }] },
     ]
   },
+  logging: {
+    // `next dev` prints every Server Action call with its arguments, and those include transaction PINs,
+    // passwords and emailed codes (docs/briefs/transaction-pin.md: the PIN is never logged).
+    serverFunctions: false,
+  },
   experimental: {
     serverActions: {
       // Documents are capped at 5 MB by the backend; leave room for multipart overhead.

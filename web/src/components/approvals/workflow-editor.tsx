@@ -13,6 +13,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import type { Approver, TransferSettings } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { koboToInput, parseNairaToKobo } from "@/lib/transfers"
@@ -59,6 +60,7 @@ export function WorkflowEditor({ settings, approvers }: { settings: TransferSett
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
+  const pin = useTransactionPin()
 
   const updateTier = (tierKey: string, change: (t: Tier) => Tier) => setTiers((all) => all.map((t) => (t.key === tierKey ? change(t) : t)))
   const updateLevel = (tierKey: string, levelKey: string, change: (l: Level) => Level) =>
@@ -98,11 +100,17 @@ export function WorkflowEditor({ settings, approvers }: { settings: TransferSett
     setErrors(found)
     if (Object.keys(found).length) return setError("Some bands need fixing before you save.")
     setBusy(true)
-    const result = await updateApprovalRule({
-      mode: "workflow",
+    const rule = {
+      mode: "workflow" as const,
       tiers: tiers.map((t, i) => ({ minKobo: amounts[i]!, levels: t.levels.map((l) => ({ approvers: l.approvers })) })),
+    }
+    const result = await pin.confirm({
+      purpose: "save these approval levels",
+      confirmLabel: "Save approval levels",
+      run: (transactionPin) => updateApprovalRule(rule, transactionPin),
     })
     setBusy(false)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     toast.success("Approval levels saved. New transfers follow them; ones already waiting keep their levels.")
     router.push("/approvals")
@@ -282,6 +290,7 @@ export function WorkflowEditor({ settings, approvers }: { settings: TransferSett
           : ""}
         Transfers already waiting keep the levels they started with. To go back to a simple rule, use Approval rule on the Transfers page.
       </p>
+      {pin.dialog}
     </div>
   )
 }
