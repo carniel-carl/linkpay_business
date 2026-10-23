@@ -82,7 +82,7 @@ async function checkPassword(userId: string | undefined, plain: string) {
 // ---- Registration & email verification ----
 
 export const register: RequestHandler = async (req, res) => {
-  const body = z.object({ name: z.string().trim().min(1), email, password }).parse(req.body);
+  const body = z.object({ name: z.string().trim().min(1).max(100), email, password }).parse(req.body);
 
   if (await UserModel.exists({ email: body.email })) {
     throw new HttpError(409, "An account with this email already exists", "EMAIL_TAKEN");

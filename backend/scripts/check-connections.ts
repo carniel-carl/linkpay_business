@@ -1,8 +1,10 @@
 // Verifies MongoDB and Liquifia credentials using read-only calls only.
 // Usage: bun scripts/check-connections.ts
-import mongoose from "mongoose";
-import { connectDB, disconnectDB } from "../src/config/db";
-import { isLiveMode, liquifia, LiquifiaError } from "../src/services/liquifia/client";
+// Read-only, so it may check live keys: allowed here before src/config/env loads (hence the dynamic imports).
+process.env.LIQUIFIA_ALLOW_LIVE = "1";
+const { default: mongoose } = await import("mongoose");
+const { connectDB, disconnectDB } = await import("../src/config/db");
+const { isLiveMode, liquifia, LiquifiaError } = await import("../src/services/liquifia/client");
 
 let failed = false;
 

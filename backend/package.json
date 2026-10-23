@@ -30,6 +30,7 @@
     "dev": "bun --watch index.ts",
     "start": "bun index.ts",
     "check": "bun scripts/check-connections.ts",
+    "test": "bun test --timeout=30000",
     "migrate:branches": "bun scripts/migrate-branches.ts",
     "migrate:staff": "bun scripts/migrate-staff.ts",
     "staff": "bun scripts/staff.ts",

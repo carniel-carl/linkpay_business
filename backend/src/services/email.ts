@@ -35,16 +35,23 @@ export function setEmailProvider(next: EmailProvider) {
   provider = next;
 }
 
+/** True until a real provider is set. Until then every email, sign-in codes and invite links included, only goes to stdout. */
+export const usingConsoleEmail = () => provider === consoleProvider;
+
 export function sendEmail(message: EmailMessage) {
-  return provider.send(message);
+  // Subjects carry names people type; a line break in one could add headers to the message.
+  return provider.send({ ...message, subject: message.subject.replace(/[\r\n]+/g, " ") });
 }
+
+// Every value put into an email's HTML goes through this: names and other text people type could otherwise add markup.
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 const codeEmail = (to: string, subject: string, intro: string, code: string) =>
   sendEmail({
     to,
     subject,
     text: `${intro}\n\nYour code is: ${code}\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.`,
-    html: `<p>${intro}</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px">${code}</p><p>It expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
+    html: `<p>${escapeHtml(intro)}</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px">${escapeHtml(code)}</p><p>It expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
   });
 
 export const sendVerificationEmail = (to: string, code: string) =>
@@ -126,8 +133,8 @@ export const sendTeamInviteEmail = (
       `${inviterName} has invited you to join ${businessName} on ${env.appName} as ${roleLabel}.\n\n` +
       `Accept the invite: ${link}\n\nThis link expires in 7 days. If you weren't expecting it, you can ignore this email.`,
     html:
-      `<p>${inviterName} has invited you to join <strong>${businessName}</strong> on ${env.appName} as ${roleLabel}.</p>` +
-      `<p><a href="${link}">Accept the invite</a></p><p>This link expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`,
+      `<p>${escapeHtml(inviterName)} has invited you to join <strong>${escapeHtml(businessName)}</strong> on ${escapeHtml(env.appName)} as ${escapeHtml(roleLabel)}.</p>` +
+      `<p><a href="${escapeHtml(link)}">Accept the invite</a></p><p>This link expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`,
   });
 
 export const sendStaffInviteEmail = (to: string, { inviterName, roleLabel, link }: { inviterName: string; roleLabel: string; link: string }) =>
@@ -138,8 +145,8 @@ export const sendStaffInviteEmail = (to: string, { inviterName, roleLabel, link 
       `${inviterName} has invited you to join the ${env.appName} admin console as ${roleLabel}.\n\n` +
       `Set up your staff account: ${link}\n\nThis link expires in 7 days. If you weren't expecting it, you can ignore this email.`,
     html:
-      `<p>${inviterName} has invited you to join the ${env.appName} admin console as <strong>${roleLabel}</strong>.</p>` +
-      `<p><a href="${link}">Set up your staff account</a></p><p>This link expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`,
+      `<p>${escapeHtml(inviterName)} has invited you to join the ${escapeHtml(env.appName)} admin console as <strong>${escapeHtml(roleLabel)}</strong>.</p>` +
+      `<p><a href="${escapeHtml(link)}">Set up your staff account</a></p><p>This link expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`,
   });
 
 /** ₦12,345.67 */
@@ -186,8 +193,6 @@ export const sendTransferFailedEmail = (to: string, opts: { amountKobo: number; 
 
 export type InvoiceBrand = { businessName: string; replyTo?: string; accent: string; onAccent: string; logoUrl?: string | null };
 
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
 /** "2026-10-20" → "20 Oct 2026" */
 export const formatDay = (day: string) =>
   new Date(`${day}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -195,17 +200,19 @@ export const formatDay = (day: string) =>
 /** A simple branded email: logo or name on the accent band, paragraphs, one button. */
 function brandedHtml(brand: InvoiceBrand, paragraphs: string[], button?: { label: string; href: string }) {
   const name = escapeHtml(brand.businessName);
+  const accent = escapeHtml(brand.accent);
   const header = brand.logoUrl
     ? `<img src="${escapeHtml(brand.logoUrl)}" alt="${name}" style="max-height:48px;max-width:200px;display:block">`
-    : `<div style="font-size:18px;font-weight:600;color:${brand.accent}">${name}</div>`;
+    : `<div style="font-size:18px;font-weight:600;color:${accent}">${name}</div>`;
+  // Paragraphs arrive as HTML: callers escape their text and add only their own tags.
   const body = paragraphs.map((p) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#1F2937">${p}</p>`).join("");
   const cta = button
-    ? `<p style="margin:24px 0"><a href="${escapeHtml(button.href)}" style="background:${brand.accent};color:${brand.onAccent};padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">${escapeHtml(button.label)}</a></p>`
+    ? `<p style="margin:24px 0"><a href="${escapeHtml(button.href)}" style="background:${accent};color:${escapeHtml(brand.onAccent)};padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">${escapeHtml(button.label)}</a></p>`
     : "";
   return (
     `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px">` +
-    `<div style="border-top:4px solid ${brand.accent};padding-top:20px;margin-bottom:24px">${header}</div>${body}${cta}` +
-    `<p style="margin:32px 0 0;font-size:12px;color:#6B7280">Sent by ${name} using ${env.appName}.</p></div>`
+    `<div style="border-top:4px solid ${accent};padding-top:20px;margin-bottom:24px">${header}</div>${body}${cta}` +
+    `<p style="margin:32px 0 0;font-size:12px;color:#6B7280">Sent by ${name} using ${escapeHtml(env.appName)}.</p></div>`
   );
 }
 
@@ -227,8 +234,8 @@ export const sendInvoiceEmail = (
       brand,
       [
         ...(opts.message ? [escapeHtml(opts.message).replace(/\n/g, "<br>")] : []),
-        `${escapeHtml(brand.businessName)} has sent you invoice <strong>${escapeHtml(opts.number)}</strong> for ${formatNaira(opts.totalKobo)}.`,
-        `<strong>${due}</strong>. The invoice is attached as a PDF.`,
+        `${escapeHtml(brand.businessName)} has sent you invoice <strong>${escapeHtml(opts.number)}</strong> for ${escapeHtml(formatNaira(opts.totalKobo))}.`,
+        `<strong>${escapeHtml(due)}</strong>. The invoice is attached as a PDF.`,
       ],
       { label: "View invoice", href: opts.link },
     ),

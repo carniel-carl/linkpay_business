@@ -146,7 +146,7 @@ export const acceptInvite: RequestHandler<TokenParams> = async (req, res) => {
   const claimed = await StaffInviteModel.findOneAndUpdate(
     { _id: invite._id, status: "pending", tokenHash: invite.tokenHash },
     { status: "accepted", acceptedAt: new Date() },
-    { new: true },
+    { returnDocument: "after" },
   );
   if (!claimed) throw new HttpError(410, "This invite was already used", "INVITE_CLOSED");
 

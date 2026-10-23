@@ -117,9 +117,6 @@ export async function provisionBranchAccount(branchId: unknown) {
   const business = await BusinessModel.findById(branch.business);
   if (!business) throw new Error(`Business ${branch.business} not found`);
 
-  const existing = await VirtualAccountModel.findOne({ branch: branch._id });
-  if (existing) return existing;
-
   const setStatus = async (accountStatus: string, lastError?: string) => {
     branch.set({ "liquifia.accountStatus": accountStatus, "liquifia.lastError": lastError });
     await branch.save();
@@ -128,6 +125,13 @@ export async function provisionBranchAccount(branchId: unknown) {
       await business.save();
     }
   };
+
+  const existing = await VirtualAccountModel.findOne({ branch: branch._id });
+  if (existing) {
+    // Having the account means setup is done. This repairs a status left wrong by an earlier race (a no-op otherwise).
+    await setStatus("active");
+    return existing;
+  }
 
   if (!branch.liquifia?.virtualAccountIdempotencyKey) {
     branch.set("liquifia.virtualAccountIdempotencyKey", newIdempotencyKey());
@@ -168,6 +172,13 @@ export async function provisionBranchAccount(branchId: unknown) {
     await accountReady(business, branch, account.accountNumber);
     return account;
   } catch (err) {
+    // The branch may have its account anyway: another provisioning of it got there first (so this create hit
+    // the unique index), or only a step after the create failed. Either way setup hasn't failed.
+    const winner = await VirtualAccountModel.findOne({ branch: branch._id });
+    if (winner) {
+      await setStatus("active");
+      return winner;
+    }
     const message = err instanceof LiquifiaError ? `${err.status} ${err.code}: ${err.message}` : String(err);
     await setStatus("failed", message);
     await accountSetupFailed(business, branch);

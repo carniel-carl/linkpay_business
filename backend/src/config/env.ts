@@ -5,6 +5,33 @@ function required(name: string): string {
   return value;
 }
 
+const nodeEnv = process.env.NODE_ENV ?? "development";
+
+/** Required everywhere but tests: a fallback in the repo would let anyone sign staff tokens. */
+function staffJwtSecret(): string {
+  if (nodeEnv === "test") return process.env.STAFF_JWT_SECRET ?? "test-staff-jwt-secret";
+  const secret = required("STAFF_JWT_SECRET");
+  if (secret === process.env.JWT_SECRET) throw new Error("STAFF_JWT_SECRET must be different from JWT_SECRET");
+  if (secret.length < 32) {
+    throw new Error("STAFF_JWT_SECRET must be at least 32 characters. Generate one with: openssl rand -hex 32");
+  }
+  return secret;
+}
+
+/** A live key moves real money, so outside production it needs LIQUIFIA_ALLOW_LIVE=1 as well. */
+function liquifiaSecretKey(): string {
+  const key = required("LIQUIFIA_SECRET_KEY");
+  if (!key.startsWith("sk_live_") || nodeEnv === "production") return key;
+  if (process.env.LIQUIFIA_ALLOW_LIVE !== "1") {
+    throw new Error(
+      `LIQUIFIA_SECRET_KEY is a live key (sk_live_) but NODE_ENV is "${nodeEnv}", not "production". ` +
+        `Use an sk_test_ key or \`bun run dev:mock\`, or set LIQUIFIA_ALLOW_LIVE=1 to use the live key anyway.`,
+    );
+  }
+  console.warn(`⚠️  LIVE Liquifia key with NODE_ENV="${nodeEnv}" (LIQUIFIA_ALLOW_LIVE=1): real money can move.`);
+  return key;
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
   mongoUri: process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017/linkpay",
@@ -13,7 +40,7 @@ export const env = {
   // Optional: passed to the driver separately so the password never has to be URL-encoded into the URI.
   mongoUser: process.env.MONGODB_USERNAME,
   mongoPassword: process.env.MONGODB_PASSWORD,
-  nodeEnv: process.env.NODE_ENV ?? "development",
+  nodeEnv,
   appName: process.env.APP_NAME ?? "LinkPay",
   // Public URL of the web app, used in emailed links (team invites).
   webUrl: (process.env.WEB_URL ?? "http://localhost:3000").replace(/\/$/, ""),
@@ -29,9 +56,7 @@ export const env = {
   expoAccessToken: process.env.EXPO_ACCESS_TOKEN,
   jwtSecret: required("JWT_SECRET"),
   // Signs staff (admin console) tokens. Separate from JWT_SECRET so neither side can verify the other's tokens.
-  staffJwtSecret:
-    process.env.STAFF_JWT_SECRET ??
-    (process.env.NODE_ENV === "production" ? required("STAFF_JWT_SECRET") : "dev-staff-jwt-secret-not-for-production"),
+  staffJwtSecret: staffJwtSecret(),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   // Device sessions (mobile): short access tokens, refreshed with a rotating refresh token.
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL ?? "15m",
@@ -47,7 +72,7 @@ export const env = {
   liquifia: {
     baseUrl: process.env.LIQUIFIA_BASE_URL ?? "https://fiat-api.pouchfinance.xyz/api/v1",
     // Server-side secret key (sk_live_ / sk_test_). Never expose it to web or mobile clients.
-    secretKey: required("LIQUIFIA_SECRET_KEY"),
+    secretKey: liquifiaSecretKey(),
     publicKey: process.env.LIQUIFIA_PUBLIC_KEY,
     // Verifies X-Liquifia-Signature on webhooks. Until it's set, the webhook endpoint answers 503
     // and incoming payments arrive through the periodic sync only.
