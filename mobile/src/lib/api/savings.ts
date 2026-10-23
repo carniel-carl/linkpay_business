@@ -3,9 +3,11 @@ import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
 import { api, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
+import { pinHeader } from "./transaction-pin";
 import type { Pocket, PocketActivity, PocketColor, PocketIcon, PocketList, PocketMovement } from "./types";
 
-// /api/pockets (docs/briefs/savings.md). Reads need accounts.view; every write needs savings.manage.
+// /api/pockets (docs/briefs/savings.md). Reads need accounts.view; every write needs savings.manage, and
+// withdrawing or closing also the transaction PIN.
 
 const useBusinessKey = () => useBusinessContext((s) => s.businessId ?? "default");
 const path = (id: string, rest = "") => `/api/pockets/${idSegment(id)}${rest}`;
@@ -82,8 +84,19 @@ export type PocketPatch = Partial<Omit<PocketInput, "branch">>;
 type Change =
   | { kind: "create"; input: PocketInput }
   | { kind: "update"; id: string; input: PocketPatch }
-  | { kind: "deposit" | "withdraw"; id: string; amountKobo: number; note?: string; idempotencyKey: string }
-  | { kind: "close"; id: string };
+  | { kind: "deposit"; id: string; amountKobo: number; note?: string; idempotencyKey: string };
+
+type Movement = { amountKobo: number; note?: string };
+
+const move = async (kind: "deposit" | "withdraw", id: string, m: Movement, headers: Record<string, string>) =>
+  (
+    await api<{ pocket: Pocket; movement: PocketMovement }>(path(id, `/${kind}`), {
+      method: "POST",
+      json: { amountKobo: m.amountKobo, ...(m.note && { note: m.note }) },
+      headers,
+      timeoutMs: MONEY_TIMEOUT_MS,
+    })
+  ).pocket;
 
 async function run(change: Change): Promise<Pocket> {
   switch (change.kind) {
@@ -98,36 +111,47 @@ async function run(change: Change): Promise<Pocket> {
     case "update":
       return api<Pocket>(path(change.id), { method: "PATCH", json: change.input });
     case "deposit":
-    case "withdraw": {
-      const res = await api<{ pocket: Pocket; movement: PocketMovement }>(path(change.id, `/${change.kind}`), {
-        method: "POST",
-        json: { amountKobo: change.amountKobo, ...(change.note && { note: change.note }) },
-        headers: { "Idempotency-Key": change.idempotencyKey },
-        timeoutMs: MONEY_TIMEOUT_MS,
-      });
-      return res.pocket;
-    }
-    case "close":
-      return api<Pocket>(path(change.id, "/close"), { method: "POST", json: {} });
+      return move("deposit", change.id, change, { "Idempotency-Key": change.idempotencyKey });
   }
 }
 
+// Taking money out of savings needs the transaction PIN; putting it in doesn't. These are plain calls rather than
+// mutations, so the PIN stays out of react-query's state: it's only this request's header. Call usePocketMoved after.
+
+/** Back to the branch's available balance. The PIN isn't part of the body, so a retry with a corrected PIN keeps the key. */
+export const withdrawFromPocket = (id: string, m: Movement, idempotencyKey: string, pin: string) =>
+  move("withdraw", id, m, { "Idempotency-Key": idempotencyKey, ...pinHeader(pin) });
+
+/** Closes the pocket; what's in it goes back to the branch's available balance. */
+export const closePocket = (id: string, pin: string) =>
+  api<Pocket>(path(id, "/close"), { method: "POST", json: {}, headers: pinHeader(pin) });
+
 /**
- * Every change to a pocket. The answer replaces the cached pocket; lists refresh, and so do balances, since
- * money in pockets comes out of each account's available balance.
+ * After money moves in or out of a pocket: the answer replaces the cached pocket, and lists, its activity and
+ * balances refresh, since money in pockets comes out of each account's available balance.
  */
+export function usePocketMoved() {
+  const qc = useQueryClient();
+  const business = useBusinessKey();
+  return (pocket: Pocket) => {
+    qc.setQueryData([business, "pocket", pocket._id], pocket);
+    void qc.invalidateQueries({ queryKey: [business, "pockets"] });
+    void qc.invalidateQueries({ queryKey: [business, "pocket", pocket._id, "activity"] });
+    void qc.invalidateQueries({ queryKey: [business, "accounts"] });
+  };
+}
+
+/** Creating, editing and adding money (none needs the PIN). The answer replaces the cached pocket; lists refresh. */
 export function usePocketChange() {
   const qc = useQueryClient();
   const business = useBusinessKey();
+  const moved = usePocketMoved();
   return useMutation({
     mutationFn: run,
     onSuccess: (pocket, change) => {
+      if (change.kind === "deposit") return moved(pocket);
       qc.setQueryData([business, "pocket", pocket._id], pocket);
       void qc.invalidateQueries({ queryKey: [business, "pockets"] });
-      if (change.kind !== "create" && change.kind !== "update") {
-        void qc.invalidateQueries({ queryKey: [business, "pocket", pocket._id, "activity"] });
-        void qc.invalidateQueries({ queryKey: [business, "accounts"] });
-      }
     },
   });
 }

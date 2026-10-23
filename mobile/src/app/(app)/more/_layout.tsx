@@ -2,6 +2,10 @@ import { Stack } from "expo-router";
 import { stackScreenOptions } from "@/components/ui/stack-options";
 import { useTheme } from "@/theme/theme";
 
+// Other tabs open screens here (a notification opens Signed-in devices, the transaction PIN sheet opens Transaction
+// PIN), so More's list always sits underneath and Back leads to it.
+export const unstable_settings = { initialRouteName: "index" };
+
 /**
  * A standard inline header, not a large title: inside NativeTabs on iOS 26 the large title reserves its
  * ~100pt row but never draws, which left a blank band above the first section.
@@ -20,6 +24,7 @@ export default function MoreLayout() {
       <Stack.Screen name="profile" options={{ title: "Profile" }} />
       <Stack.Screen name="security" options={{ title: "Two-step verification" }} />
       <Stack.Screen name="password" options={{ title: "Password" }} />
+      <Stack.Screen name="transaction-pin" options={{ title: "Transaction PIN" }} />
       <Stack.Screen name="totp" options={{ title: "Authenticator app" }} />
       <Stack.Screen name="help" options={{ title: "Help" }} />
       <Stack.Screen

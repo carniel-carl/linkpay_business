@@ -94,6 +94,13 @@ const MESSAGES: Record<string, string> = {
   // Passwords (same copy as the web)
   INCORRECT_PASSWORD: "That password is incorrect.",
   PASSWORD_NOT_SET: "You haven't set a password yet. Set one with a code we email you.",
+  // Transaction PIN (docs/briefs/transaction-pin.md). The confirmation sheet words most of these itself.
+  TRANSACTION_PIN_REQUIRED: "Set a transaction PIN first. You'll need it to send money, approve transfers and change your team.",
+  TRANSACTION_PIN_MISSING: "Enter your 4-digit transaction PIN.",
+  TRANSACTION_PIN_INVALID: "That transaction PIN is wrong.",
+  TRANSACTION_PIN_LOCKED: "Your transaction PIN is locked after too many wrong tries. Reset it, or wait and try again later.",
+  TRANSACTION_PIN_ALREADY_SET: "You already have a transaction PIN. Change it instead.",
+  WEAK_TRANSACTION_PIN: "That PIN is easy to guess. Avoid repeated digits and runs like 1234.",
 };
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

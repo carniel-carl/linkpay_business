@@ -3,6 +3,7 @@ import { useBusinessContext } from "@/lib/business-context";
 import { formatNaira } from "@/lib/format";
 import { api, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
+import { pinHeader } from "./transaction-pin";
 import type { ApprovalRule, ApprovalTier, Bank, FeeQuote, ResolvedAccount, Transfer, TransferList, TransferStatus } from "./types";
 
 // /api/transfers. Copy (status and kind labels) matches the web's Transfers page.
@@ -131,24 +132,41 @@ export function useTransfer(id: string) {
   });
 }
 
-/** Approve, reject, cancel or refresh. Money and lists change, so everything for the business refreshes. */
-export function useTransferAction() {
+/** After a transfer changes: the answer replaces the cached transfer, and money and lists refresh for the business. */
+export function useTransferChanged() {
   const qc = useQueryClient();
   const business = useBusinessKey();
+  return (t: Transfer) => {
+    qc.setQueryData([business, "transfer", t._id], t);
+    void qc.invalidateQueries({ queryKey: [business] });
+  };
+}
+
+/** Reject, cancel or refresh: none of them moves money, so none needs the transaction PIN. Approving is approveTransfer. */
+export function useTransferAction() {
+  const changed = useTransferChanged();
   return useMutation({
-    mutationFn: ({ id, action, note }: { id: string; action: "approve" | "reject" | "cancel" | "refresh"; note?: string }) =>
+    mutationFn: ({ id, action, note }: { id: string; action: "reject" | "cancel" | "refresh"; note?: string }) =>
       api<Transfer>(`/api/transfers/${idSegment(id)}/${action}`, {
         method: "POST",
-        json: action === "approve" || action === "reject" ? { note: note || undefined } : {},
-        // The last approval sends the payout in the same request.
+        json: action === "reject" ? { note: note || undefined } : {},
         timeoutMs: MONEY_TIMEOUT_MS,
       }),
-    onSuccess: (t) => {
-      qc.setQueryData([business, "transfer", t._id], t);
-      void qc.invalidateQueries({ queryKey: [business] });
-    },
+    onSuccess: changed,
   });
 }
+
+/**
+ * Approves one level of a transfer; the last level sends the payout in the same request. A plain call rather
+ * than a mutation, so the PIN stays out of react-query's state: it's only this request's header.
+ */
+export const approveTransfer = (id: string, note: string | undefined, pin: string) =>
+  api<Transfer>(`/api/transfers/${idSegment(id)}/approve`, {
+    method: "POST",
+    json: { note: note || undefined },
+    headers: pinHeader(pin),
+    timeoutMs: MONEY_TIMEOUT_MS,
+  });
 
 export function useBanks(enabled = true) {
   const business = useBusinessKey();
@@ -185,9 +203,17 @@ export type SendRequest = {
   recipient: { type: "bank"; accountNumber: string; bankUuid: string } | { type: "branch"; branch: string };
 };
 
-/** Creates one transfer. The Idempotency-Key makes a retried send (dropped connection) return the same transfer. */
-export const sendTransfer = (body: SendRequest, idempotencyKey: string) =>
-  api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": idempotencyKey }, timeoutMs: MONEY_TIMEOUT_MS });
+/**
+ * Creates one transfer. The Idempotency-Key makes a retried send (dropped connection) return the same transfer.
+ * The PIN is a header, not part of the body, so retrying with a corrected PIN keeps the same key.
+ */
+export const sendTransfer = (body: SendRequest, idempotencyKey: string, pin: string) =>
+  api<Transfer>("/api/transfers", {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": idempotencyKey, ...pinHeader(pin) },
+    timeoutMs: MONEY_TIMEOUT_MS,
+  });
 
 export function useApprovalRule(enabled = true) {
   const business = useBusinessKey();
@@ -215,12 +241,15 @@ export function describeApprovalRule(rule: ApprovalRule) {
   return "Only transfers prepared by team members who can't approve need approval.";
 }
 
-export function useSaveApprovalRule() {
+export type SimpleApprovalRule = { mode: "never" } | { mode: "always" } | { mode: "above_threshold"; thresholdKobo: number };
+
+/** Changing the rule is a security setting, so it needs the transaction PIN (this request's header only). */
+export const saveApprovalRule = (approval: SimpleApprovalRule, pin: string) =>
+  api<{ approval: ApprovalRule }>("/api/transfers/settings", { method: "PATCH", json: { approval }, headers: pinHeader(pin) });
+
+/** After the rule changes, everything for the business refreshes (who needs approval changes with it). */
+export function useApprovalRuleSaved() {
   const qc = useQueryClient();
   const business = useBusinessKey();
-  return useMutation({
-    mutationFn: (approval: { mode: "never" } | { mode: "always" } | { mode: "above_threshold"; thresholdKobo: number }) =>
-      api<{ approval: ApprovalRule }>("/api/transfers/settings", { method: "PATCH", json: { approval } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [business] }),
-  });
+  return () => void qc.invalidateQueries({ queryKey: [business] });
 }

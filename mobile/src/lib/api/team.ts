@@ -3,6 +3,7 @@ import { useBusinessContext } from "@/lib/business-context";
 import { api } from "./client";
 import { ApiError } from "./errors";
 import { idSegment } from "./paths";
+import { pinHeader } from "./transaction-pin";
 import type { Branch, Invite, InviteAccepted, InvitePreview, RolesResponse, TeamMember, DeviceSession } from "./types";
 import { deviceInfo } from "@/lib/device";
 
@@ -36,21 +37,30 @@ function useTeamMutation<TVars, TData>(fn: (vars: TVars) => Promise<TData>) {
   return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: [business] }) });
 }
 
-export const useInviteMember = () =>
-  useTeamMutation((v: AccessValues & { email: string }) =>
-    api<Invite>("/api/team/invites", { method: "POST", json: { email: v.email, role: v.role, branches: branchesFor(v) } }),
-  );
+// Inviting (a resend issues a fresh link), changing a member's access and removing them need the transaction PIN.
+// These are plain calls rather than mutations, so the PIN stays out of react-query's state: it's only this
+// request's header. Call useTeamChanged after one succeeds.
 
-export const useUpdateMember = () =>
-  useTeamMutation(({ id, ...v }: AccessValues & { id: string }) =>
-    api<TeamMember>(`/api/team/members/${idSegment(id)}`, { method: "PATCH", json: { role: v.role, branches: branchesFor(v) } }),
-  );
+export const inviteMember = (v: AccessValues & { email: string }, pin: string) =>
+  api<Invite>("/api/team/invites", { method: "POST", json: { email: v.email, role: v.role, branches: branchesFor(v) }, headers: pinHeader(pin) });
 
-export const useRemoveMember = () => useTeamMutation((id: string) => api(`/api/team/members/${idSegment(id)}`, { method: "DELETE" }));
+export const updateMember = (id: string, v: AccessValues, pin: string) =>
+  api<TeamMember>(`/api/team/members/${idSegment(id)}`, { method: "PATCH", json: { role: v.role, branches: branchesFor(v) }, headers: pinHeader(pin) });
+
+export const removeMember = (id: string, pin: string) => api(`/api/team/members/${idSegment(id)}`, { method: "DELETE", headers: pinHeader(pin) });
 
 /** Sends a fresh link (the old one stops working). One resend a minute; INVITE_COOLDOWN carries `details.retryAt`. */
-export const useResendInvite = () => useTeamMutation((id: string) => api<Invite>(`/api/team/invites/${idSegment(id)}/resend`, { method: "POST" }));
+export const resendInvite = (id: string, pin: string) =>
+  api<Invite>(`/api/team/invites/${idSegment(id)}/resend`, { method: "POST", headers: pinHeader(pin) });
 
+/** After a PIN-confirmed team change: everything for the business refreshes, as the web revalidates the layout. */
+export function useTeamChanged() {
+  const qc = useQueryClient();
+  const business = useBusinessKey();
+  return () => void qc.invalidateQueries({ queryKey: [business] });
+}
+
+/** Revoking needs no PIN: it only takes away access nobody has used yet. */
 export const useRevokeInvite = () => useTeamMutation((id: string) => api(`/api/team/invites/${idSegment(id)}`, { method: "DELETE" }));
 
 /** Leaves the business in view. The caller switches back to the default business. */

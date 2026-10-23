@@ -5,7 +5,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { SafelockTile } from "@/components/savings/safelock-parts";
-import { ConfirmPasscode } from "@/components/security/confirm-passcode";
+import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
@@ -19,14 +19,12 @@ import { Display } from "@/components/ui/typography";
 import { can, useAccounts } from "@/lib/api/banking";
 import { idempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { useCreateSafelock, useSafelockLimits } from "@/lib/api/safelocks";
+import { createSafelock, useSafelockCreated, useSafelockLimits } from "@/lib/api/safelocks";
 import type { Branch, SafelockLimits } from "@/lib/api/types";
-import { useAuth } from "@/lib/auth/store";
 import { cn } from "@/lib/cn";
-import { formatNaira } from "@/lib/format";
+import { formatNaira, formatNairaShort } from "@/lib/format";
 import { addDays, daysBetween, formatDay, todayInLagos } from "@/lib/invoices";
 import { SAFELOCK_PRESETS } from "@/lib/savings";
-import { unlockWithBiometrics } from "@/lib/security/biometrics";
 import { parseNaira } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
 
@@ -35,7 +33,7 @@ const NOT_ENOUGH = "That's more than this branch has available. Money held for t
 
 /**
  * New Safelock: branch, name, amount and unlock date, then a confirmation that it can't be undone (a tick,
- * then Face ID or the passcode, as for sending money). The window and amounts come from the server.
+ * then the transaction PIN, as for sending money). The window and amounts come from the server.
  */
 export default function NewSafelock() {
   const { branch } = useLocalSearchParams<{ branch?: string }>();
@@ -72,10 +70,9 @@ export default function NewSafelock() {
 
 function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; branches: Branch[]; initialBranch?: string }) {
   const { colors } = useTheme();
-  const create = useCreateSafelock();
+  const created = useSafelockCreated();
+  const pin = useTransactionPin();
   const accounts = useAccounts(true);
-  const biometrics = useAuth((s) => s.biometrics);
-  const biometricsChanged = useAuth((s) => s.biometricsChanged);
   const today = todayInLagos();
   const presets = SAFELOCK_PRESETS.filter((d) => d >= limits.minDays && d <= limits.maxDays);
 
@@ -93,7 +90,8 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
   const [presetPicks, setPresetPicks] = useState(0);
   const [submitted, setSubmitted] = useState(false);
   const [agreed, setAgreed] = useState(false);
-  const [askPasscode, setAskPasscode] = useState(false);
+  // What the last try came to, when it didn't lock the money: shown on the confirm step.
+  const [error, setError] = useState<unknown>();
   const [serverField, setServerField] = useState<{ amount?: string; unlockOn?: string }>({});
   // Locking the same details again reuses the key, so a create whose answer got lost can't lock the money twice.
   const [keyFor] = useState(() => idempotencyKeys());
@@ -132,41 +130,37 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
     setStep("confirm");
   }
 
-  // Locking can't be undone, so it's confirmed like a send: Face ID, or the passcode.
-  async function confirm() {
-    if (biometrics) {
-      const result = await unlockWithBiometrics(`Lock ${formatNaira(kobo!)}`);
-      if (result === "ok") return lock();
-      if (result === "changed") biometricsChanged();
-    }
-    setAskPasscode(true);
-  }
-
-  function lock() {
-    setAskPasscode(false);
+  // Locking can't be undone, so it's confirmed like a send: with the transaction PIN (it replaced Face ID and the passcode here).
+  function confirm() {
+    setError(undefined);
     const input = { branch: branch!, title: title.trim(), amountKobo: kobo!, unlockOn };
-    create.mutate(
-      { input, idempotencyKey: keyFor(input) },
-      {
-        onSuccess: (saved) => {
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          router.replace({ pathname: "/savings/safelock/[id]", params: { id: saved._id, created: "1" } });
-        },
-        onError: (err) => {
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          if (err instanceof ApiError && (err.code === "SAFELOCK_TOO_SMALL" || err.code === "INSUFFICIENT_BALANCE")) {
-            setServerField({ amount: err.code === "INSUFFICIENT_BALANCE" ? NOT_ENOUGH : friendlyMessage(err) });
-            setStep("details");
-          } else if (err instanceof ApiError && err.code === "INVALID_UNLOCK_DATE") {
-            setServerField({ unlockOn: friendlyMessage(err) });
-            setStep("details");
-          }
-        },
+    const amount = formatNairaShort(kobo!);
+    void pin.ask({
+      title: `Lock ${amount}?`,
+      subtitle: `Enter your transaction PIN to lock ${amount} until ${formatDay(unlockOn)}.`,
+      pending: "Locking…",
+      // The same details keep the same key, a corrected PIN too, so a lock whose answer got lost can't happen twice.
+      run: (entered) => createSafelock(input, keyFor(input), entered),
+      onSuccess: (saved) => {
+        created(saved);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        router.replace({ pathname: "/savings/safelock/[id]", params: { id: saved._id, created: "1" } });
       },
-    );
+      onError: (err) => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        setError(err);
+        if (err instanceof ApiError && (err.code === "SAFELOCK_TOO_SMALL" || err.code === "INSUFFICIENT_BALANCE")) {
+          setServerField({ amount: err.code === "INSUFFICIENT_BALANCE" ? NOT_ENOUGH : friendlyMessage(err) });
+          setStep("details");
+        } else if (err instanceof ApiError && err.code === "INVALID_UNLOCK_DATE") {
+          setServerField({ unlockOn: friendlyMessage(err) });
+          setStep("details");
+        }
+      },
+    });
   }
 
-  const fieldError = create.error instanceof ApiError && ["SAFELOCK_TOO_SMALL", "INSUFFICIENT_BALANCE", "INVALID_UNLOCK_DATE"].includes(create.error.code ?? "");
+  const fieldError = error instanceof ApiError && ["SAFELOCK_TOO_SMALL", "INSUFFICIENT_BALANCE", "INVALID_UNLOCK_DATE"].includes(error.code ?? "");
 
   if (step === "confirm") {
     return (
@@ -197,25 +191,18 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
             <Agree checked={agreed} onChange={setAgreed} label={`I understand the money stays locked until ${formatDay(unlockOn)}.`} />
           </View>
 
-          <FormError message={create.error && !fieldError ? lockError(create.error) : undefined} />
+          <FormError message={error && !fieldError ? lockError(error) : undefined} />
 
           <View className="gap-3">
-            <Button loading={create.isPending} disabled={!agreed} onPress={() => void confirm()} icon={{ ios: "lock.fill", android: "lock" }}>
+            <Button loading={pin.busy} disabled={!agreed} onPress={confirm} icon={{ ios: "lock.fill", android: "lock" }}>
               {`Lock ${formatNaira(kobo!)}`}
             </Button>
-            <Button variant="ghost" disabled={create.isPending} onPress={() => setStep("details")}>
+            <Button variant="ghost" disabled={pin.busy} onPress={() => setStep("details")}>
               Back
             </Button>
           </View>
         </ScrollView>
-        {askPasscode && (
-          <ConfirmPasscode
-            title={`Lock ${formatNaira(kobo!)}?`}
-            subtitle={`Enter your passcode to lock it until ${formatDay(unlockOn)}.`}
-            onConfirmed={lock}
-            onCancel={() => setAskPasscode(false)}
-          />
-        )}
+        {pin.sheet}
       </>
     );
   }

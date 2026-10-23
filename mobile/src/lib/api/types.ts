@@ -35,6 +35,16 @@ export type SignedInDevice = {
   biometricSignIn?: boolean;
 };
 
+/** GET /api/transaction-pin (docs/briefs/transaction-pin.md). The PIN itself never comes back. */
+export type TransactionPinStatus = {
+  isSet: boolean;
+  locked: boolean;
+  lockedUntil: string | null;
+  /** Wrong tries left before it locks; null when no PIN is set. */
+  attemptsLeft: number | null;
+  changedAt: string | null;
+};
+
 // ---- Business, branches and accounts ----
 
 export type BusinessStatus = "draft" | "submitted" | "changes_requested" | "approved" | "rejected";
