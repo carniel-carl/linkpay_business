@@ -31,6 +31,16 @@ export function LinkStateBadge({ link, className }: { link: Pick<PaymentLink, "a
   )
 }
 
+/** "Over limit" on a payment that came in after the link had reached its payment limit; nothing otherwise. */
+export function OverLimitBadge({ overLimit, className }: { overLimit?: boolean; className?: string }) {
+  if (!overLimit) return null
+  return (
+    <Badge variant="warning" className={className}>
+      Over limit
+    </Badge>
+  )
+}
+
 /** "Test" on a link or checkout in test mode; nothing for live ones. */
 export function TestBadge({ mode, className }: { mode: PaymentMode | undefined; className?: string }) {
   if (mode !== "test") return null

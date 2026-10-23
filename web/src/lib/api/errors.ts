@@ -117,6 +117,19 @@ const MESSAGES: Record<string, string> = {
   TRANSACTION_PIN_LOCKED: "Your transaction PIN is locked after too many wrong tries. Reset it, or wait and try again.",
   TRANSACTION_PIN_ALREADY_SET: "You already have a transaction PIN. Change it instead.",
   WEAK_TRANSACTION_PIN: WEAK_PIN_MESSAGE,
+  // Beneficiaries and payout lists (docs/briefs/bulk-payouts.md)
+  BENEFICIARY_EXISTS: "This account is already saved as a beneficiary.",
+  BENEFICIARY_OWN_ACCOUNT: "This is one of your own branch accounts. Move money to it as a branch transfer instead.",
+  BENEFICIARY_NOT_FOUND: "We couldn't find that beneficiary. It may have been removed. Refresh and try again.",
+  BENEFICIARY_IN_USE: "A payout list still pays this beneficiary. Take them off the list first.",
+  BENEFICIARY_LIMIT: "You have 2,000 saved beneficiaries, the most a business can have. Remove some to add more.",
+  PAYOUT_LIST_NOT_FOUND: "We couldn't find that payout list. It may have been deleted, or be for a branch you can't see.",
+  PAYOUT_LIST_LIMIT: "You have 100 payout lists, the most a business can have. Delete one to add another.",
+  PAYOUT_LIST_EMPTY: "This bulk transfer only went to your own branches, so there's nobody to save as a list.",
+  BRANCH_REQUIRED: "Choose the account to pay from.",
+  IDEMPOTENCY_KEY_REUSED: "These payment details changed after they were first sent. Check Transfers to see whether it went before sending it again.",
+  // The bank answered a name check without a name (502, and a per-row code): a passing outage, not a wrong account.
+  NAME_CHECK_UNAVAILABLE: "We couldn't check this account with the bank right now. Try again in a moment.",
 }
 
 /** Friendly copy for an error code reported inside a response (a bulk row's), or the server's own message. */

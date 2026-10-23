@@ -5,6 +5,7 @@ import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
 import { ApiError, friendlyMessage } from "@/lib/api/errors"
 import type { AuthSession, TwoFactorChallenge } from "@/lib/api/types"
+import { clearAuthEmail, setAuthEmail } from "@/lib/auth-email"
 import type { ActionResult } from "@/lib/action-result"
 import { safeNext } from "@/lib/safe-next"
 import { clearSession, getChallenge, getSessionToken, setChallenge, setSession } from "@/lib/session"
@@ -15,6 +16,7 @@ type LoginResponse = AuthSession | TwoFactorChallenge
 async function finishLogin(res: LoginResponse, userEmail: string, next?: string): Promise<never> {
   // Only a path on this site goes on as the post-login destination.
   const target = safeNext(next)
+  await clearAuthEmail()
   if ("twoFactorRequired" in res) {
     await setChallenge({ token: res.challengeToken, method: res.method, email: userEmail })
     redirect(`/sign-in/two-factor${target ? `?next=${encodeURIComponent(target)}` : ""}`)
@@ -36,7 +38,10 @@ export async function signIn(input: unknown, next?: string): Promise<ActionResul
   } catch (err) {
     if (err instanceof ApiError) {
       // The backend has already emailed a fresh code, so go straight to verification.
-      if (err.code === "EMAIL_NOT_VERIFIED") redirect(`/verify-email?email=${encodeURIComponent(body.email)}&resent=1`)
+      if (err.code === "EMAIL_NOT_VERIFIED") {
+        await setAuthEmail(body.email)
+        redirect("/verify-email")
+      }
       return { ok: false, error: friendlyMessage(err), code: err.code }
     }
     throw err

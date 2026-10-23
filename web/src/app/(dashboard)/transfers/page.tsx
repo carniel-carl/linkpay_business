@@ -5,6 +5,7 @@ import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
 import { ApprovalRuleDialog } from "@/components/transfers/approval-rule-dialog"
 import { BulkTransferDialog } from "@/components/transfers/bulk-transfer-dialog"
 import { NewTransferDialog, type SourceAccount } from "@/components/transfers/new-transfer-dialog"
+import { BatchListAction } from "@/components/payouts/save-batch-as-list"
 import { TransfersView } from "@/components/transfers/transfers-view"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import { Button } from "@/components/ui/button"
@@ -130,6 +131,7 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
         showBranch={!selected && branches.length > 1}
         batch={batch?.ok ? batch.data : null}
         linked={linked?.ok ? linked.data : null}
+        batchAction={canCreate && batch?.ok ? <BatchListAction batch={batch.data} /> : undefined}
         newTransfer={
           canCreate &&
           sources.length > 0 && (

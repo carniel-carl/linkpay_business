@@ -44,7 +44,7 @@ export function ResetPasswordForm({ email }: { email: string }) {
         ledger={resetLedger("sign-in")}
         action={
           <Button variant="pop" size="lg" asChild>
-            <Link href={`/sign-in?email=${encodeURIComponent(email)}`}>
+            <Link href="/sign-in">
               Sign in
               <ArrowRight data-icon="inline-end" aria-hidden />
             </Link>

@@ -5,7 +5,7 @@ import { CHALLENGE_COOKIE, CHOICE_COOKIES, SESSION_COOKIE } from "@/lib/session"
 
 /**
  * Ends the session and clears its cookies. Server Components redirect here when the token has expired, and an
- * invite link sends people here to switch accounts. `next` and `email` carry through to sign-in.
+ * invite link sends people here to switch accounts. `next` carries through to sign-in.
  */
 export async function GET(request: NextRequest) {
   // A token the API already refuses is ignored there.
@@ -16,8 +16,6 @@ export async function GET(request: NextRequest) {
   if (params.get("expired")) query.set("expired", "1")
   const next = safeNext(params.get("next"))
   if (next) query.set("next", next)
-  const email = params.get("email")
-  if (email) query.set("email", email)
 
   // A relative Location. Behind a proxy, `next start` builds request.url from the address it listens on
   // (http://localhost:3000), not the one the browser used, so an absolute redirect would leave the site.

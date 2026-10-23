@@ -16,7 +16,7 @@ import type { LinkCheckout, SuggestedPayment } from "@/lib/api/types"
 import { formatDateTime, formatNaira, formatShortDate } from "@/lib/format"
 import { MATCHED_BY_LABELS, originLabel, uniqueKobo } from "@/lib/payment-links"
 import { cn } from "@/lib/utils"
-import { CheckoutStatusBadge, TestBadge } from "./parts"
+import { CheckoutStatusBadge, OverLimitBadge, TestBadge } from "./parts"
 
 /** One payer's checkout: what they were asked to send, what came in and how it was matched. */
 export function CheckoutSheet({ checkout, onClose }: { checkout: LinkCheckout | null; onClose: () => void }) {
@@ -38,8 +38,14 @@ function Details({ checkout: c }: { checkout: LinkCheckout }) {
       <SheetHeader className="gap-4 border-b bg-muted/50 p-6 pr-14">
         <span className="flex items-center gap-1.5">
           <CheckoutStatusBadge status={c.status} />
+          <OverLimitBadge overLimit={c.overLimit} />
           <TestBadge mode={c.mode} />
         </span>
+        {c.overLimit && (
+          <p className="text-sm text-muted-foreground">
+            This payment came in after the link reached its payment limit. Refund it or honour it.
+          </p>
+        )}
         <div className="grid gap-1.5">
           <SheetDescription className="text-foreground">
             <span className="font-display text-lg font-semibold tracking-[-0.02em]">{c.payer.name}</span>

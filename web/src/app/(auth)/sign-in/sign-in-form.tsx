@@ -1,12 +1,14 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { Mail } from "lucide-react"
+import { Info, Mail } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import type { z } from "zod"
 import { PasswordInput } from "@/components/auth/password-input"
 import { FormError } from "@/components/common/form-error"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldGroup, FieldLabel, FieldSeparator } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -17,13 +19,25 @@ import { signIn } from "../actions"
 
 type Values = z.infer<typeof signInSchema>
 
-/** `email` prefills the field (an invite link knows which account to use). */
-export function SignInForm({ next, email }: { next?: string; email?: string }) {
+/**
+ * `email` prefills the field (an invite link knows which account to use). `sessionEnded` says so once, on
+ * arrival: the note goes when they submit, so it never sits beside an error.
+ */
+export function SignInForm({ next, email, sessionEnded }: { next?: string; email?: string; sessionEnded?: boolean }) {
   const form = useForm<Values>({
     resolver: zodResolver(signInSchema),
     defaultValues: { email: email ?? "", password: "" },
   })
   const { isSubmitting, errors } = form.formState
+  const [showSessionEnded, setShowSessionEnded] = useState(!!sessionEnded)
+
+  // Take `expired` out of the address so a refresh or Back doesn't say it again.
+  useEffect(() => {
+    if (!sessionEnded) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete("expired")
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash)
+  }, [sessionEnded])
 
   async function onSubmit(values: Values) {
     applyResult(form, await signIn(values, next))
@@ -33,8 +47,22 @@ export function SignInForm({ next, email }: { next?: string; email?: string }) {
 
   return (
     <div className="grid gap-6">
-      <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-6">
-        <FormError message={errors.root?.message} />
+      <form
+        onSubmit={(e) => {
+          setShowSessionEnded(false)
+          return form.handleSubmit(onSubmit)(e)
+        }}
+        noValidate
+        className="grid gap-6"
+      >
+        {showSessionEnded ? (
+          <Alert>
+            <Info aria-hidden />
+            <AlertDescription>Your session ended. Sign in again to continue.</AlertDescription>
+          </Alert>
+        ) : (
+          <FormError message={errors.root?.message} />
+        )}
         <FieldGroup>
           <Controller
             name="email"

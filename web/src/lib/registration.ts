@@ -19,16 +19,25 @@ export async function setRegistration(email: string, token: string) {
   })
 }
 
-/** The token, if this browser signed up with `email`. */
-export async function getRegistrationToken(email: string) {
+async function getRegistration() {
   const raw = (await cookies()).get(REGISTRATION_COOKIE)?.value
   if (!raw) return undefined
   try {
-    const saved = JSON.parse(raw) as { email?: string; token?: string }
-    return saved.email === email ? saved.token : undefined
+    return JSON.parse(raw) as { email?: string; token?: string }
   } catch {
     return undefined
   }
+}
+
+/** The token, if this browser signed up with `email`. */
+export async function getRegistrationToken(email: string) {
+  const saved = await getRegistration()
+  return saved?.email === email ? saved.token : undefined
+}
+
+/** The email this browser signed up with, while its token lasts. */
+export async function getRegistrationEmail() {
+  return (await getRegistration())?.email || undefined
 }
 
 export async function clearRegistration() {
