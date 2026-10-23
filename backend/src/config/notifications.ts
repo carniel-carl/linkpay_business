@@ -32,6 +32,7 @@ export const NOTIFICATION_TYPES = {
   // ---- Staff (admin console) ----
   "kyb.submitted": { audience: "staff", label: "A business is waiting for review", push: false },
   "account.setup_failed": { audience: "staff", label: "A bank account couldn't be set up", push: false },
+  "transfer.stuck": { audience: "staff", label: "A transfer is taking too long at the bank partner", push: false },
   "staff.invite_accepted": { audience: "staff", label: "Someone accepted your staff invite", push: false },
   "staff.role_changed": { audience: "staff", label: "Your staff role changed", push: false },
   "compliance.flag_raised": { audience: "staff", label: "A business was flagged", push: false },

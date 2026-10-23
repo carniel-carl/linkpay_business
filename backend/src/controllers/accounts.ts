@@ -52,9 +52,10 @@ export const listAccounts: RequestHandler = async (req, res) => {
         // Passed through as an integer so clients never do float math on money. `heldKobo` is what
         // transfers waiting for approval (or for Liquifia) hold; `savedKobo` is set aside in pockets
         // and Safelocks (`lockedKobo` is the Safelock part);
-        // `availableKobo` is what can be sent.
+        // `availableKobo` is what can be sent, never below zero (a payout Liquifia has already debited still
+        // counts as held until it settles, see heldByAccount).
         balance: balance
-          ? { amountKobo, currency: account.currency, heldKobo, savedKobo, lockedKobo, availableKobo: amountKobo - heldKobo - savedKobo }
+          ? { amountKobo, currency: account.currency, heldKobo, savedKobo, lockedKobo, availableKobo: Math.max(0, amountKobo - heldKobo - savedKobo) }
           : null,
       };
     }),

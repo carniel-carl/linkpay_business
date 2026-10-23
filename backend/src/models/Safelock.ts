@@ -26,6 +26,8 @@ const safelockSchema = new Schema(
     createdBy: { type: Types.ObjectId, ref: "User", required: true },
     // Optional Idempotency-Key from the client, so a retried request doesn't lock money twice.
     clientKey: { type: String },
+    // Hash of what that request asked for, so the same key with different details is refused (utils/idempotency.ts).
+    requestHash: { type: String },
   },
   { timestamps: true },
 );

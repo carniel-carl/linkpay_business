@@ -1,13 +1,17 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { createHmac } from "node:crypto";
+import { env } from "../src/config/env";
 import { BusinessModel } from "../src/models/Business";
 import { MembershipModel } from "../src/models/Membership";
+import { NotificationModel } from "../src/models/Notification";
 import { TransactionModel } from "../src/models/Transaction";
 import { TransferModel } from "../src/models/Transfer";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
+import { WebhookEventModel } from "../src/models/WebhookEvent";
 import { setEmailProvider, type EmailMessage } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
-import { processOpenTransfers } from "../src/services/transfers";
+import { processOpenTransfers, refreshTransfer, submitTransfer } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
 
@@ -579,5 +583,233 @@ describe("bulk transfers", () => {
     expect(approved.body.statusCounts).toMatchObject({ processing: 2, pending_approval: 0 });
     const listed = await t.api("GET", `/api/transfers?batch=${batch._id}`, { token: owner.token });
     expect(listed.body.total).toBe(2);
+  });
+});
+
+describe("sending once when callers overlap", () => {
+  const unavailable = { status: 503, code: "UNAVAILABLE", message: "Try again later" };
+  beforeAll(() => {
+    env.liquifia.webhookSecret = "whsec_test";
+  });
+  afterAll(() => {
+    env.liquifia.webhookSecret = undefined;
+  });
+  afterEach(() => {
+    Object.assign(t.liquifia, {
+      payoutDelayMs: 0,
+      duplicatePayoutsWith: { status: 409, code: "IDEMPOTENCY_IN_PROGRESS", message: "A request with this key is already processing" },
+      replayPayoutsWith: null,
+      loseNextPayoutResponses: 0,
+      failNextTraces: 0,
+      failTracesWith: unavailable,
+      failPayoutsWith: unavailable,
+    });
+  });
+
+  async function until(check: () => boolean | Promise<boolean>, ms = 5000) {
+    const end = Date.now() + ms;
+    while (!(await check())) {
+      if (Date.now() > end) throw new Error("Timed out waiting");
+      await Bun.sleep(10);
+    }
+  }
+  /** Create requests for one transfer that reached Liquifia. */
+  const creates = (reference: string) => t.liquifia.requests.filter((r) => r.method === "POST" && r.path === "/payouts" && r.body?.reference === reference);
+  const webhook = (body: Record<string, unknown>) =>
+    t.api("POST", "/api/webhooks/liquifia", {
+      body,
+      headers: { "X-Liquifia-Signature": createHmac("sha256", "whsec_test").update(JSON.stringify(body)).digest("hex") },
+    });
+  // Webhooks are handled after the response.
+  const handled = (eventId: string) => until(async () => !!(await WebhookEventModel.findOne({ eventId }))?.processedAt);
+  const stored = async (id: string) => (await TransferModel.findById(id))!;
+  const failedMails = () => outbox.filter((m) => m.subject.startsWith("Transfer failed"));
+
+  /** A finance member's transfer waiting for the owner, so the test picks when it's sent. */
+  async function awaitingApproval() {
+    const ctx = await setup();
+    const finance = await ctx.member("finance");
+    const res = await t.api("POST", "/api/transfers", { token: finance.token, body: { branch: ctx.headOfficeId, amountKobo: 1_000_00, recipient: toBank() } });
+    expect(res.body.status).toBe("pending_approval");
+    return { ...ctx, held: res.body };
+  }
+  const sendNow = async () => {
+    const ctx = await setup();
+    const res = await t.api("POST", "/api/transfers", { token: ctx.owner.token, body: { branch: ctx.headOfficeId, amountKobo: 1_000_00, recipient: toBank() } });
+    return { ...ctx, sent: res.body };
+  };
+
+  test("callers arriving while the create is in flight don't send it again", async () => {
+    const { owner, held } = await awaitingApproval();
+    t.liquifia.payoutDelayMs = 300;
+    const approving = t.api("POST", `/api/transfers/${held._id}/approve`, { token: owner.token });
+    await until(() => creates(held.reference).length > 0);
+
+    // The sweep, /refresh and two more submits, each with its own copy of the transfer.
+    await Promise.all([
+      processOpenTransfers(),
+      t.api("POST", `/api/transfers/${held._id}/refresh`, { token: owner.token }),
+      stored(held._id).then(submitTransfer),
+      stored(held._id).then(refreshTransfer),
+    ]);
+    expect((await approving).body.status).toBe("processing");
+    expect(creates(held.reference)).toHaveLength(1);
+    const sent = await stored(held._id);
+    expect(sent.provider?.attempts).toBe(1);
+    expect(sent.provider?.payoutId).toBeTruthy();
+    expect(sent.provider?.submittingUntil).toBeFalsy();
+
+    t.liquifia.settlePayout(held.reference, "success");
+    await processOpenTransfers();
+    expect((await stored(held._id)).status).toBe("success");
+    expect((await TransactionModel.find({ transfer: held._id })).map((d) => d.status)).toEqual(["success"]);
+  });
+
+  test("a payout webhook during the create doesn't send it again or fail it, and only picks the transfer", async () => {
+    const { owner, held } = await awaitingApproval();
+    t.liquifia.payoutDelayMs = 300;
+    // Liquifia answering a repeated key with a 4xx other than 409 is what used to fail a paid transfer.
+    t.liquifia.duplicatePayoutsWith = { status: 422, code: "UNPROCESSABLE", message: "Request already received" };
+    const approving = t.api("POST", `/api/transfers/${held._id}/approve`, { token: owner.token });
+    await until(() => creates(held.reference).length > 0);
+
+    const early = { id: `evt_early_${held._id}`, event: "payout.success", data: { reference: held.reference, status: "success" } };
+    expect((await webhook(early)).status).toBe(200);
+    await handled(early.id);
+    expect((await approving).body.status).toBe("processing");
+    expect(creates(held.reference)).toHaveLength(1);
+    // The payload said success, but Liquifia hasn't settled it yet, so it stays processing.
+    const sent = await stored(held._id);
+    expect(sent.status).toBe("processing");
+
+    t.liquifia.settlePayout(sent.provider!.payoutId!, "success");
+    const settled = { id: `evt_settled_${held._id}`, event: "payout.success", data: { id: sent.provider!.payoutId } };
+    await webhook(settled);
+    await handled(settled.id);
+    expect((await stored(held._id)).status).toBe("success");
+    expect(failedMails()).toHaveLength(0);
+  });
+
+  test("a payout webhook that names no transfer we know follows up the open ones", async () => {
+    const { sent } = await sendNow();
+    t.liquifia.settlePayout(sent.reference, "success");
+    const event = { id: `evt_unknown_${sent._id}`, event: "payout.success", data: { reference: "NOT-OURS" } };
+    await webhook(event);
+    await handled(event.id);
+    expect((await stored(sent._id)).status).toBe("success");
+  });
+
+  test("a retry after an unknown outcome looks the payout up instead of failing on a 4xx", async () => {
+    // Liquifia creates the payout but the answer is lost; a repeated key is then refused with a 4xx.
+    t.liquifia.loseNextPayoutResponses = 1;
+    t.liquifia.replayPayoutsWith = { status: 422, code: "UNPROCESSABLE", message: "Reference already used" };
+    const { sent } = await sendNow();
+    expect(sent.status).toBe("processing");
+    const payout = t.liquifia.payouts.find((p) => p.reference === sent.reference)!;
+    expect(payout).toBeTruthy();
+    expect((await stored(sent._id)).provider?.payoutId).toBeFalsy();
+
+    // While the lookup is down it waits, rather than sending blind.
+    t.liquifia.failNextTraces = 1;
+    await processOpenTransfers();
+    expect((await stored(sent._id)).status).toBe("processing");
+    expect(creates(sent.reference)).toHaveLength(1);
+
+    await processOpenTransfers();
+    const adopted = await stored(sent._id);
+    expect(adopted.status).toBe("processing");
+    expect(adopted.provider?.payoutId).toBe(payout.id);
+    expect(adopted.provider?.attempts).toBe(3);
+    expect(creates(sent.reference)).toHaveLength(1);
+    expect((await TransactionModel.find({ transfer: sent._id })).map((d) => d.status)).toEqual(["pending"]);
+
+    t.liquifia.settlePayout(payout.id, "success");
+    await processOpenTransfers();
+    expect((await stored(sent._id)).status).toBe("success");
+    expect(failedMails()).toHaveLength(0);
+  });
+
+  test("a retry refused with a 4xx adopts the payout when the lookup then finds it", async () => {
+    t.liquifia.loseNextPayoutResponses = 1;
+    t.liquifia.replayPayoutsWith = { status: 422, code: "UNPROCESSABLE", message: "Reference already used" };
+    const { sent } = await sendNow();
+    // The lookup before the retry misses, so the retry is sent and refused; the lookup after it finds the payout.
+    t.liquifia.failNextTraces = 1;
+    t.liquifia.failTracesWith = { status: 404, code: "NOT_FOUND", message: "Payout not found" };
+    await processOpenTransfers();
+    expect(creates(sent.reference)).toHaveLength(2);
+    const adopted = await stored(sent._id);
+    expect(adopted.status).toBe("processing");
+    expect(adopted.provider?.payoutId).toBe(t.liquifia.payouts.find((p) => p.reference === sent.reference)!.id);
+    expect(failedMails()).toHaveLength(0);
+  });
+
+  test("a retry refused with a 4xx still fails when Liquifia has no such payout", async () => {
+    t.liquifia.failNextPayouts = 1; // a 503: nothing created
+    const { sent } = await sendNow();
+    expect(sent.status).toBe("processing");
+    t.liquifia.failNextPayouts = 1;
+    t.liquifia.failPayoutsWith = { status: 400, code: "INSUFFICIENT_BALANCE", message: "Insufficient balance" };
+    await processOpenTransfers();
+    const failed = await stored(sent._id);
+    expect(failed.status).toBe("failed");
+    expect(failed.failureReason).toBe("There wasn't enough money in the account");
+    expect(failed.provider?.submittingUntil).toBeFalsy();
+    expect(failedMails()).toHaveLength(1);
+  });
+
+  test("a debit row lost to a crash after the payout id was saved is put back by the next refresh", async () => {
+    const { owner, sent } = await sendNow();
+    // As if the process stopped right after saving the payout id.
+    await TransactionModel.deleteMany({ transfer: sent._id });
+    expect((await t.api("POST", `/api/transfers/${sent._id}/refresh`, { token: owner.token })).status).toBe(200);
+    const rows = await TransactionModel.find({ transfer: sent._id });
+    expect(rows.map((r) => [r.status, r.direction, r.netKobo])).toEqual([["pending", "debit", 1_000_00 + 2000]]);
+
+    t.liquifia.settlePayout(sent.reference, "success");
+    await processOpenTransfers();
+    expect((await TransactionModel.find({ transfer: sent._id })).map((r) => r.status)).toEqual(["success"]);
+  });
+
+  const stuckNotices = (transferId: string) => NotificationModel.find({ type: "transfer.stuck", "data.transferId": transferId });
+
+  test("a payout that hasn't settled a day after it was sent is flagged to staff once", async () => {
+    const { sent } = await sendNow();
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60_000);
+    await TransferModel.updateOne({ _id: sent._id }, { submittedAt: dayAgo, "provider.firstAttemptAt": dayAgo });
+    await processOpenTransfers();
+    await processOpenTransfers();
+    const notices = await stuckNotices(sent._id);
+    expect(notices).toHaveLength(1); // the one staff member
+    expect(notices[0]).toMatchObject({ audience: "staff", title: "Transfer needs a look" });
+    expect(notices[0]!.body).toContain(sent.reference);
+    const after = await stored(sent._id);
+    expect(after.status).toBe("processing");
+    expect(after.provider?.stuckAt).toBeInstanceOf(Date);
+  });
+
+  test("a transfer Liquifia hasn't accepted an hour after the first try is flagged once", async () => {
+    t.liquifia.failNextPayouts = 3;
+    const { sent } = await sendNow();
+    await TransferModel.updateOne({ _id: sent._id }, { "provider.firstAttemptAt": new Date(Date.now() - 2 * 60 * 60_000) });
+    await processOpenTransfers();
+    await processOpenTransfers();
+    expect((await stored(sent._id)).provider?.payoutId).toBeFalsy();
+    expect(await stuckNotices(sent._id)).toHaveLength(1);
+  });
+
+  test("a payout status Liquifia doesn't document is escalated, not guessed", async () => {
+    const { sent } = await sendNow();
+    t.liquifia.settlePayout(sent.reference, "reversed");
+    await processOpenTransfers();
+    await processOpenTransfers();
+    const after = await stored(sent._id);
+    expect(after.status).toBe("processing");
+    expect(after.provider?.status).toBe("reversed");
+    const notices = await stuckNotices(sent._id);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.body).toContain('"reversed"');
+    expect((await TransactionModel.find({ transfer: sent._id })).map((r) => r.status)).toEqual(["pending"]);
+    expect(failedMails()).toHaveLength(0);
   });
 });

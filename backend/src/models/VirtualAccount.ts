@@ -18,6 +18,8 @@ const virtualAccountSchema = new Schema(
     bankUuid: { type: String },
     // Short lock while a transfer from this account checks the balance and holds funds (see services/transfers.ts).
     lockedUntil: { type: Date, select: false },
+    // Random token of whoever holds the lock, so only the holder can extend or release it.
+    lockToken: { type: String, select: false },
     // Raw provider response, kept for support and reconciliation.
     providerData: { type: Schema.Types.Mixed, select: false },
   },

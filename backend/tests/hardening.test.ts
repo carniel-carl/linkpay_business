@@ -4,6 +4,7 @@ import { join } from "node:path";
 import express from "express";
 import multer from "multer";
 import { errorHandler } from "../src/middleware/errorHandler";
+import { AuditLogModel } from "../src/models/AuditLog";
 import { BusinessModel } from "../src/models/Business";
 import { OtpFailureModel, OtpModel } from "../src/models/Otp";
 import { StaffModel } from "../src/models/Staff";
@@ -264,6 +265,20 @@ describe("invite emails", () => {
     const mail = outbox.findLast((m) => m.to === "new-staff@test.ng")!;
     expect(mail.html).not.toContain("<a href=\"https://evil\"");
     expect(mail.html).toContain(escaped);
+  });
+
+  test("a staff invite is audited even when its email can't be sent", async () => {
+    const token = await signStaffToken("auditor@test.ng");
+    setEmailProvider({ send: async () => { throw new Error("Email service down"); } });
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await t.api("POST", "/api/admin/staff/invites", { token, body: { email: "unsent@test.ng", role: "support" } });
+      expect(res.status).toBe(500);
+    } finally {
+      logged.mockRestore();
+      setEmailProvider({ send: async (m) => void outbox.push(m) });
+    }
+    expect(await AuditLogModel.countDocuments({ action: "staff.invited", "details.email": "unsent@test.ng" })).toBe(1);
   });
 
   test("line breaks in a name never reach a subject", async () => {

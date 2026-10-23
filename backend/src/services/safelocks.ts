@@ -10,6 +10,7 @@ import { BusinessModel, type BusinessDocument } from "../models/Business";
 import type { MembershipDocument } from "../models/Membership";
 import { SafelockModel } from "../models/Safelock";
 import { HttpError } from "../utils/HttpError";
+import { assertSameRequest, isDuplicateClientKey, requestHash } from "../utils/idempotency";
 import { safelockReleased } from "./notificationEvents";
 import { branchAccount, todayInLagos } from "./pockets";
 import { availableBalance, withAccountLock } from "./transfers";
@@ -61,12 +62,21 @@ export async function createSafelock(opts: {
     });
   }
   const { branch, account } = await branchAccount(business, opts.membership, opts.branchId);
+  // What this request asks for, so the same Idempotency-Key with different details is refused.
+  const hash = opts.clientKey ? requestHash({ branch: String(branch._id), title: opts.title, amountKobo, unlockOn }) : undefined;
 
-  return withAccountLock(account._id, async () => {
-    if (opts.clientKey) {
-      const replay = await SafelockModel.findOne({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
-      if (replay) return { safelock: replay, replayed: true };
-    }
+  /** The Safelock first created with this Idempotency-Key, if it was used before. */
+  const replay = async () => {
+    if (!opts.clientKey) return null;
+    const first = await SafelockModel.findOne({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
+    if (!first) return null;
+    assertSameRequest(first.requestHash, hash);
+    return { safelock: first, replayed: true };
+  };
+
+  return withAccountLock(account._id, async (lock) => {
+    const replayed = await replay();
+    if (replayed) return replayed;
     const running = await SafelockModel.countDocuments({ branch: branch._id, status: "locked" });
     if (running >= SAFELOCK_MAX_PER_BRANCH) {
       throw new HttpError(409, `A branch can have up to ${SAFELOCK_MAX_PER_BRANCH} Safelocks running at once.`, "SAFELOCK_LIMIT");
@@ -78,18 +88,27 @@ export async function createSafelock(opts: {
         requiredKobo: amountKobo,
       });
     }
-    const safelock = await SafelockModel.create({
-      business: business._id,
-      branch: branch._id,
-      virtualAccount: account._id,
-      title: opts.title,
-      amountKobo,
-      unlockOn,
-      unlockAt: startOfLagosDay(unlockOn),
-      createdBy: userId,
-      clientKey: opts.clientKey,
-    });
-    return { safelock, replayed: false };
+    await lock.confirm();
+    try {
+      const safelock = await SafelockModel.create({
+        business: business._id,
+        branch: branch._id,
+        virtualAccount: account._id,
+        title: opts.title,
+        amountKobo,
+        unlockOn,
+        unlockAt: startOfLagosDay(unlockOn),
+        createdBy: userId,
+        clientKey: opts.clientKey,
+        requestHash: hash,
+      });
+      return { safelock, replayed: false };
+    } catch (err) {
+      // A request with the same key got in first (e.g. from another branch's account): answer as its replay.
+      const replayed = isDuplicateClientKey(err) ? await replay() : null;
+      if (replayed) return replayed;
+      throw err;
+    }
   });
 }
 

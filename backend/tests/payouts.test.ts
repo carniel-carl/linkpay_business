@@ -5,6 +5,7 @@ import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
+import { processOpenTransfers } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
 
@@ -254,6 +255,9 @@ describe("payout lists", () => {
     expect(once.body.batch.amountKobo).toBe(210_000_00);
     expect((await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token })).body.amountKobo).toBe(200_000_00);
 
+    // The first run's payouts settle, so their money stops being held (open payouts stay held until they do).
+    for (const item of once.body.batch.items) t.liquifia.settlePayout(item.reference, "success");
+    await processOpenTransfers();
     await t.api("POST", `/api/payout-lists/${list._id}/run`, { token: owner.token, body: { items: items.slice(1), saveItems: true } });
     const saved = await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token });
     expect(saved.body).toMatchObject({ count: 1, amountKobo: 80_000_00 });

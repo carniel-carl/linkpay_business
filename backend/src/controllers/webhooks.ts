@@ -3,7 +3,7 @@ import type { RequestHandler } from "express";
 import { env } from "../config/env";
 import { WebhookEventModel } from "../models/WebhookEvent";
 import { syncIfStale } from "../services/transactions";
-import { processOpenTransfers } from "../services/transfers";
+import { refreshFromPayoutEvent } from "../services/transfers";
 
 // ASSUMPTION until Liquifia confirms: X-Liquifia-Signature is the hex HMAC-SHA256 of the raw request
 // body with the webhook secret, optionally prefixed "sha256=". Adjust here if their scheme differs.
@@ -18,8 +18,9 @@ export function verifyLiquifiaSignature(rawBody: Buffer, header: string | undefi
 
 // Events that mean money arrived; they trigger an immediate sync instead of trusting the payload.
 const CREDIT_EVENTS = new Set(["virtual_account.credited", "internal_transfer.completed", "optimistic_fill.credited"]);
-// Payout updates trigger a status check of the transfers in progress (again, the payload isn't trusted).
-const PAYOUT_EVENTS = new Set(["payout.success", "payout.failed"]);
+// Payout updates (the docs list payout.success and payout.failed; any payout.* counts) refresh the transfer they
+// name, through the same claim as every other caller. The payload only picks the transfer; it isn't trusted.
+const isPayoutEvent = (eventType: string) => eventType.startsWith("payout.");
 
 /** POST /api/webhooks/liquifia (raw body). Stores every verified event, then reacts. */
 export const liquifiaWebhook: RequestHandler = async (req, res) => {
@@ -57,7 +58,7 @@ export const liquifiaWebhook: RequestHandler = async (req, res) => {
 
   let work: Promise<unknown> | null = null;
   if (eventType && CREDIT_EVENTS.has(eventType)) work = syncIfStale(0);
-  else if (eventType && PAYOUT_EVENTS.has(eventType)) work = processOpenTransfers();
+  else if (eventType && isPayoutEvent(eventType)) work = refreshFromPayoutEvent(payload);
   if (work) {
     work
       .then(() => WebhookEventModel.updateOne({ provider: "liquifia", eventId: String(eventId) }, { processedAt: new Date() }))

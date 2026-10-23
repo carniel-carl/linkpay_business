@@ -133,7 +133,9 @@ describe("automatic risk rules", () => {
     expect(await flagsOf(business._id, "pass_through")).toHaveLength(1);
     expect((await BusinessModel.findById(business._id))!.compliance!.openFlags).toBe(0);
 
-    // New money in and straight out does.
+    // New money in and straight out does. (The first payout settles first: open payouts stay held until they do.)
+    for (const sent of await TransferModel.find({ business: business._id, status: "processing" })) t.liquifia.settlePayout(sent.reference, "success");
+    await processOpenTransfers();
     await receive(va, 1_500_000_00, "1111111111");
     t.liquifia.balances.set(va.providerAccountId, 1_600_000_00);
     expect((await send(owner.token, headOfficeId, 1_400_000_00)).status).toBe(201);
