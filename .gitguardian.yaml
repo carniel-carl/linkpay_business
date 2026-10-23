@@ -1,0 +1,8 @@
+# GitGuardian / ggshield settings.
+# The backend tests sign in with throwaway passwords against an in-memory database, and the
+# "generic password" detector flags any `password` field or variable there. Real secrets live
+# only in backend/.env (gitignored); keep them out of the tests too, since this folder isn't scanned.
+version: 2
+secret:
+  ignored-paths:
+    - "backend/tests/**"
