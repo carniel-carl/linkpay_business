@@ -439,10 +439,10 @@ describe("embedding on the business's website", () => {
     expect(embed.body.inline).toContain(`/pay/${link.slug}?embed=inline`);
     expect(embed.body.javascript).toContain(`link: "${link.slug}"`);
     // The server-side check binds the payment to this link, the order's amount and its id, not just "paid".
-    for (const check of ['status is "paid"', 'mode is "live"', `link.slug is "${link.slug}"`, 'currency is "NGN"', "priceKobo is your order total", "clientReference is your order"]) {
+    for (const check of [`/api/public/pay/${link.slug}/checkouts/<token>`, 'status is "paid"', 'mode is "live"', 'currency is "NGN"', "priceKobo is your order total", "clientReference is your order"]) {
       expect(embed.body.javascript.replace(/\n\s*\/\/\s*/g, " ")).toContain(check);
     }
-    expect(embed.body.verifyUrl).toEndWith("/api/public/checkouts/{token}");
+    expect(embed.body.verifyUrl).toEndWith(`/api/public/pay/${link.slug}/checkouts/{token}`);
 
     // null lets any site embed it again.
     const cleared = await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { allowedOrigins: null } });

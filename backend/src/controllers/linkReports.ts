@@ -13,6 +13,7 @@ import { staffActor } from "../services/audit";
 import { complianceStatusOf } from "../services/compliance";
 import { donationProgress, resolveLinkReport, restoreLink, setDonationHidden, takeDownLink } from "../services/donations";
 import { paymentLinkUrl, unavailableReason } from "../services/paymentLinks";
+import { assertNoConflictOfInterest } from "../services/staff";
 import { HttpError } from "../utils/HttpError";
 
 type IdParams = { id: string };
@@ -27,6 +28,12 @@ async function staffNames(ids: (Types.ObjectId | null | undefined)[]) {
 
 function checkId(id: string) {
   if (!isValidObjectId(id)) throw new HttpError(400, "Invalid id");
+}
+
+/** Staff don't decide about a business they own or work at (take-downs, restores, reports, donations). */
+async function assertMayDecide(staffId: string, businessId: Types.ObjectId) {
+  const business = await BusinessModel.findById(businessId).select("owner");
+  if (business) await assertNoConflictOfInterest(staffId, business);
 }
 
 async function findReport(id: string) {
@@ -167,6 +174,7 @@ export const resolveLinkReportHandler: RequestHandler<IdParams> = async (req, re
     })
     .parse(req.body);
   const report = await findReport(req.params.id);
+  await assertMayDecide(req.staffId!, report.business);
   const resolved = await resolveLinkReport(await staffActor(req), report, body);
   res.json((await serializeReports([resolved]))[0]);
 };
@@ -216,12 +224,14 @@ export const listAdminDonations: RequestHandler<IdParams> = async (req, res) => 
 export const takeDownPaymentLink: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ note }).parse(req.body);
   const link = await findLink(req.params.id);
+  await assertMayDecide(req.staffId!, link.business);
   res.json(await describeLink(await takeDownLink(await staffActor(req), link, body.note)));
 };
 
 export const restorePaymentLink: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ note }).parse(req.body);
   const link = await findLink(req.params.id);
+  await assertMayDecide(req.staffId!, link.business);
   res.json(await describeLink(await restoreLink(await staffActor(req), link, body.note)));
 };
 
@@ -236,11 +246,13 @@ async function findDonation(id: string) {
 export const hideDonation: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ note }).parse(req.body);
   const checkout = await findDonation(req.params.id);
+  await assertMayDecide(req.staffId!, checkout.business);
   res.json(describeDonation(await setDonationHidden(await staffActor(req), checkout, true, body.note)));
 };
 
 export const showDonation: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ note }).parse(req.body);
   const checkout = await findDonation(req.params.id);
+  await assertMayDecide(req.staffId!, checkout.business);
   res.json(describeDonation(await setDonationHidden(await staffActor(req), checkout, false, body.note)));
 };

@@ -2,7 +2,14 @@ import type { Types } from "mongoose";
 import { BranchModel } from "../models/Branch";
 import { BusinessModel, type BusinessDocument } from "../models/Business";
 import type { MembershipDocument } from "../models/Membership";
-import { PocketModel, PocketMovementModel, type PocketDocument, type PocketMovementKind } from "../models/Pocket";
+import {
+  LEDGER_MEMORY,
+  PocketModel,
+  PocketMovementModel,
+  type PocketDocument,
+  type PocketMovementDocument,
+  type PocketMovementKind,
+} from "../models/Pocket";
 import { TransactionModel } from "../models/Transaction";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { HttpError } from "../utils/HttpError";
@@ -93,34 +100,47 @@ type Move = {
   transactionId?: Types.ObjectId;
 };
 
+// Same code and wording as the account lock's (services/transfers.ts): clients already retry it with the same key.
+const accountBusy = () => new HttpError(409, "Another payment from this account is in progress. Try again in a moment.", "ACCOUNT_BUSY");
+
 /**
  * Moves money between a pocket and its branch's available balance. Runs under the account's lock, so a
  * transfer can't spend money that's being set aside at the same moment. Returns the movement (and
  * `replayed: true` when the Idempotency-Key was seen before, or the payment was already auto-saved to this pocket).
+ *
+ * Crash-safe without transactions, in three writes:
+ * 1. The movement, `pending`. Its unique indexes (one per Idempotency-Key, one per auto-saved payment) refuse a
+ *    duplicate here, before any money moves.
+ * 2. The pocket's balance, in one conditional write that also lists the movement in `recentMovements`. It only
+ *    lands if the balance is still what step 1 was based on and the movement hasn't been voided.
+ * 3. The movement marked `applied`.
+ * A crash after 1 or 2 leaves a pending movement; settleMovement() then reads off the pocket whether step 2
+ * landed and finishes it, or voids it (so step 2 can never land late) and removes it.
  */
 export async function movePocketMoney(move: Move) {
   const { pocket, kind, amountKobo } = move;
   const direction = kind === "deposit" || kind === "auto_save" ? "in" : "out";
+  const delta = direction === "in" ? amountKobo : -amountKobo;
   // What this request asks for (the pocket is already part of the key's scope).
   const hash = move.clientKey ? requestHash({ kind, amountKobo, note: move.note ?? null }) : undefined;
 
   /** The movement already recorded for this Idempotency-Key, or for this payment's auto-save. */
   const replay = async () => {
-    if (move.clientKey) {
-      const first = await PocketMovementModel.findOne({ pocket: pocket._id, createdBy: move.userId, clientKey: move.clientKey });
-      if (first) {
-        assertSameRequest(first.requestHash, hash);
-        return { movement: first, replayed: true };
-      }
-    }
-    if (move.transactionId) {
-      const saved = await PocketMovementModel.findOne({ pocket: pocket._id, transaction: move.transactionId });
-      if (saved) return { movement: saved, replayed: true };
-    }
-    return null;
+    const find = async () =>
+      (move.clientKey && (await PocketMovementModel.findOne({ pocket: pocket._id, createdBy: move.userId, clientKey: move.clientKey }))) ||
+      (move.transactionId && (await PocketMovementModel.findOne({ pocket: pocket._id, transaction: move.transactionId }))) ||
+      null;
+    let first = await find();
+    // Left half-done by a crash (or a holder that lost the lock): only an applied one is a replay.
+    if (first?.state === "pending") first = (await settleMovement(first)) === "applied" ? await find() : null;
+    if (!first) return null;
+    if (move.clientKey) assertSameRequest(first.requestHash, hash);
+    return { movement: first, replayed: true };
   };
 
   const result = await withAccountLock(pocket.virtualAccount, async (lock) => {
+    // Anything an earlier move left half-done on this pocket is settled first, so the checks below see it.
+    await settlePocketMovements(pocket._id);
     const replayed = await replay();
     if (replayed) return replayed;
 
@@ -137,48 +157,133 @@ export async function movePocketMoney(move: Move) {
     }
     await lock.confirm();
 
-    const updated = await PocketModel.findOneAndUpdate(
-      { _id: pocket._id, status: "active", ...(direction === "out" && { balanceKobo: { $gte: amountKobo } }) },
-      { $inc: { balanceKobo: direction === "in" ? amountKobo : -amountKobo } },
-      { returnDocument: "after" },
-    );
-    if (!updated) {
-      const current = await PocketModel.findById(pocket._id);
-      if (current?.status !== "active") throw new HttpError(409, "This pocket is closed", "POCKET_CLOSED");
+    const current = await PocketModel.findById(pocket._id);
+    const refuse = (now: typeof current): never => {
+      if (now?.status !== "active") throw new HttpError(409, "This pocket is closed", "POCKET_CLOSED");
       throw new HttpError(422, "There isn't that much in this pocket", "INSUFFICIENT_POCKET_BALANCE", {
-        balanceKobo: current.balanceKobo,
+        balanceKobo: now.balanceKobo,
         requiredKobo: amountKobo,
       });
-    }
+    };
+    if (current?.status !== "active" || current.balanceKobo + delta < 0) refuse(current);
 
+    // 1. The ledger line, pending.
+    let movement: PocketMovementDocument;
     try {
-      const movement = await PocketMovementModel.create({
+      movement = await PocketMovementModel.create({
         pocket: pocket._id,
         business: pocket.business,
         kind,
         direction,
         amountKobo,
-        balanceAfterKobo: updated.balanceKobo,
+        balanceAfterKobo: current!.balanceKobo + delta,
+        state: "pending",
         note: move.note,
         transaction: move.transactionId,
         createdBy: move.userId,
         clientKey: move.clientKey,
         requestHash: hash,
       });
-      pocket.balanceKobo = updated.balanceKobo;
-      return { movement, replayed: false };
     } catch (err: any) {
-      // The ledger line couldn't be written (e.g. this payment was already auto-saved): undo the balance.
-      await PocketModel.updateOne({ _id: pocket._id }, { $inc: { balanceKobo: direction === "in" ? -amountKobo : amountKobo } });
-      // The same key or payment got in first: answer as its replay.
-      const replayed = err?.code === 11000 ? await replay() : null;
+      if (err?.code !== 11000) throw err;
+      // The same key or payment got in first: answer as its replay. If that one was half-done and has just been
+      // undone, the key is free again for the client's retry.
+      const replayed = await replay();
       if (replayed) return replayed;
-      throw err;
+      throw accountBusy();
     }
+
+    // 2. The balance. Conditional on the balance it was based on, so `balanceAfterKobo` is exact, and on the
+    // movement not having been voided by a settle.
+    const updated = await PocketModel.findOneAndUpdate(
+      {
+        _id: pocket._id,
+        status: "active",
+        balanceKobo: direction === "out" ? { $eq: current!.balanceKobo, $gte: amountKobo } : current!.balanceKobo,
+        voidedMovements: { $ne: movement._id },
+      },
+      { $inc: { balanceKobo: delta }, $push: { recentMovements: { $each: [movement._id], $slice: -LEDGER_MEMORY } } },
+      { returnDocument: "after" },
+    );
+    if (!updated) {
+      // Nothing moved and now nothing can (step 2 is a single write that didn't match): drop the line.
+      await PocketMovementModel.deleteOne({ _id: movement._id, state: "pending" });
+      const now = await PocketModel.findById(pocket._id);
+      if (now?.status !== "active" || now.balanceKobo + delta < 0) refuse(now);
+      // The balance changed under us, which only happens if our hold on the account ran out.
+      throw accountBusy();
+    }
+
+    // 3. Done.
+    await PocketMovementModel.updateOne({ _id: movement._id, state: "pending" }, { $set: { state: "applied" } });
+    movement.state = "applied";
+    pocket.balanceKobo = updated.balanceKobo;
+    return { movement, replayed: false };
   });
 
   if (!result.replayed) await updateTarget(pocket);
   return result;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Settling half-done movements (a crash between movePocketMoney's writes)
+// ---------------------------------------------------------------------------------------------------------
+
+/** Pending movements older than this are left over from a crash (a live move takes milliseconds). */
+export const STALE_MOVEMENT_MS = 60 * 1000;
+
+/**
+ * Finishes or undoes one pending movement. One atomic write on the pocket decides: if the pocket doesn't list
+ * the movement as landed, it's added to `voidedMovements`, which stops its balance change from ever landing,
+ * and the movement is removed (freeing its Idempotency-Key or payment for a retry). Otherwise its balance
+ * change landed and it's marked applied. Safe to run alongside the move itself and other settles.
+ */
+export async function settleMovement(movement: { _id: Types.ObjectId; pocket: Types.ObjectId }): Promise<"applied" | "rolled_back"> {
+  const voided = await PocketModel.updateOne(
+    { _id: movement.pocket, recentMovements: { $ne: movement._id }, voidedMovements: { $ne: movement._id } },
+    { $push: { voidedMovements: { $each: [movement._id], $slice: -LEDGER_MEMORY } } },
+  );
+  const landed = voided.modifiedCount === 0 && !!(await PocketModel.exists({ _id: movement.pocket, recentMovements: movement._id }));
+  if (landed) {
+    await PocketMovementModel.updateOne({ _id: movement._id, state: "pending" }, { $set: { state: "applied" } });
+    return "applied";
+  }
+  await PocketMovementModel.deleteOne({ _id: movement._id, state: "pending" });
+  return "rolled_back";
+}
+
+/**
+ * Settles a pocket's pending movements. `olderThanMs` leaves recent ones alone (they may be a move in progress
+ * elsewhere); under the account lock every pending one is from a holder that crashed or lost the lock.
+ */
+export async function settlePocketMovements(pocketId: Types.ObjectId, { olderThanMs = 0 } = {}) {
+  const pending = await PocketMovementModel.find({
+    pocket: pocketId,
+    state: "pending",
+    ...(olderThanMs && { createdAt: { $lt: new Date(Date.now() - olderThanMs) } }),
+  }).select("pocket");
+  for (const m of pending) await settleMovement(m);
+  return pending.length;
+}
+
+/**
+ * Settles every movement left pending for over a minute, on any pocket. Runs with each auto-save pass (after
+ * every inbound sync); the pocket's activity list and every move settle their own pocket too.
+ */
+export async function settleStaleMovements() {
+  const pending = await PocketMovementModel.find({ state: "pending", createdAt: { $lt: new Date(Date.now() - STALE_MOVEMENT_MS) } })
+    .sort({ createdAt: 1 })
+    .limit(500)
+    .select("pocket");
+  const settled = { applied: 0, rolled_back: 0 };
+  for (const m of pending) {
+    try {
+      settled[await settleMovement(m)]++;
+    } catch (err) {
+      console.error(`Couldn't settle pocket movement ${m.id} (will try again):`, err);
+    }
+  }
+  return settled;
 }
 
 /** Moves everything left back to the available balance and closes the pocket. */
@@ -218,6 +323,8 @@ export function autoSaveAmount(rule: { percentBps?: number | null; amountKobo?: 
  * with a target stops saving once it's reached. Safe to run repeatedly; called after every inbound sync.
  */
 export async function applyAutoSaves() {
+  // Movements a crash left half-done, on any pocket; an unsettled one would hide a missing auto-save below.
+  await settleStaleMovements();
   const pockets = await PocketModel.find({ status: "active", "autoSave.since": { $exists: true } }).sort({ createdAt: 1 });
   if (!pockets.length) return { checked: 0, saved: 0 };
 
@@ -257,8 +364,9 @@ export async function applyAutoSaves() {
     let failed = false;
     for (const pocket of pockets.filter((p) => p.virtualAccount.equals(tx.virtualAccount) && p.autoSave!.since! <= tx.occurredAt)) {
       try {
-        // Already saved from this payment on an earlier run (another pocket failed then).
-        if (await PocketMovementModel.exists({ pocket: pocket._id, transaction: tx._id })) continue;
+        // Already saved from this payment on an earlier run (another pocket failed then). A pending one isn't
+        // known to have landed: movePocketMoney settles it and saves again or replays.
+        if (await PocketMovementModel.exists({ pocket: pocket._id, transaction: tx._id, state: { $ne: "pending" } })) continue;
         const fresh = await PocketModel.findOne({ _id: pocket._id, status: "active", "autoSave.since": { $exists: true } });
         if (!fresh) continue;
         let amount = autoSaveAmount(fresh.autoSave!, tx.netKobo);

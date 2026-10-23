@@ -1,4 +1,4 @@
-import type { RequestHandler } from "express";
+import type { RequestHandler, Response } from "express";
 import { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
 import { DONATION_LIMITS, EMBED_LIMITS, LINK_REPORT_LIMITS, LINK_REPORT_REASON_KEYS, PAYMENT_LINK_LIMITS } from "../config/paymentLinks";
@@ -25,10 +25,12 @@ const SYNC_WAIT_MS = 2_000;
 const isRestricted = (business: BusinessDocument) =>
   business.compliance?.status === "suspended" || business.compliance?.status === "banned";
 
+const SLUG = /^[a-z0-9-]{6,40}$/;
+
 /** The link behind a public address. A suspended or closed business's links are taken down. */
 async function findPublicLink(slug: string) {
   const notFound = new HttpError(404, "Payment link not found", "PAYMENT_LINK_NOT_FOUND");
-  if (!/^[a-z0-9-]{6,40}$/.test(slug)) throw notFound;
+  if (!SLUG.test(slug)) throw notFound;
   const link = await PaymentLinkModel.findOne({ slug });
   const business = link && (await BusinessModel.findById(link.business));
   if (!link || !business || isRestricted(business)) throw notFound;
@@ -47,8 +49,9 @@ function describeBusiness(business: BusinessDocument, slug: string) {
 
 /**
  * The payer's view of a checkout: what to send, where, and whether it has arrived. The business's server
- * also confirms a payment with this (GET checkouts/:token): it must check `status`, `mode`, `link.slug`,
- * `priceKobo`/`paidKobo`, `currency` and `clientReference` against its own order (see `embedSnippets`).
+ * also confirms a payment with this, through GET pay/:slug/checkouts/:token (which only answers for its own
+ * link): it must check `status`, `mode`, `priceKobo`/`paidKobo`, `currency` and `clientReference` against its
+ * own order (see `embedSnippets`). The older GET checkouts/:token answers for any link, so `link.slug` too.
  */
 async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDocument, business: BusinessDocument) {
   const status = checkoutStatus(checkout);
@@ -301,12 +304,13 @@ export const startPublicCheckout: RequestHandler<SlugParams> = async (req, res) 
   res.status(reused ? 200 : 201).setHeader("Cache-Control", "private, no-store").json(await describeCheckout(checkout, link, business));
 };
 
-/** The payer's checkout page polls this until the transfer is matched. */
-export const getPublicCheckout: RequestHandler<TokenParams> = async (req, res) => {
-  const notFound = new HttpError(404, "Checkout not found", "CHECKOUT_NOT_FOUND");
-  if (!/^[A-Za-z0-9_-]{20,64}$/.test(req.params.token)) throw notFound;
-  let checkout = await CheckoutModel.findOne({ token: req.params.token });
-  if (!checkout) throw notFound;
+const CHECKOUT_TOKEN = /^[A-Za-z0-9_-]{20,64}$/;
+const checkoutNotFound = () => new HttpError(404, "Checkout not found", "CHECKOUT_NOT_FOUND");
+
+/** Answers with a checkout as payers and the business's server see it, after looking for its transfer if it's still open. */
+async function sendPublicCheckout(res: Response, found: CheckoutDocument | null) {
+  let checkout = found;
+  if (!checkout) throw checkoutNotFound();
   // Test checkouts are only ever paid by a simulated payment, so there's nothing to pull from Liquifia.
   if (checkout.status === "pending" && checkout.mode !== "test" && checkout.holdUntil > new Date()) {
     // Look for the transfer now rather than waiting for the background sync, without keeping the payer waiting long.
@@ -314,8 +318,26 @@ export const getPublicCheckout: RequestHandler<TokenParams> = async (req, res) =
     checkout = (await CheckoutModel.findById(checkout._id))!;
   }
   const [link, business] = await Promise.all([PaymentLinkModel.findById(checkout.link), BusinessModel.findById(checkout.business)]);
-  if (!link || !business || business.compliance?.status === "banned") throw notFound;
+  if (!link || !business || business.compliance?.status === "banned") throw checkoutNotFound();
   res.setHeader("Cache-Control", "private, no-store").json(await describeCheckout(checkout, link, business));
+}
+
+/** The payer's checkout page polls this until the transfer is matched. */
+export const getPublicCheckout: RequestHandler<TokenParams> = async (req, res) => {
+  if (!CHECKOUT_TOKEN.test(req.params.token)) throw checkoutNotFound();
+  await sendPublicCheckout(res, await CheckoutModel.findOne({ token: req.params.token }));
+};
+
+/**
+ * For the business's server confirming a payment (audit H12): the same answer as GET checkouts/:token, but 404
+ * unless the checkout was started on this link. The business puts its own slug in the URL, so a checkout from
+ * someone else's link (paid cheaply, with the business's order id as its reference) never verifies.
+ */
+export const getPublicLinkCheckout: RequestHandler<SlugParams & TokenParams> = async (req, res) => {
+  if (!SLUG.test(req.params.slug) || !CHECKOUT_TOKEN.test(req.params.token)) throw checkoutNotFound();
+  const link = await PaymentLinkModel.findOne({ slug: req.params.slug }).select("_id");
+  // Looked up together, so a token from another link is "not found", with nothing pulled from Liquifia for it.
+  await sendPublicCheckout(res, link && (await CheckoutModel.findOne({ token: req.params.token, link: link._id })));
 };
 
 /**
@@ -325,8 +347,8 @@ export const getPublicCheckout: RequestHandler<TokenParams> = async (req, res) =
  */
 export const simulatePublicCheckout: RequestHandler<TokenParams> = async (req, res) => {
   const body = z.object({ outcome: z.enum(["paid", "underpaid"]).default("paid") }).parse(req.body ?? {});
-  const notFound = new HttpError(404, "Checkout not found", "CHECKOUT_NOT_FOUND");
-  if (!/^[A-Za-z0-9_-]{20,64}$/.test(req.params.token)) throw notFound;
+  const notFound = checkoutNotFound();
+  if (!CHECKOUT_TOKEN.test(req.params.token)) throw notFound;
   const checkout = await CheckoutModel.findOne({ token: req.params.token });
   if (!checkout) throw notFound;
   const [link, business] = await Promise.all([PaymentLinkModel.findById(checkout.link), BusinessModel.findById(checkout.business)]);

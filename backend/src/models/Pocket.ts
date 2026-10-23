@@ -20,8 +20,14 @@ const pocketSchema = new Schema(
     name: { type: String, required: true, trim: true },
     icon: { type: String, enum: POCKET_ICONS },
     color: { type: String, enum: POCKET_COLORS, default: "lime" },
-    // Integer kobo, never negative.
+    // Integer kobo, never negative. Only ever changed by a movement (services/pockets.ts movePocketMoney).
     balanceKobo: { type: Number, required: true, default: 0, min: 0 },
+    // Crash safety without transactions (services/pockets.ts): the movements whose balance change landed here,
+    // and the pending ones that were stopped from ever landing. Each update to the balance pushes onto the first
+    // in the same write, so whether a half-done movement counts can always be read off the pocket. Newest last,
+    // only the last LEDGER_MEMORY kept; not loaded unless asked for.
+    recentMovements: { type: [Types.ObjectId], default: [], select: false },
+    voidedMovements: { type: [Types.ObjectId], default: [], select: false },
     target: {
       amountKobo: { type: Number },
       date: { type: String }, // YYYY-MM-DD (Lagos)
@@ -43,6 +49,9 @@ const pocketSchema = new Schema(
   { timestamps: true },
 );
 
+/** How many movement ids a pocket remembers in `recentMovements` and `voidedMovements`. */
+export const LEDGER_MEMORY = 50;
+
 pocketSchema.index({ business: 1, status: 1, createdAt: 1 });
 pocketSchema.index({ virtualAccount: 1, status: 1 });
 // Names are unique per branch among open pockets, ignoring case.
@@ -63,6 +72,11 @@ export const POCKET_MOVEMENT_KINDS = [
 ] as const;
 export type PocketMovementKind = (typeof POCKET_MOVEMENT_KINDS)[number];
 
+export const POCKET_MOVEMENT_STATES = [
+  "pending", // written, the pocket's balance not (known to be) changed yet; only ever for a moment, or after a crash
+  "applied", // the balance change landed. Movements from before states existed read as applied.
+] as const;
+
 // The pocket's ledger. Money only ever moves between the pocket and its branch's available balance.
 const pocketMovementSchema = new Schema(
   {
@@ -72,6 +86,8 @@ const pocketMovementSchema = new Schema(
     direction: { type: String, enum: ["in", "out"], required: true },
     amountKobo: { type: Number, required: true, min: 1 },
     balanceAfterKobo: { type: Number, required: true },
+    // Lists and totals only show applied movements. A pending one is finished or removed by settleMovement().
+    state: { type: String, enum: POCKET_MOVEMENT_STATES, default: "applied" },
     note: { type: String, trim: true },
     // The incoming payment an auto-save came from.
     transaction: { type: Types.ObjectId, ref: "Transaction" },
@@ -85,6 +101,8 @@ const pocketMovementSchema = new Schema(
 );
 
 pocketMovementSchema.index({ pocket: 1, _id: -1 });
+// Finding half-done movements to settle (services/pockets.ts settleStaleMovements).
+pocketMovementSchema.index({ createdAt: 1 }, { partialFilterExpression: { state: "pending" } });
 pocketMovementSchema.index(
   { pocket: 1, transaction: 1 },
   { unique: true, partialFilterExpression: { transaction: { $type: "objectId" } } },

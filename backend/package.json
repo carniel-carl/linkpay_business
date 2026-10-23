@@ -3,6 +3,7 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "packageManager": "bun@1.4.0",
   "devDependencies": {
     "@types/bun": "latest",
     "@types/cors": "^2.8.19",
@@ -31,8 +32,11 @@
     "start": "bun index.ts",
     "check": "bun scripts/check-connections.ts",
     "test": "bun test --timeout=30000",
+    "typecheck": "tsc --noEmit -p .",
     "migrate:branches": "bun scripts/migrate-branches.ts",
     "migrate:staff": "bun scripts/migrate-staff.ts",
+    "migrate:kyb": "bun scripts/migrate-kyb-documents.ts",
+    "migrate:encryption": "bun scripts/migrate-encryption.ts",
     "staff": "bun scripts/staff.ts",
     "dev:mock": "bun --env-file=/dev/null scripts/dev-mock.ts",
     "dev:seed": "bun --env-file=/dev/null scripts/dev-mock.ts --seed"

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { env } from "../src/config/env";
 import { BusinessModel } from "../src/models/Business";
@@ -7,8 +7,9 @@ import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { WebhookEventModel } from "../src/models/WebhookEvent";
 import { setEmailProvider, type EmailMessage } from "../src/services/email";
+import { liquifia } from "../src/services/liquifia/client";
 import { signAccessToken } from "../src/services/tokens";
-import { resetSyncState, syncIfStale } from "../src/services/transactions";
+import { resetSyncState, syncIfStale, syncInboundTransfers } from "../src/services/transactions";
 import { encrypt } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 import { inboundTransfer } from "./mockLiquifia";
@@ -25,8 +26,10 @@ beforeAll(async () => {
 afterAll(() => t.stop());
 beforeEach(async () => {
   t.liquifia.inboundTransfers.length = 0;
+  t.liquifia.inboundOrder = "newest_first";
+  t.liquifia.inboundDelayMs = 0;
   await TransactionModel.deleteMany({});
-  resetSyncState();
+  await resetSyncState();
   env.liquifia.webhookSecret = undefined;
 });
 
@@ -124,6 +127,157 @@ describe("recording incoming payments", () => {
   });
 });
 
+/** A bare inbound row, small so lists of thousands stay fast. */
+let rowSeq = 0;
+const row = (virtualAccountId: string, createdAtMs: number, overrides: Record<string, unknown> = {}) => ({
+  id: `row_${++rowSeq}`,
+  virtual_account_id: virtualAccountId,
+  type: "inbound_transfer",
+  amount: "100",
+  fee: "0",
+  latest_status: "success",
+  created_at: new Date(createdAtMs).toISOString(),
+  ...overrides,
+});
+
+/** `n` rows `stepMs` apart, newest (at `newest`) first as the mock stores them. Every `ownEvery`th one, and the oldest, is ours. */
+function history(n: number, ours: string, { newest = Date.now(), stepMs = 60_000, ownEvery = 250 } = {}) {
+  return Array.from({ length: n }, (_, i) => row(i % ownEvery === 0 || i === n - 1 ? ours : "va_not_ours", newest - i * stepMs));
+}
+
+const recorded = async (id: string) => TransactionModel.findOne({ providerTransactionId: id }).lean();
+
+describe("reading a large or changing list", () => {
+  for (const order of ["newest_first", "oldest_first"] as const) {
+    test(`records every payment past the old 5,000-row cap, ${order.replace("_", " ")}, across runs`, async () => {
+      const { headVa } = await setup();
+      t.liquifia.inboundOrder = order;
+      const rows = history(6_050, headVa);
+      t.liquifia.inboundTransfers.push(...rows);
+
+      const runs = [];
+      for (let i = 0; i < 3; i++) runs.push(await syncInboundTransfers({ maxPages: 25 }));
+      expect(runs.map((r) => r.pages).every((pages) => pages <= 25)).toBe(true);
+      expect(runs.at(-1)!.order).toBe(order);
+      expect(await TransactionModel.countDocuments({})).toBe(rows.filter((r) => r.virtual_account_id === headVa).length);
+      expect(await recorded(rows.at(-1)!.id)).toBeTruthy(); // the oldest
+      expect(await recorded(rows[0]!.id)).toBeTruthy(); // the newest
+
+      // Caught up: new payments cost a page or two, not the whole list.
+      t.liquifia.inboundTransfers.unshift(row(headVa, Date.now() + 2_000), row(headVa, Date.now() + 1_000));
+      const next = await syncInboundTransfers({ maxPages: 25 });
+      expect(next).toMatchObject({ created: 2, order });
+      expect(next.pages).toBeLessThanOrEqual(2);
+    });
+  }
+
+  test("newest first: a burst bigger than one run is finished by the next runs, without re-reading older history", async () => {
+    const { headVa } = await setup();
+    const threeDaysAgo = Date.now() - 3 * 86_400_000;
+    t.liquifia.inboundTransfers.push(...history(2_000, headVa, { newest: threeDaysAgo }));
+    await syncInboundTransfers();
+
+    const burst = history(2_500, headVa, { newest: threeDaysAgo + 2_500 * 60_000, ownEvery: 100 });
+    t.liquifia.inboundTransfers.unshift(...burst);
+    const list = spyOn(liquifia, "listInboundTransfers");
+    try {
+      const pages = [];
+      for (let i = 0; i < 4; i++) pages.push((await syncInboundTransfers({ maxPages: 10 })).pages);
+      for (const r of burst.filter((r) => r.virtual_account_id === headVa)) expect(await recorded(r.id)).toBeTruthy();
+      expect(pages.at(-1)).toBeLessThanOrEqual(3);
+      // The older 2,000 rows (from position 2,500) were read once, by the first sync, and only their top page since.
+      expect(Math.max(...list.mock.calls.map(([page]) => page.skip))).toBeLessThan(2_700);
+    } finally {
+      list.mockRestore();
+    }
+  });
+
+  test("newest first: re-reads a little past the newest recorded payment, for one that shows up late", async () => {
+    const { headVa } = await setup();
+    const now = Date.now();
+    // A second apart: the newest ten minutes fill six pages.
+    t.liquifia.inboundTransfers.push(...history(1_000, headVa, { newest: now, stepMs: 1_000, ownEvery: 1_000 }));
+    expect((await syncInboundTransfers()).order).toBe("newest_first");
+
+    // A payment dated five minutes before the newest shows up late, in its place by date (page 4).
+    const late = row(headVa, now - 300_500);
+    t.liquifia.inboundTransfers.splice(301, 0, late);
+    const counts = await syncInboundTransfers();
+    expect(await recorded(late.id)).toBeTruthy();
+    expect(counts.pages).toBeLessThan(11); // not the whole list
+  });
+
+  test("oldest first: carries on a page before where it stopped, and reads it all again if rows moved", async () => {
+    const { headVa } = await setup();
+    t.liquifia.inboundOrder = "oldest_first";
+    const now = Date.now();
+    t.liquifia.inboundTransfers.push(...history(500, headVa, { newest: now, ownEvery: 1_000 }));
+    expect((await syncInboundTransfers()).order).toBe("oldest_first");
+    // Served oldest first, so position p of the list is stored at (length - p).
+    const insertAt = (p: number, r: ReturnType<typeof row>) => t.liquifia.inboundTransfers.splice(t.liquifia.inboundTransfers.length - p, 0, r);
+
+    // A late payment lands in its place by date, inside the page the next run reads again.
+    const late = row(headVa, now - 49.5 * 60_000);
+    insertAt(450, late);
+    const counts = await syncInboundTransfers();
+    expect(await recorded(late.id)).toBeTruthy();
+    expect(counts.pages).toBe(2);
+
+    // One lands further back than that: the row the next run starts from has moved, so it reads the whole list.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const older = row(headVa, now - 489.5 * 60_000);
+      insertAt(10, older);
+      expect((await syncInboundTransfers()).pages).toBe(1 + 6); // the page that showed the move, then all six
+      expect(await recorded(older.id)).toBeTruthy();
+      expect(warn.mock.calls.some(([m]) => String(m).includes("rows moved"))).toBe(true);
+
+      // And if Liquifia starts serving it newest first, the same check catches that.
+      t.liquifia.inboundOrder = "newest_first";
+      const fresh = row(headVa, Date.now());
+      t.liquifia.inboundTransfers.unshift(fresh);
+      expect((await syncInboundTransfers()).order).toBe("newest_first");
+      expect(await recorded(fresh.id)).toBeTruthy();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a list in no date order is read in full on every run, with one warning", async () => {
+    const { headVa } = await setup();
+    const now = Date.now();
+    // Dates jump back and forth by hours.
+    t.liquifia.inboundTransfers.push(...Array.from({ length: 300 }, (_, i) => row(i % 50 === 0 ? headVa : "va_not_ours", now - ((i * 119) % 300) * 60_000)));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await syncInboundTransfers()).toMatchObject({ order: "unordered", pages: 4, created: 6 });
+      expect(await syncInboundTransfers()).toMatchObject({ order: "unordered", pages: 4, created: 0, updated: 6 });
+      expect(warn.mock.calls.filter(([m]) => String(m).includes("isn't in date order"))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  for (const order of ["newest_first", "oldest_first"] as const) {
+    test(`a payment still pending further down the list is read again until it settles (${order.replace("_", " ")})`, async () => {
+      const { headVa } = await setup();
+      t.liquifia.inboundOrder = order;
+      const rows = history(500, headVa, { ownEvery: 1_000 });
+      // Ours, about four hours old: page 3 of the list either way, past what a caught-up run reads.
+      const pending = Object.assign(rows[250]!, { virtual_account_id: headVa, latest_status: "pending" });
+      t.liquifia.inboundTransfers.push(...rows);
+      await syncInboundTransfers();
+      expect((await recorded(pending.id))?.status).toBe("pending");
+
+      pending.latest_status = "success";
+      await syncInboundTransfers();
+      expect((await recorded(pending.id))?.status).toBe("success");
+      // Settled, so it isn't read again.
+      expect((await syncInboundTransfers()).pages).toBeLessThanOrEqual(2);
+    });
+  }
+});
+
 describe("filters, summary and access", () => {
   test("branch, direction, status, dates, search and paging", async () => {
     const { token, headVa, kanoVa, kanoId } = await setup();
@@ -214,5 +368,28 @@ describe("Liquifia webhook", () => {
     expect(again.body).toEqual({ received: true, duplicate: true });
     expect(await WebhookEventModel.countDocuments({ eventId: `evt_${seq}` })).toBe(1);
     expect((await t.api("GET", "/api/transactions", { token })).body.total).toBe(1);
+  });
+  test("a payment that arrives while a sync is running gets a run of its own", async () => {
+    env.liquifia.webhookSecret = "whsec_test";
+    const { headVa } = await setup();
+    push(inboundTransfer(headVa, 100));
+    t.liquifia.inboundDelayMs = 100;
+    const listed = () => t.liquifia.requests.filter((r) => r.path === "/inbound-transfers").length;
+    const before = listed();
+    const running = syncIfStale(0);
+    while (listed() === before) await Bun.sleep(5);
+
+    // That run has already read the list when the payment lands and its webhook arrives.
+    push(inboundTransfer(headVa, 75000));
+    const body = JSON.stringify({ id: `evt_race_${seq}`, event: "virtual_account.credited" });
+    expect((await post(body, sign(body))).status).toBe(200);
+    await running;
+    expect(await TransactionModel.countDocuments({ amountKobo: 75000 })).toBe(0);
+
+    // A second run follows and records it.
+    const processed = () => WebhookEventModel.exists({ eventId: `evt_race_${seq}`, processedAt: { $exists: true } });
+    for (let i = 0; i < 100 && !(await processed()); i++) await Bun.sleep(20);
+    expect(await TransactionModel.countDocuments({ amountKobo: 75000 })).toBe(1);
+    expect(listed() - before).toBe(2);
   });
 });

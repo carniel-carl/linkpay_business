@@ -141,6 +141,13 @@ const businessSchema = new Schema(
 businessSchema.index({ "compliance.status": 1 });
 businessSchema.index({ "compliance.openFlags": -1 });
 
+/**
+ * What a person's encrypted BVN is bound to (utils/crypto.ts): this business, this person, this field. A BVN
+ * copied onto someone else, or into another business, doesn't decrypt.
+ */
+export const bvnContext = (businessId: Types.ObjectId | string, personId: Types.ObjectId | string) =>
+  `business:${businessId}:person:${personId}:bvn`;
+
 export type Business = InferSchemaType<typeof businessSchema>;
 export type BusinessDocument = HydratedDocument<Business>;
 export const BusinessModel = model("Business", businessSchema);

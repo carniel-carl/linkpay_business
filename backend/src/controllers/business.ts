@@ -3,7 +3,7 @@ import { isValidObjectId, type Types } from "mongoose";
 import { z } from "zod";
 import { BUSINESS_TYPES, DOCUMENT_TYPE_KEYS, ID_TYPES, PERSON_ROLES } from "../config/kyb";
 import { BranchModel } from "../models/Branch";
-import { BusinessModel, type BusinessDocument } from "../models/Business";
+import { BusinessModel, bvnContext, type BusinessDocument } from "../models/Business";
 import { KybDocumentModel } from "../models/KybDocument";
 import type { MembershipDocument } from "../models/Membership";
 import { VirtualAccountModel } from "../models/VirtualAccount";
@@ -69,11 +69,16 @@ async function findEditableBusiness(userId: string | undefined) {
   return business;
 }
 
-function applyPerson(person: { set: (k: string, v: unknown) => void }, data: Partial<z.infer<typeof personFields>>) {
+function applyPerson(
+  business: BusinessDocument,
+  person: { _id: Types.ObjectId; set: (k: string, v: unknown) => void },
+  data: Partial<z.infer<typeof personFields>>,
+) {
   const { bvn, ...rest } = data;
   for (const [k, v] of Object.entries(rest)) person.set(k, v);
   if (bvn) {
-    person.set("bvnEncrypted", encrypt(bvn));
+    // Bound to this person of this business, so it can't be moved onto someone else.
+    person.set("bvnEncrypted", encrypt(bvn, bvnContext(business._id, person._id)));
     person.set("bvnLast4", bvn.slice(-4));
   }
 }
@@ -177,7 +182,7 @@ export const addPerson: RequestHandler = async (req, res) => {
   const business = await findEditableBusiness(req.userId);
 
   business.people.push({ fullName: body.fullName, roles: body.roles });
-  applyPerson(business.people.at(-1)!, body);
+  applyPerson(business, business.people.at(-1)!, body);
   await business.save();
   await sendBusinessOverview(res, business, { status: 201 });
 };
@@ -188,7 +193,7 @@ export const updatePerson: RequestHandler<PersonParams> = async (req, res) => {
 
   const person = business.people.id(req.params.personId);
   if (!person) throw new HttpError(404, "Person not found");
-  applyPerson(person, body);
+  applyPerson(business, person, body);
   await business.save();
   await sendBusinessOverview(res, business);
 };

@@ -4,6 +4,7 @@ import { getPublicInvoice, getPublicInvoiceLogo, getPublicInvoicePdf } from "../
 import {
   getPublicCheckout,
   getPublicDonations,
+  getPublicLinkCheckout,
   streamPublicLinkEvents,
   getPublicPaymentLink,
   getPublicPaymentLinkImage,
@@ -60,6 +61,8 @@ publicRouter.post("/pay/:slug/reports", reportLimit, reportPublicLink);
 publicRouter.get("/pay/:slug/logo", getPublicPaymentLinkLogo);
 publicRouter.get("/pay/:slug/images/:imageId", getPublicPaymentLinkImage);
 publicRouter.post("/pay/:slug/checkouts", checkoutLimit, startPublicCheckout);
+// For the business's server: a checkout of this link only (404 otherwise). Same limits as checkouts/:token.
+publicRouter.get("/pay/:slug/checkouts/:token", getPublicLinkCheckout);
 publicRouter.get("/checkouts/:token", getPublicCheckout);
 // Test-mode checkouts only.
 publicRouter.post("/checkouts/:token/simulate", simulatePublicCheckout);

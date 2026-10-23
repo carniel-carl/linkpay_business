@@ -53,6 +53,13 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
     failNextAccountCreates: 0,
     /** Payments received, newest first like a statement. Tests push these (see `inboundTransfer()`). */
     inboundTransfers: [] as Record<string, any>[],
+    /**
+     * The order GET /inbound-transfers serves `inboundTransfers` in. Liquifia doesn't document its order, so tests
+     * try both: as stored (newest first), or reversed, where new payments land at the end.
+     */
+    inboundOrder: "newest_first" as "newest_first" | "oldest_first",
+    /** Inbound-transfer pages are answered this long after they're read, so a test can change the list mid-sync. */
+    inboundDelayMs: 0,
     payouts: [] as Payout[],
     /** Account holders for name enquiry, keyed by account number. Unknown numbers resolve to "Test Recipient" unless they start with 000. */
     bankAccounts: new Map<string, string>(),
@@ -277,7 +284,13 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
       if (req.method === "GET" && path === "/inbound-transfers") {
         const skip = Number(url.searchParams.get("skip") ?? 0);
         const take = Number(url.searchParams.get("take") ?? 50);
-        return json(state.inboundTransfers.slice(skip, skip + take));
+        const all = state.inboundTransfers;
+        const page =
+          state.inboundOrder === "oldest_first"
+            ? all.slice(Math.max(0, all.length - skip - take), Math.max(0, all.length - skip)).reverse()
+            : all.slice(skip, skip + take);
+        if (state.inboundDelayMs > 0) await Bun.sleep(state.inboundDelayMs);
+        return json(page);
       }
 
       return error(404, "NOT_FOUND", `No mock for ${req.method} ${path}`);

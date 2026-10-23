@@ -324,8 +324,11 @@ describe("what triggers a notification", () => {
     const stream = await openStream("/api/notifications/stream", leaver.token);
     expect((await stream.next("ready")).data).toEqual({ unread: 1 });
     stream.close();
-    // The member who moved branch is still on the team, so their earlier notifications stay.
-    expect((await t.api("GET", "/api/notifications", { token: kanoOnly.token })).body.items.length).toBeGreaterThan(0);
+    // The member who moved branch is still on the team: the head office's notifications stay, Kano's from
+    // before the move are hidden (tests/notificationBranches.test.ts covers that in full).
+    const movedList = (await t.api("GET", "/api/notifications?take=100", { token: kanoOnly.token })).body.items;
+    expect(movedList.filter((n: any) => n.data.invoiceId === leaversInvoice).length).toBeGreaterThan(0);
+    expect(movedList.filter((n: any) => n.data.invoiceId === kanoInvoice)).toHaveLength(0);
   });
 
   test("security: a sign-in from a new phone, but not the first phone or the same one again", async () => {

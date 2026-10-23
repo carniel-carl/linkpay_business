@@ -13,13 +13,16 @@ import {
   getTransferSettings,
   listApprovers,
   listTransfers,
+  previewBulkTransfer,
   refreshTransferStatus,
   rejectBatch,
   rejectTransfer,
   resolveAccount,
+  resolveAccounts,
   updateTransferSettings,
 } from "../controllers/transfers";
 import { requireAuth } from "../middleware/auth";
+import { limiter } from "../middleware/rateLimits";
 import { requireApprovedBusiness, requirePermission } from "../middleware/roles";
 import { requireTransactionPin } from "../middleware/transactionPin";
 
@@ -33,14 +36,19 @@ const approve = requirePermission("transfers.approve");
 // Sending, approving and changing the approval rule also need the transaction PIN. Rejecting and cancelling
 // don't: they only stop money moving.
 const pin = requireTransactionPin;
+// The bulk review's lookups move no money, so no PIN, but each call can ask the bank about 200 accounts:
+// limited per member (15-minute window), with room to check and fix a 200-row upload several times over.
+const reviewLimit = () => limiter({ limit: 60, keyGenerator: (req) => `user:${req.userId}` });
 
 transfersRouter.get("/banks", create, getBanks);
 transfersRouter.post("/resolve-account", create, resolveAccount);
+transfersRouter.post("/resolve-accounts", create, reviewLimit(), resolveAccounts);
 transfersRouter.get("/fee", create, getFee);
 transfersRouter.get("/settings", view, getTransferSettings);
 transfersRouter.patch("/settings", requirePermission("transfers.manage"), pin, updateTransferSettings);
 transfersRouter.get("/approvers", requirePermission("transfers.manage"), listApprovers);
 
+transfersRouter.post("/bulk/preview", create, reviewLimit(), previewBulkTransfer);
 transfersRouter.post("/bulk", create, pin, createBulkTransfer);
 transfersRouter.get("/batches/:id", view, getBatch);
 transfersRouter.post("/batches/:id/approve", approve, pin, approveBatch);

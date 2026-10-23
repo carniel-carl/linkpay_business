@@ -53,6 +53,7 @@ export async function transferApprovalRequested(business: BizRef, approverIds: I
       data: transferData(transfers),
     },
     business,
+    { branch: transfers[0]!.branch },
   );
 }
 
@@ -137,6 +138,7 @@ export async function paymentReceived(
       data: { transactionId: String(tx._id), branchId: tx.branch ? String(tx.branch) : null },
     },
     business,
+    { branch: tx.branch },
   );
 }
 
@@ -198,6 +200,7 @@ export async function pocketTargetReached(
       data: { pocketId: String(pocket._id), branchId: String(pocket.branch) },
     },
     business,
+    { branch: pocket.branch },
   );
 }
 
@@ -216,6 +219,7 @@ export async function safelockReleased(
       data: { safelockId: String(lock._id), branchId: String(lock.branch) },
     },
     business,
+    { branch: lock.branch },
   );
 }
 
@@ -339,6 +343,7 @@ export async function accountReady(business: BusinessLike, branch: { _id: Id; na
       data: { branchId: String(branch._id) },
     },
     business,
+    { branch: branch._id },
   );
 }
 

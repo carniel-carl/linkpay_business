@@ -4,18 +4,45 @@ import { env } from "../config/env";
 const key = Buffer.from(env.encryptionKey, "hex");
 if (key.length !== 32) throw new Error("ENCRYPTION_KEY must be 32 bytes (64 hex characters)");
 
-/** AES-256-GCM. Output format: iv.tag.ciphertext (base64url). */
-export function encrypt(plain: string): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+const IV_BYTES = 12;
+// Always the full 16-byte GCM tag. Without a fixed length a decipher also takes a shortened tag, which is
+// far easier to forge.
+const TAG_BYTES = 16;
+const V2 = "v2:";
+
+/**
+ * AES-256-GCM, in two formats:
+ * - v2, written whenever a `context` is given: `v2:iv.tag.ciphertext` (base64url), with the context as
+ *   additional data (AAD). The context names the record and field the value belongs to (e.g. `bvnContext`
+ *   in models/Business.ts), so a value copied onto another record, or another field, doesn't decrypt there.
+ * - Legacy, without a context: `iv.tag.ciphertext`, bound to nothing. Still readable so data written before
+ *   v2 keeps working; `bun run migrate:encryption` rewrites it as v2. App code always passes a context.
+ */
+export function encrypt(plain: string, context?: string): string {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
+  if (context !== undefined) cipher.setAAD(Buffer.from(context, "utf8"));
   const data = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-  return [iv, cipher.getAuthTag(), data].map((b) => b.toString("base64url")).join(".");
+  const body = [iv, cipher.getAuthTag(), data].map((b) => b.toString("base64url")).join(".");
+  return context === undefined ? body : V2 + body;
 }
 
-export function decrypt(payload: string): string {
-  const [iv, tag, data] = payload.split(".").map((p) => Buffer.from(p, "base64url"));
-  if (!iv || !tag || !data) throw new Error("Malformed encrypted payload");
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+/** Written before v2 (no record binding); scripts/migrate-encryption.ts rewrites these. */
+export const isLegacyCiphertext = (payload: string) => !payload.startsWith(V2);
+
+/**
+ * Reads either format. A v2 value only decrypts with the context it was written with; a legacy value ignores
+ * the context. Throws on anything damaged, shortened or moved.
+ */
+export function decrypt(payload: string, context?: string): string {
+  const v2 = payload.startsWith(V2);
+  if (v2 && context === undefined) throw new Error("This encrypted value can only be read with its context");
+  const parts = (v2 ? payload.slice(V2.length) : payload).split(".");
+  if (parts.length !== 3) throw new Error("Malformed encrypted payload");
+  const [iv, tag, data] = parts.map((p) => Buffer.from(p, "base64url")) as [Buffer, Buffer, Buffer];
+  if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) throw new Error("Malformed encrypted payload");
+  const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
   decipher.setAuthTag(tag);
+  if (v2) decipher.setAAD(Buffer.from(context!, "utf8"));
   return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
 }

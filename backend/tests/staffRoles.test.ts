@@ -478,3 +478,28 @@ describe("staff with no role (saved before roles existed)", () => {
     expect((await t.api("POST", "/api/admin/auth/login", { body: { email, password: "password123" } })).status).toBe(200);
   });
 });
+
+describe("sign-in IPs (activity.view_ips)", () => {
+  test("only compliance and super admins hold the permission", () => {
+    const holders = STAFF_ROLES.filter((role) => staffPermissionsOf(role).includes("activity.view_ips"));
+    expect(holders.sort()).toEqual(["compliance", "super_admin"]);
+  });
+
+  test("team members' last sign-in IP goes only to staff who hold it; the rest don't get the field at all", async () => {
+    const owner = (await BusinessModel.findById(businessId))!.owner;
+    await UserModel.updateOne({ _id: owner }, { lastSignInAt: new Date(), lastSignInIp: "203.0.113.7" });
+    for (const role of STAFF_ROLES) {
+      const token = await signStaffToken(`${role}-ips@linkpay.test`, role);
+      const res = await t.api("GET", `/api/admin/businesses/${businessId}/members`, { token });
+      expect(res.status, role).toBe(200);
+      const me = res.body.members.find((m: any) => m.user._id === String(owner));
+      expect(me.user.lastSignInAt, role).toBeTruthy();
+      if (staffPermissionsOf(role).includes("activity.view_ips")) {
+        expect(me.user.lastSignInIp, role).toBe("203.0.113.7");
+      } else {
+        expect("lastSignInIp" in me.user, role).toBe(false);
+        expect(JSON.stringify(res.body), role).not.toContain("203.0.113.7");
+      }
+    }
+  });
+});

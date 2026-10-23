@@ -2,7 +2,8 @@ import { Types } from "mongoose";
 import { BeneficiaryModel, type BeneficiaryDocument } from "../models/Beneficiary";
 import type { BusinessDocument } from "../models/Business";
 import { HttpError } from "../utils/HttpError";
-import { classifyRecipient, resolveBankRecipient, type ResolvedRecipient, type TransferRequest } from "./transfers";
+import { inPool } from "../utils/pool";
+import { classifyRecipient, resolveBankRecipient, sameAccountName, type ResolvedRecipient, type RowError, type TransferRequest } from "./transfers";
 
 /** Saved beneficiaries per business. */
 export const MAX_BENEFICIARIES = 2000;
@@ -63,47 +64,64 @@ export async function findBeneficiary(business: BusinessDocument, id: string) {
 export type PayoutRow = ({ beneficiary: string } | { accountNumber: string; bankUuid: string }) & {
   amountKobo: number;
   narration?: string;
+  /** The account name the member reviewed. When it's given, the row is refused unless the name still matches. */
+  accountName?: string;
 };
 
 /**
- * Turns bulk rows (saved beneficiaries or account number + bank) into transfer requests. New accounts get a
- * name enquiry, a few at a time. If any row fails, nothing is returned and the errors come back per row
- * (`INVALID_ROWS`, `details.rows`). With `save`, new accounts are added to the beneficiaries.
+ * Checks bulk rows (saved beneficiaries or account number + bank) and turns them into transfer requests, with
+ * what's wrong with each row that can't be sent. New accounts get a name enquiry, five at a time (`cached`:
+ * answers from the last few minutes do, for the bulk preview). A row that carries the `accountName` the member
+ * reviewed is refused with ACCOUNT_NAME_CHANGED unless the name the payment will carry is the same name
+ * (see normaliseAccountName), so the bank account can't change under a reviewed row.
  */
-export async function resolvePayoutRows(business: BusinessDocument, rows: PayoutRow[], opts: { save?: boolean; userId: string }) {
+export async function checkPayoutRows(business: BusinessDocument, rows: PayoutRow[], opts: { cached?: boolean } = {}) {
   const ids = rows.flatMap((r) => ("beneficiary" in r ? [r.beneficiary] : [])).filter((id) => Types.ObjectId.isValid(id));
   const saved = await BeneficiaryModel.find({ _id: { $in: ids }, business: business._id });
 
-  const requests: TransferRequest[] = new Array(rows.length);
-  const errors: { row: number; error: string; code?: string }[] = [];
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: 5 }, async () => {
-      while (next < rows.length) {
-        const i = next++;
-        const row = rows[i]!;
-        try {
-          if ("beneficiary" in row) {
-            const beneficiary = saved.find((b) => b.id === row.beneficiary);
-            if (!beneficiary) throw new HttpError(404, "Beneficiary not found", "BENEFICIARY_NOT_FOUND");
-            const recipient = await beneficiaryRecipient(business, beneficiary);
-            requests[i] = { recipient, amountKobo: row.amountKobo, narration: row.narration, beneficiary: beneficiary._id };
-          } else {
-            const recipient = await resolveBankRecipient(business, row.accountNumber, row.bankUuid);
-            requests[i] = { recipient, amountKobo: row.amountKobo, narration: row.narration };
-          }
-        } catch (err) {
-          if (!(err instanceof HttpError)) throw err;
-          errors.push({ row: i, error: err.message, code: err.code });
-        }
+  const requests: (TransferRequest | undefined)[] = new Array(rows.length);
+  const errors: RowError[] = [];
+  await inPool(rows, 5, async (row, i) => {
+    try {
+      let request: TransferRequest;
+      if ("beneficiary" in row) {
+        const beneficiary = saved.find((b) => b.id === row.beneficiary);
+        if (!beneficiary) throw new HttpError(404, "Beneficiary not found", "BENEFICIARY_NOT_FOUND");
+        const recipient = await beneficiaryRecipient(business, beneficiary);
+        request = { recipient, amountKobo: row.amountKobo, narration: row.narration, beneficiary: beneficiary._id };
+      } else {
+        const recipient = await resolveBankRecipient(business, row.accountNumber, row.bankUuid, { cached: opts.cached });
+        request = { recipient, amountKobo: row.amountKobo, narration: row.narration };
       }
-    }),
-  );
+      if (row.accountName !== undefined && !sameAccountName(row.accountName, request.recipient.accountName)) {
+        errors.push({
+          row: i,
+          error: `This account's name is now “${request.recipient.accountName}”, not the name you checked. Check it's who you mean to pay.`,
+          code: "ACCOUNT_NAME_CHANGED",
+          accountName: request.recipient.accountName,
+        });
+        return;
+      }
+      requests[i] = request;
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      errors.push({ row: i, error: err.message, code: err.code });
+    }
+  });
+  return { requests, errors: errors.sort((a, b) => a.row - b.row) };
+}
+
+/**
+ * Turns bulk rows into transfer requests (checkPayoutRows). If any row fails, nothing is returned and the
+ * errors come back per row (`INVALID_ROWS`, `details.rows`). With `save`, new accounts are added to the
+ * beneficiaries.
+ */
+export async function resolvePayoutRows(business: BusinessDocument, rows: PayoutRow[], opts: { save?: boolean; userId: string }) {
+  const { requests: checked, errors } = await checkPayoutRows(business, rows);
   if (errors.length) {
-    throw new HttpError(422, `${errors.length} of ${rows.length} rows need fixing`, "INVALID_ROWS", {
-      rows: errors.sort((a, b) => a.row - b.row),
-    });
+    throw new HttpError(422, `${errors.length} of ${rows.length} rows need fixing`, "INVALID_ROWS", { rows: errors });
   }
+  const requests = checked as TransferRequest[];
 
   if (opts.save) {
     for (const request of requests) {

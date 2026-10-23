@@ -129,6 +129,9 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
   return {
     url,
     scriptUrl: script,
+    // Where the business's server confirms a checkout before fulfilling the order (no sign-in; the token is the
+    // secret). Bound to this link: a checkout from any other link is a 404 (audit H12).
+    verifyUrl: `${env.apiPublicUrl}/api/public/pay/${link.slug}/checkouts/{token}`,
     // Popup over the business's page; clicking the button opens the checkout.
     button: [
       `<script src="${script}" async></script>`,
@@ -145,11 +148,11 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
       `    clientReference: "ORDER-1234", // your order id (optional)`,
       `    email: "customer@example.com", // prefills the form (optional)`,
       `    onSuccess: (checkout) => {`,
-      `      // Anyone can hand your page a checkout, so don't fulfil from here. Send checkout.token to your server,`,
-      `      // GET ${env.apiPublicUrl}/api/public/checkouts/<token> there, and fulfil only if status is "paid",`,
-      `      // mode is "live" (test payments move no money), link.slug is "${link.slug}", currency is "NGN",`,
-      `      // priceKobo is your order total in kobo (paidKobo is at least that) and clientReference is your order`,
-      `      // id. Then mark the order paid, so the same checkout can't be used twice.`,
+      `      // Anyone can hand your page a checkout, so don't fulfil from here. Send checkout.token to your server`,
+      `      // and GET ${env.apiPublicUrl}/api/public/pay/${link.slug}/checkouts/<token> there (it's a 404 for a`,
+      `      // checkout from any other link). Fulfil only if status is "paid", mode is "live" (test payments move`,
+      `      // no money), currency is "NGN", priceKobo is your order total in kobo (paidKobo is at least that) and`,
+      `      // clientReference is your order id. Then mark the order paid, so the same checkout can't be used twice.`,
       `    },`,
       `    onClose: () => {},`,
       `  });`,

@@ -13,6 +13,9 @@ const notificationSchema = new Schema(
     // The business it's about (user notifications). The name is copied so the list needs no lookups.
     business: { type: Types.ObjectId, ref: "Business" },
     businessName: String,
+    // The branch it's about, when the event has one, so someone moved off the branch stops seeing it
+    // (services/notifications.ts visibleToUser). Notifications from before this was stored have none.
+    branch: { type: Types.ObjectId, ref: "Branch" },
     type: { type: String, enum: NOTIFICATION_TYPE_KEYS, required: true },
     title: { type: String, required: true },
     body: { type: String, required: true },
