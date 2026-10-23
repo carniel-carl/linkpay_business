@@ -8,7 +8,7 @@ import { TransferBatchModel, TransferModel } from "../src/models/Transfer";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
-import { liquifia } from "../src/services/liquifia/client";
+import { liquifia, LiquifiaError } from "../src/services/liquifia/client";
 import { signAccessToken } from "../src/services/tokens";
 import { clearNameCache, heldByAccount, normaliseAccountName, sameAccountName } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
@@ -256,6 +256,71 @@ describe("POST /api/transfers/resolve-accounts", () => {
       liquifia.validateAccount = original;
     }
     expect(most).toBe(5);
+  });
+});
+
+describe("a name enquiry the bank can't answer", () => {
+  afterEach(() => {
+    t.liquifia.namelessAccounts.clear();
+  });
+  const lookUp = (token: string, accountNumber: string) =>
+    t.api("POST", "/api/transfers/resolve-account", { token, pin: null, body: { accountNumber, bankUuid: "BANK-GTB" } });
+  const resolve = (token: string, items: unknown[]) => t.api("POST", "/api/transfers/resolve-accounts", { token, pin: null, body: { items } });
+
+  test("an answer without a name is 'try again' (NAME_CHECK_UNAVAILABLE), never 'not found': alone, per row, and not remembered", async () => {
+    const { owner, business, headOfficeId } = await setup();
+    t.liquifia.namelessAccounts.add("2222222222");
+
+    const single = await lookUp(owner.token, "2222222222");
+    expect(single.status).toBe(502);
+    expect(single.body).toMatchObject({ code: "NAME_CHECK_UNAVAILABLE", error: expect.stringContaining("Try again") });
+
+    // In the bulk review only that row fails, and the others are checked.
+    const items = [
+      { accountNumber: "1111111111", bankUuid: "BANK-GTB" },
+      { accountNumber: "2222222222", bankUuid: "BANK-GTB" },
+    ];
+    const resolved = await resolve(owner.token, items);
+    expect(resolved.status).toBe(200);
+    expect(resolved.body).toMatchObject({ resolved: 1, failed: 1 });
+    expect(resolved.body.items[1]).toEqual({ row: 1, accountNumber: "2222222222", bankUuid: "BANK-GTB", code: "NAME_CHECK_UNAVAILABLE", error: expect.any(String) });
+
+    // The preview and the send carry the same code on that row, and nothing is created.
+    const body = { branch: headOfficeId, items: [row("1111111111", 10_000_00), row("2222222222", 5_000_00)] };
+    const previewed = await t.api("POST", "/api/transfers/bulk/preview", { token: owner.token, pin: null, body });
+    expect(previewed.body.errors.map((e: any) => [e.row, e.code])).toEqual([[1, "NAME_CHECK_UNAVAILABLE"]]);
+    const sent = await t.api("POST", "/api/transfers/bulk", { token: owner.token, body });
+    expect(sent.status).toBe(422);
+    expect(sent.body.details.rows).toEqual([expect.objectContaining({ row: 1, code: "NAME_CHECK_UNAVAILABLE" })]);
+    await nothingCreated(business._id);
+    // Importing beneficiaries: that row too.
+    const imported = await t.api("POST", "/api/beneficiaries/import", { token: owner.token, pin: null, body: { items } });
+    expect(imported.body.rows[1]).toMatchObject({ row: 1, code: "NAME_CHECK_UNAVAILABLE" });
+    expect(imported.body).toMatchObject({ created: 1, failed: 1 });
+
+    // Asked again once the bank gives the name.
+    t.liquifia.namelessAccounts.clear();
+    const again = await resolve(owner.token, items);
+    expect(again.body).toMatchObject({ resolved: 2, failed: 0 });
+    expect(again.body.items[1].accountName).toBe("TUNDE BELLO");
+  });
+
+  test("throttled or timed out is the service, not the account: the whole lookup fails, to be tried again", async () => {
+    const { owner } = await setup();
+    const original = liquifia.validateAccount;
+    for (const status of [408, 429]) {
+      liquifia.validateAccount = async () => {
+        throw new LiquifiaError(status, "SLOW_DOWN", "Try again later");
+      };
+      try {
+        const single = await lookUp(owner.token, "1111111111");
+        expect([single.status, single.body.code]).toEqual([502, "PROVIDER_ERROR"]);
+        const bulk = await resolve(owner.token, [{ accountNumber: "1111111111", bankUuid: "BANK-GTB" }]);
+        expect([bulk.status, bulk.body.code]).toEqual([502, "PROVIDER_ERROR"]);
+      } finally {
+        liquifia.validateAccount = original;
+      }
+    }
   });
 });
 

@@ -206,6 +206,8 @@ async function serializeCheckouts(req: Request, checkouts: CheckoutDocument[]) {
       matchedBy: c.matchedBy ?? null,
       matchedByUser: u ? { _id: u.id, name: u.name } : null,
       transaction: c.transaction ? String(c.transaction) : null,
+      // Paid after the link's payment limit was reached: the business refunds it or honours it.
+      overLimit: !!c.overLimit,
       expiresAt: c.expiresAt,
       createdAt: c.get("createdAt"),
       // A pending or expired checkout can be linked by hand to a payment the matcher missed.

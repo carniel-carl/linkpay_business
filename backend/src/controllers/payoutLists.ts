@@ -6,12 +6,13 @@ import { BranchModel } from "../models/Branch";
 import { PayoutListModel, type PayoutListDocument } from "../models/PayoutList";
 import { TransferBatchModel, TransferModel } from "../models/Transfer";
 import { UserModel } from "../models/User";
-import { resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
+import { keyedPayoutRows, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
 import { todayInLagos } from "../services/pockets";
 import { branchScope, canAccessBranch } from "../services/team";
-import { createTransfers } from "../services/transfers";
+import { createTransfers, keyedTransferRow, replayBeforeLookups } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
-import { describeBulkResult, MAX_BULK_ITEMS } from "./transfers";
+import { assertSameRequest, isDuplicateClientKey, requestHash } from "../utils/idempotency";
+import { describeBulkResult, MAX_BULK_ITEMS, reviewedName } from "./transfers";
 
 type IdParams = { id: string };
 
@@ -26,6 +27,9 @@ const item = z.object({
   narration: z.string().trim().max(100).optional(),
 });
 const items = z.array(item).min(1).max(MAX_BULK_ITEMS);
+// A run's rows may carry the account name the member reviewed, as bulk rows do: a saved name that has changed
+// since is refused with ACCOUNT_NAME_CHANGED. It's a check only, so it isn't saved with `saveItems`.
+const runItems = z.array(item.extend({ accountName: reviewedName })).min(1).max(MAX_BULK_ITEMS);
 
 function clientKey(req: Request) {
   const key = req.header("idempotency-key")?.trim();
@@ -73,7 +77,9 @@ async function serialize(lists: PayoutListDocument[], withItems = false) {
       // Before fees; the fee per transfer is quoted when it's run.
       amountKobo: l.items.reduce((s, i) => s + i.amountKobo, 0),
       lastRunAt: l.lastRunAt ?? null,
+      // The last run made a batch, or a single transfer when it paid one person: one of these is set.
       lastBatch: l.lastBatch ? String(l.lastBatch) : null,
+      lastTransfer: l.lastTransfer ? String(l.lastTransfer) : null,
       createdBy: u ? { _id: u.id, name: u.name } : null,
       createdAt: l.get("createdAt"),
       updatedAt: l.get("updatedAt"),
@@ -111,7 +117,8 @@ export const getPayoutList: RequestHandler<IdParams> = async (req, res) => {
 
 /**
  * `{ title, branch?, items: [{ beneficiary, amountKobo, narration? }] }`, or `{ title, fromBatch }` to save a
- * past bulk transfer as a list (its recipients are added to the beneficiaries).
+ * past bulk transfer as a list (its recipients are added to the beneficiaries). Send an Idempotency-Key header
+ * so a retry after a dropped response doesn't save the list twice.
  */
 export const createPayoutList: RequestHandler = async (req, res) => {
   const body = z
@@ -121,6 +128,32 @@ export const createPayoutList: RequestHandler = async (req, res) => {
     ])
     .parse(req.body);
   const business = req.business!;
+  const key = clientKey(req);
+  // What this request asks for, so the same Idempotency-Key with different details is refused.
+  const hash = key
+    ? requestHash({
+        title: body.title,
+        branch: body.branch ?? null,
+        fromBatch: "fromBatch" in body ? body.fromBatch : null,
+        items: "items" in body ? body.items.map((i) => ({ beneficiary: i.beneficiary, amountKobo: i.amountKobo, narration: i.narration ?? null })) : null,
+      })
+    : undefined;
+
+  /** The list first saved with this Idempotency-Key, if it was used before. */
+  const replay = async () => {
+    if (!key) return null;
+    const first = await PayoutListModel.findOne({ business: business._id, createdBy: req.userId, clientKey: key });
+    if (!first) return null;
+    assertSameRequest(first.requestHash, hash);
+    if (!visibleTo(req, first)) throw new HttpError(404, "Payout list not found", "PAYOUT_LIST_NOT_FOUND");
+    return first;
+  };
+  const replied = async (list: PayoutListDocument) => void res.status(200).json((await serialize([list], true))[0]);
+
+  // Before the limit and the checks: a retry gets the list it saved, even at 100 lists or with a beneficiary gone since.
+  const earlier = await replay();
+  if (earlier) return replied(earlier);
+
   if ((await PayoutListModel.countDocuments({ business: business._id })) >= MAX_LISTS) {
     throw new HttpError(409, `You can save up to ${MAX_LISTS} payout lists. Delete one to add another.`, "PAYOUT_LIST_LIMIT");
   }
@@ -154,7 +187,23 @@ export const createPayoutList: RequestHandler = async (req, res) => {
     listItems = await checkItems(req, body.items);
   }
 
-  const list = await PayoutListModel.create({ business: business._id, title: body.title, branch, items: listItems, createdBy: req.userId });
+  let list;
+  try {
+    list = await PayoutListModel.create({
+      business: business._id,
+      title: body.title,
+      branch,
+      items: listItems,
+      createdBy: req.userId,
+      clientKey: key,
+      requestHash: hash,
+    });
+  } catch (err) {
+    // The same request sent twice at once, and the other one saved first: answer as its replay.
+    const replayed = isDuplicateClientKey(err) ? await replay() : null;
+    if (replayed) return replied(replayed);
+    throw err;
+  }
   res.status(201).json((await serialize([list], true))[0]);
 };
 
@@ -182,27 +231,46 @@ export const deletePayoutList: RequestHandler<IdParams> = async (req, res) => {
  */
 export const runPayoutList: RequestHandler<IdParams> = async (req, res) => {
   const body = z
-    .object({ branch: objectId.optional(), title: z.string().trim().max(80).optional(), items: items.optional(), saveItems: z.boolean().optional() })
+    .object({ branch: objectId.optional(), title: z.string().trim().max(80).optional(), items: runItems.optional(), saveItems: z.boolean().optional() })
     .parse(req.body ?? {});
+  if (!isValidObjectId(req.params.id)) throw new HttpError(400, "Invalid id");
+  const business = req.business!;
+  const key = clientKey(req);
+  // A retry is answered before the list is looked up, so it gets the first run's result even if the list was
+  // deleted or changed since. What the body left to the list (the account, the rows) is read from what that run
+  // created; the list's id is part of the request, so a key used for another list is still refused.
+  const early = await replayBeforeLookups({
+    business,
+    membership: req.membership!,
+    userId: req.userId!,
+    branchId: body.branch,
+    payoutList: new Types.ObjectId(req.params.id),
+    clientKey: key,
+    rows: async (sent) => (body.items ? keyedPayoutRows(business, body.items) : sent.map(keyedTransferRow)),
+  });
+  if (early) return void res.status(200).json(await describeBulkResult(req, early.transfers, early.batch));
+
   const list = await findList(req, req.params.id);
   const branch = body.branch ?? (list.branch ? String(list.branch) : undefined);
   if (!branch) throw new HttpError(400, "Choose the account to pay from", "BRANCH_REQUIRED");
 
   const rows = body.items ?? list.items.map((i) => ({ beneficiary: String(i.beneficiary), amountKobo: i.amountKobo, narration: i.narration ?? undefined }));
-  const requests = await resolvePayoutRows(req.business!, rows, { userId: req.userId! });
+  const requests = await resolvePayoutRows(business, rows, { userId: req.userId! });
   const { transfers, batch, replayed } = await createTransfers({
-    business: req.business!,
+    business,
     membership: req.membership!,
     userId: req.userId!,
     branchId: branch,
     requests,
     batchTitle: body.title ?? `${list.title} (${todayInLagos()})`,
     payoutList: list._id,
-    clientKey: clientKey(req),
+    clientKey: key,
   });
 
   if (!replayed) {
-    list.set({ lastRunAt: new Date(), lastBatch: batch?._id ?? transfers[0]?.batch ?? undefined });
+    // "Last paid" links to the run: its batch, or its one transfer when a single row was paid (no batch).
+    const lastBatch = batch?._id ?? transfers[0]?.batch ?? undefined;
+    list.set({ lastRunAt: new Date(), lastBatch, lastTransfer: lastBatch ? undefined : transfers[0]?._id });
     if (body.items && body.saveItems) list.set("items", await checkItems(req, body.items));
     await list.save();
   }

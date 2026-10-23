@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { BusinessModel } from "../src/models/Business";
 import { MembershipModel } from "../src/models/Membership";
+import { PayoutListModel } from "../src/models/PayoutList";
+import { TransferBatchModel, TransferModel } from "../src/models/Transfer";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
@@ -241,8 +243,167 @@ describe("payout lists", () => {
     expect(replay.body.batch._id).toBe(run.body.batch._id);
 
     const after = await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token });
-    expect(after.body).toMatchObject({ lastBatch: run.body.batch._id });
+    expect(after.body).toMatchObject({ lastBatch: run.body.batch._id, lastTransfer: null });
     expect(after.body.lastRunAt).toBeTruthy();
+  });
+
+  test("a run's batch names its account and who sent it, as its transfers do", async () => {
+    const { owner, list, headOfficeId } = await withList();
+    const run = await t.api("POST", `/api/payout-lists/${list._id}/run`, { token: owner.token });
+    expect(run.status).toBe(201);
+    const expected = {
+      branch: { _id: headOfficeId, name: "Head office", isHeadOffice: true },
+      createdBy: { _id: owner.user.id, name: "Owner" },
+    };
+    expect(run.body.batch).toMatchObject(expected);
+    expect(run.body.batch.branch).toEqual(run.body.batch.items[0].branch);
+    expect(run.body.batch.createdBy).toEqual(run.body.batch.items[0].createdBy);
+    const got = await t.api("GET", `/api/transfers/batches/${run.body.batch._id}`, { token: owner.token });
+    expect(got.body).toMatchObject({ ...expected, payoutList: list._id, count: 2 });
+  });
+
+  test("a retry is answered before the list is looked up, so it still replays after the list is deleted", async () => {
+    const { owner, list, amaka, tunde, headOfficeId, business } = await withList();
+    // As the web sends it (account and rows), and leaving both to the list.
+    const rows = [
+      { beneficiary: amaka._id, amountKobo: 120_000_00, narration: "Salary" },
+      { beneficiary: tunde._id, amountKobo: 80_000_00, narration: "Salary" },
+    ];
+    const explicit = { branch: headOfficeId, items: rows };
+    const run = (key: string, body?: object, id = list._id) =>
+      t.api("POST", `/api/payout-lists/${id}/run`, { token: owner.token, headers: { "Idempotency-Key": key }, body });
+    const first = await run("run-explicit-1", explicit);
+    expect(first.status).toBe(201);
+    for (const item of first.body.batch.items) t.liquifia.settlePayout(item.reference, "success");
+    await processOpenTransfers();
+    const second = await run("run-defaults-1");
+    expect(second.status).toBe(201);
+
+    expect((await t.api("DELETE", `/api/payout-lists/${list._id}`, { token: owner.token })).status).toBe(204);
+    const transfers = await TransferModel.countDocuments({ business: business._id });
+
+    const again = await run("run-explicit-1", explicit);
+    expect(again.status).toBe(200);
+    expect(again.body.batch._id).toBe(first.body.batch._id);
+    expect(again.body.batch.items.map((i: any) => i._id)).toEqual(first.body.batch.items.map((i: any) => i._id));
+    const againDefaults = await run("run-defaults-1");
+    expect(againDefaults.status).toBe(200);
+    expect(againDefaults.body.batch._id).toBe(second.body.batch._id);
+
+    // The same key with other details, or for another list, is refused as for /bulk.
+    const changed = await run("run-explicit-1", { ...explicit, items: [{ ...rows[0], amountKobo: 125_000_00 }, rows[1]] });
+    expect(changed.status).toBe(422);
+    expect(changed.body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await run("run-defaults-1", { branch: headOfficeId, items: rows.slice(1) })).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await run("run-defaults-1", undefined, "6a0000000000000000000000")).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+
+    // A new key needs the list.
+    expect((await run("run-new-key-1", explicit)).body.code).toBe("PAYOUT_LIST_NOT_FOUND");
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(transfers);
+  });
+
+  test("a run that pays one person records its transfer as the last run", async () => {
+    const { owner, list, amaka } = await withList();
+    const one = await t.api("POST", `/api/payout-lists/${list._id}/run`, {
+      token: owner.token,
+      body: { items: [{ beneficiary: amaka._id, amountKobo: 50_000_00 }] },
+    });
+    expect(one.status).toBe(201);
+    expect(one.body.batch).toBeNull();
+    const transferId = one.body.items[0]._id;
+    const afterOne = await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token });
+    expect(afterOne.body).toMatchObject({ lastBatch: null, lastTransfer: transferId });
+    expect(afterOne.body.lastRunAt).toBeTruthy();
+    expect((await t.api("GET", "/api/payout-lists", { token: owner.token })).body.items[0]).toMatchObject({ lastBatch: null, lastTransfer: transferId });
+
+    // A later run of several people makes a batch, and that's the last run now.
+    const all = await t.api("POST", `/api/payout-lists/${list._id}/run`, { token: owner.token });
+    expect(all.status).toBe(201);
+    const afterAll = await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token });
+    expect(afterAll.body).toMatchObject({ lastBatch: all.body.batch._id, lastTransfer: null });
+  });
+
+  test("a run's rows can carry the names the member reviewed; a saved name that differs is refused", async () => {
+    const { owner, list, amaka, tunde, business } = await withList();
+    const run = (amakaName: string) =>
+      t.api("POST", `/api/payout-lists/${list._id}/run`, {
+        token: owner.token,
+        body: {
+          items: [
+            { beneficiary: amaka._id, amountKobo: 120_000_00, accountName: amakaName },
+            { beneficiary: tunde._id, amountKobo: 80_000_00 },
+          ],
+          saveItems: true,
+        },
+      });
+    const changed = await run("AMAKA OBIORA");
+    expect(changed.status).toBe(422);
+    expect(changed.body).toMatchObject({
+      code: "INVALID_ROWS",
+      details: { rows: [{ row: 0, code: "ACCOUNT_NAME_CHANGED", accountName: "AMAKA OBI" }] },
+    });
+    expect(await TransferBatchModel.countDocuments({ business: business._id })).toBe(0);
+
+    const same = await run("amaka  obi");
+    expect(same.status).toBe(201);
+    // The name is a check, not part of the list.
+    expect((await PayoutListModel.findById(list._id))!.toObject().items[0]).not.toHaveProperty("accountName");
+  });
+
+  test("creating a list with an Idempotency-Key: a retry replays, other details are refused", async () => {
+    const { owner, headOfficeId, save, business } = await setup();
+    const amaka = (await save("1111111111")).body;
+    const body = { title: "Drivers", branch: headOfficeId, items: [{ beneficiary: amaka._id, amountKobo: 20_000_00 }] };
+    const create = (key: string | null, b: object = body) =>
+      t.api("POST", "/api/payout-lists", { token: owner.token, headers: key ? { "Idempotency-Key": key } : {}, body: b });
+
+    const first = await create("list-create-1");
+    expect(first.status).toBe(201);
+    const again = await create("list-create-1");
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual(first.body);
+
+    for (const other of [
+      { ...body, title: "Drivers (Kano)" },
+      { ...body, items: [{ beneficiary: amaka._id, amountKobo: 25_000_00 }] },
+      { title: "Drivers", items: body.items },
+    ]) {
+      const res = await create("list-create-1", other);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    }
+    expect(await PayoutListModel.countDocuments({ business: business._id })).toBe(1);
+
+    // Two at once with one key: one list, and the other answer is its replay.
+    const [a, b] = await Promise.all([create("list-create-2"), create("list-create-2")]);
+    expect([a.status, b.status].sort()).toEqual([200, 201]);
+    expect(a.body._id).toBe(b.body._id);
+    // No key, or a new one: a new list as before.
+    expect((await create(null)).status).toBe(201);
+    expect(await PayoutListModel.countDocuments({ business: business._id })).toBe(3);
+  });
+
+  test("saving a past bulk transfer as a list takes an Idempotency-Key too", async () => {
+    const { owner, headOfficeId, business } = await setup();
+    const bulk = await t.api("POST", "/api/transfers/bulk", {
+      token: owner.token,
+      body: {
+        branch: headOfficeId,
+        items: [
+          { accountNumber: "1111111111", bankUuid: "BANK-GTB", amountKobo: 3_000_00 },
+          { accountNumber: "2222222222", bankUuid: "BANK-GTB", amountKobo: 4_000_00 },
+        ],
+      },
+    });
+    const save = (title: string) =>
+      t.api("POST", "/api/payout-lists", { token: owner.token, headers: { "Idempotency-Key": "list-from-batch-1" }, body: { title, fromBatch: bulk.body.batch._id } });
+    const first = await save("Suppliers");
+    expect(first.status).toBe(201);
+    const again = await save("Suppliers");
+    expect(again.status).toBe(200);
+    expect(again.body._id).toBe(first.body._id);
+    expect((await save("Other suppliers")).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(await PayoutListModel.countDocuments({ business: business._id })).toBe(1);
   });
 
   test("a run can change this month's amounts, and keep them on the list", async () => {

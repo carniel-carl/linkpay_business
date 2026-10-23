@@ -145,7 +145,7 @@ export async function paymentReceived(
 /** A payment-link checkout was paid: whoever made the link, plus everyone who manages links for that branch. */
 export async function paymentLinkPaid(
   business: BusinessLike,
-  link: { _id: Id; title: string; branch: Id; createdBy: Id; kind?: string | null },
+  link: { _id: Id; title: string; branch: Id; createdBy: Id; kind?: string | null; maxPayments?: number | null },
   checkout: {
     _id: Id;
     status: string;
@@ -154,19 +154,26 @@ export async function paymentLinkPaid(
     payer?: { name: string } | null;
     donor?: { anonymous?: boolean | null } | null;
     mode?: string | null;
+    overLimit?: boolean | null;
   },
 ) {
   const paid = formatNaira(checkout.paidKobo ?? 0);
   const payer = checkout.payer?.name ?? "Someone";
   const test = checkout.mode === "test";
   // The team always sees a donor's name; "anonymous" only hides it on the public page.
-  const body =
+  let body =
     link.kind === "donation"
       ? `${payer}${checkout.donor?.anonymous ? " (anonymous on the page)" : ""} donated ${paid} to ${link.title}.`
       : checkout.status === "underpaid"
         ? `${payer} paid ${paid} of ${formatNaira(checkout.priceKobo)} for ${link.title}.`
         : `${payer} paid ${paid} for ${link.title}.`;
-  const title = link.kind === "donation" ? "New donation" : checkout.status === "underpaid" ? "Payment link part paid" : "Payment link paid";
+  let title = link.kind === "donation" ? "New donation" : checkout.status === "underpaid" ? "Payment link part paid" : "Payment link paid";
+  // Past the link's payment limit (see settleCheckout): the team decides, so it says so.
+  if (checkout.overLimit) {
+    const limit = link.maxPayments ?? 0;
+    title = "Payment over the link's limit";
+    body += ` It came after the link's limit of ${limit} payment${limit === 1 ? "" : "s"} was reached: refund it or honour it.`;
+  }
   await notifyUsers(
     [String(link.createdBy), ...(await membersWith(business, "payments.manage", { branch: link.branch }))],
     {
@@ -174,7 +181,13 @@ export async function paymentLinkPaid(
       title: test ? `${title} (test)` : title,
       body,
       link: `/payment-links/${link._id}?checkout=${checkout._id}`,
-      data: { paymentLinkId: String(link._id), checkoutId: String(checkout._id), branchId: String(link.branch), mode: test ? "test" : "live" },
+      data: {
+        paymentLinkId: String(link._id),
+        checkoutId: String(checkout._id),
+        branchId: String(link.branch),
+        mode: test ? "test" : "live",
+        ...(checkout.overLimit && { overLimit: true }),
+      },
     },
     business,
     { branch: link.branch },

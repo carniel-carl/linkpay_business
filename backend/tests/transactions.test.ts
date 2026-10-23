@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { env } from "../src/config/env";
+import { AuditLogModel } from "../src/models/AuditLog";
 import { BusinessModel } from "../src/models/Business";
 import { TransactionModel } from "../src/models/Transaction";
 import { UserModel } from "../src/models/User";
@@ -124,6 +125,36 @@ describe("recording incoming payments", () => {
     const before = t.liquifia.requests.filter((r) => r.path === "/inbound-transfers").length;
     await Promise.all([syncIfStale(0), syncIfStale(0), syncIfStale(0)]);
     expect(t.liquifia.requests.filter((r) => r.path === "/inbound-transfers").length - before).toBe(1);
+  });
+
+  test("staff's sync now never runs beside a sync already going: it waits for it, then shares the one run after it", async () => {
+    const { headVa } = await setup();
+    push(inboundTransfer(headVa, 100));
+    const listed = () => t.liquifia.requests.filter((r) => r.path === "/inbound-transfers").length;
+    const audited = () => AuditLogModel.countDocuments({ action: "transactions.synced" });
+    const [before, auditedBefore] = [listed(), await audited()];
+    t.liquifia.inboundDelayMs = 300;
+    const background = syncIfStale(0);
+    while (listed() === before) await Bun.sleep(5);
+
+    // The run going has read the list when a payment lands, and two staff members press "sync now".
+    push(inboundTransfer(headVa, 75000));
+    const sync = () => t.api("POST", "/api/admin/transactions/sync", { token: adminToken });
+    const [first, second] = await Promise.all([sync(), sync()]);
+    expect(await background).toMatchObject({ created: 1 });
+    // Both got the counts of the run that followed, which recorded it.
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ waitedForRunningSync: true, created: 1 });
+    expect(second.body).toEqual(first.body);
+    expect(await TransactionModel.countDocuments({ amountKobo: 75000 })).toBe(1);
+    expect(listed() - before).toBe(2);
+    expect(await audited()).toBe(auditedBefore + 2);
+
+    // Nothing running: a run of its own, straight away.
+    t.liquifia.inboundDelayMs = 0;
+    const own = await sync();
+    expect(own.body).toMatchObject({ waitedForRunningSync: false, created: 0 });
+    expect(listed() - before).toBe(3);
   });
 });
 

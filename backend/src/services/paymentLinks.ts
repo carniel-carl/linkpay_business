@@ -412,6 +412,15 @@ async function settleCheckout(
           { $inc: { paymentsCount: 1, collectedKobo: tx.amountKobo }, $max: { lastPaidAt: tx.occurredAt } },
           { returnDocument: "after" },
         );
+  // A payment past the link's limit. The limit holds places only for payers within their 30 minutes, but a
+  // transfer can still be matched later (on its amount during the 2-hour hold, or on its reference for a week),
+  // after its place went to someone else; or the limit was lowered while people were paying. The money is here,
+  // so it's recorded, but flagged and the team told to refund or honour it, rather than oversold quietly. The
+  // count goes up atomically, so only the payments beyond the limit are flagged.
+  if (checkout.mode !== "test" && link?.maxPayments && link.paymentsCount > link.maxPayments) {
+    await CheckoutModel.updateOne({ _id: checkout._id }, { overLimit: true });
+    checkout.overLimit = true;
+  }
   if (link) {
     // Open pages pull in the new donation and re-check their own checkout; a link that just reached its
     // payment limit also tells them it's sold out.

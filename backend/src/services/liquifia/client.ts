@@ -155,10 +155,22 @@ export const liquifia = {
   },
 
   // Payouts. Requests and fee quotes are in naira (major units); see toNaira()/toKobo().
-  validateAccount: (accountNumber: string, bankUuid: string) =>
-    request<LiquifiaAccountLookup>("POST", "/payouts/validate", {
+  /**
+   * The bank's name for an account (name enquiry). An account that doesn't exist is a 4xx. A 200 without a
+   * name, or about another account, is an unknown outcome (UNEXPECTED_RESPONSE), not "no such account": telling
+   * someone a real account doesn't exist is worse than asking them to try again.
+   */
+  validateAccount: async (accountNumber: string, bankUuid: string) => {
+    const result = await request<unknown>("POST", "/payouts/validate", {
       body: { account_number: accountNumber, bank_uuid: bankUuid, country: "NG", currency: "NGN" },
-    }),
+    });
+    const name = isRecord(result) && typeof result.account_name === "string" ? result.account_name.trim() : "";
+    if (!isRecord(result) || !name) throw unexpected("name enquiry answer has no account name");
+    if (typeof result.account_number === "string" && result.account_number.trim() !== accountNumber) {
+      throw unexpected("name enquiry answer is about another account");
+    }
+    return { ...result, account_name: name } as LiquifiaAccountLookup;
+  },
   quotePayoutFee: (amountNaira: number) => request<LiquifiaFeeQuote>("GET", "/payouts/fee", { query: { amount: amountNaira } }),
   /** The payout created (or replayed for this key). Without an id, or about another reference, it's an unknown outcome. */
   createPayout: async (body: LiquifiaPayoutInput, idempotencyKey: string) => {

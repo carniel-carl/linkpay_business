@@ -15,7 +15,7 @@ import { provisionBranchAccount, provisionBusinessAccount } from "../services/ac
 import { audit, staffActor } from "../services/audit";
 import { kybDecided } from "../services/notificationEvents";
 import { assertNoConflictOfInterest } from "../services/staff";
-import { syncInboundTransfers } from "../services/transactions";
+import { syncNow } from "../services/transactions";
 import { HttpError } from "../utils/HttpError";
 import { findBranch } from "./branches";
 import { sendBusinessOverview, streamDocument } from "./business";
@@ -293,8 +293,12 @@ export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 
-/** Pulls incoming transfers from Liquifia now (normally done every minute in the background). */
+/**
+ * Pulls incoming transfers from Liquifia now (normally done every minute in the background), through the same
+ * single-flight as the background sync (syncNow): during a run, it waits for it and answers with the counts of
+ * the run that follows, with `waitedForRunningSync: true`.
+ */
 export const syncTransactions: RequestHandler = async (req, res) => {
   await audit(await staffActor(req), { action: "transactions.synced", summary: "Pulled incoming payments from the bank partner" });
-  res.json(await syncInboundTransfers());
+  res.json(await syncNow());
 };

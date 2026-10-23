@@ -96,6 +96,9 @@ const NAME_TTL_MS = 5 * 60_000;
 const NAME_CACHE_MAX = 5_000;
 const nameCache = new Map<string, { at: number; accountName: string; bankName?: string }>();
 
+/** 4xx answers that mean "try again later" (timeout, too early, too many requests), not "no such account". */
+const TRY_AGAIN_STATUSES = [408, 425, 429];
+
 /** Empties the name-enquiry cache (tests). */
 export const clearNameCache = () => nameCache.clear();
 
@@ -117,12 +120,19 @@ export async function resolveBankRecipient(
     try {
       lookup = await liquifia.validateAccount(accountNumber, bankUuid);
     } catch (err) {
+      // An answer without a usable name says nothing about whether the account exists. It's about this account
+      // (a bulk row shows it and the rest go on), and asking again may work, so it isn't cached.
+      if (err instanceof LiquifiaError && err.code === "UNEXPECTED_RESPONSE") {
+        console.error(`Name enquiry failed: ${err.message}`);
+        throw new HttpError(502, "We couldn't check this account with the bank right now. Try again in a moment.", "NAME_CHECK_UNAVAILABLE");
+      }
+      // Throttled or timed out: the service, not the account, like a 5xx (the whole bulk call fails, to be retried).
+      if (err instanceof LiquifiaError && TRY_AGAIN_STATUSES.includes(err.status)) throw err;
       if (err instanceof LiquifiaError && err.status >= 400 && err.status < 500) {
         throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
       }
       throw err;
     }
-    if (!lookup?.account_name) throw new HttpError(422, "We couldn't find that account. Check the number and bank.", "ACCOUNT_NOT_FOUND");
     found = { accountName: lookup.account_name, bankName: lookup.bank_name ?? bank.name };
     nameCache.delete(key);
     nameCache.set(key, { at: Date.now(), ...found });
@@ -429,27 +439,41 @@ async function sendingAccount(business: BusinessDocument, membership: Membership
  * the details changed), not a 502. `rows` works out the hashed details from the database alone, and returns
  * null when it can't (a saved beneficiary is gone, say); the caller then carries on as usual, and
  * createTransfers checks the key again after the lookups and under the lock.
+ *
+ * A payout list run can leave the account and the rows to the list, which may have changed or gone since:
+ * then `branchId` is left out (the key's first transfer says where it was sent from) and `rows` reads them
+ * from `sent`, what the key created (keyedTransferRow).
  */
 export async function replayBeforeLookups(opts: {
   business: BusinessDocument;
   membership: MembershipDocument;
   userId: string;
-  branchId: string;
+  branchId?: string;
   payoutList?: Types.ObjectId;
   clientKey?: string;
-  rows: () => Promise<KeyedRow[] | null>;
+  rows: (sent: TransferDocument[]) => Promise<KeyedRow[] | null>;
 }) {
   if (!opts.clientKey) return null;
   const first = await firstWithKey(opts.business, opts.userId, opts.clientKey);
   if (!first) return null;
   // The same refusals as sending, so a retry can't get round them (a suspended business, a branch taken away).
   assertMoneyCanMove(opts.business);
-  const { branch } = await sendingAccount(opts.business, opts.membership, opts.branchId);
-  const rows = await opts.rows();
+  const { branch } = await sendingAccount(opts.business, opts.membership, opts.branchId ?? String(first.branch));
+  const replay = await replayOf(first);
+  const rows = await opts.rows(replay.transfers);
   if (!rows) return null;
   assertSameRequest(first.requestHash, sendRequestHash(branch._id, opts.payoutList, rows));
-  return replayOf(first);
+  return replay;
 }
+
+/** A transfer as its Idempotency-Key hash saw the row it was made from. */
+export const keyedTransferRow = (t: TransferDocument): KeyedRow => ({
+  accountNumber: t.recipient!.accountNumber,
+  bankUuid: t.recipient!.bankUuid,
+  amountKobo: t.amountKobo,
+  narration: t.narration,
+  beneficiary: t.recipient!.beneficiary,
+});
 
 /** A transfer to one of the business's branches, as its Idempotency-Key hash saw it; null if that needs the bank list. */
 export async function keyedBranchRow(business: BusinessDocument, branchId: string, row: { amountKobo: number; narration?: string }) {
