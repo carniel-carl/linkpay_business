@@ -61,7 +61,6 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   const inviter = preview.invitedBy ?? "Someone"
 
   if (preview.status !== "pending") {
-    const signIn = `/sign-in?email=${encodeURIComponent(preview.email)}`
     const copy = {
       expired: {
         title: "This invite has expired",
@@ -83,7 +82,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
           user
             ? { href: "/dashboard", label: "Go to your dashboard" }
             : preview.status === "accepted"
-              ? { href: signIn, label: "Sign in" }
+              ? { href: "/sign-in", label: "Sign in" }
               : { href: "/", label: "Go to LinkPay" }
         }
       />
@@ -125,7 +124,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
               for <span className="font-medium text-foreground">{preview.email}</span>. Switch to that account to accept it.
             </AlertDescription>
           </Alert>
-          <SwitchAccountButton token={token} email={preview.email} accountExists={preview.accountExists} />
+          <SwitchAccountButton token={token} accountExists={preview.accountExists} />
           <Button variant="ghost" asChild>
             <Link href="/dashboard">Keep using {user.email}</Link>
           </Button>
@@ -140,7 +139,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
           <Button size="lg" asChild>
             {/* A stale session cookie would bounce off the sign-in page, so clear it on the way. */}
             <Link
-              href={`${staleSession ? "/auth/sign-out?next=" : "/sign-in?next="}${encodeURIComponent(here)}&email=${encodeURIComponent(preview.email)}`}
+              href={`${staleSession ? "/auth/sign-out?next=" : "/sign-in?next="}${encodeURIComponent(here)}`}
             >
               Sign in to accept
               <ArrowRight data-icon="inline-end" aria-hidden />

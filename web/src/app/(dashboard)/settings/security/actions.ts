@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { runAction } from "@/lib/action"
 import type { ActionResult } from "@/lib/action-result"
 import { api } from "@/lib/api/client"
+import { setAuthEmail } from "@/lib/auth-email"
 import { getMe } from "@/lib/data"
 import { changePasswordSchema } from "@/lib/schemas"
 
@@ -20,5 +21,6 @@ export async function startSettingPassword(): Promise<ActionResult> {
     api("/api/auth/password/reset", { method: "POST", json: { email: me.email }, auth: false }),
   )
   if (!result.ok) return result
-  redirect(`/reset-password?email=${encodeURIComponent(me.email)}`)
+  await setAuthEmail(me.email)
+  redirect("/reset-password")
 }

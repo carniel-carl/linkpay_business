@@ -99,22 +99,14 @@ export function AcceptInviteButton({ token, businessName }: { token: string; bus
 }
 
 /** Signed in as someone other than the invited email. */
-export function SwitchAccountButton({
-  token,
-  email,
-  accountExists,
-}: {
-  token: string
-  email: string
-  accountExists: boolean
-}) {
+export function SwitchAccountButton({ token, accountExists }: { token: string; accountExists: boolean }) {
   const [pending, startTransition] = useTransition()
   return (
     <Button
       size="lg"
       variant="outline"
       disabled={pending}
-      onClick={() => startTransition(() => switchAccount(token, email, accountExists))}
+      onClick={() => startTransition(() => switchAccount(token, accountExists))}
     >
       {pending ? <Spinner /> : <LogOut data-icon="inline-start" aria-hidden />}
       Sign out and switch account

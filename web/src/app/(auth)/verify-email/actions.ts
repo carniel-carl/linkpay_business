@@ -5,6 +5,7 @@ import { runAction } from "@/lib/action"
 import type { ActionResult } from "@/lib/action-result"
 import { api } from "@/lib/api/client"
 import type { AuthSession } from "@/lib/api/types"
+import { clearAuthEmail } from "@/lib/auth-email"
 import { clearRegistration, getRegistrationToken } from "@/lib/registration"
 import { code, email } from "@/lib/schemas"
 import { setSession } from "@/lib/session"
@@ -22,6 +23,7 @@ export async function verifyEmail(input: { email: string; code: string }): Promi
   )
   if (!result.ok) return result
   await clearRegistration()
+  await clearAuthEmail()
   await setSession(result.data.accessToken)
   redirect("/dashboard")
 }

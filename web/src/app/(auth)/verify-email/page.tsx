@@ -3,13 +3,16 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { AuthFrame } from "@/components/auth/auth-frame"
 import { openingLedger } from "@/components/auth/ledgers"
+import { getAuthEmail } from "@/lib/auth-email"
+import { getRegistrationEmail } from "@/lib/registration"
 import { VerifyEmailForm } from "./verify-email-form"
 
 export const metadata: Metadata = { title: "Verify your email" }
 
-export default async function VerifyEmailPage({ searchParams }: PageProps<"/verify-email">) {
-  const { email } = await searchParams
-  if (typeof email !== "string" || !email) redirect("/sign-up")
+export default async function VerifyEmailPage() {
+  // From sign-up or sign-in in this browser (lib/auth-email.ts), else the sign-up itself. Neither: start again.
+  const email = (await getAuthEmail()) ?? (await getRegistrationEmail())
+  if (!email) redirect("/sign-up")
 
   return (
     <AuthFrame

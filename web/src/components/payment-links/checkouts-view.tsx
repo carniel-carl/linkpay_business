@@ -16,7 +16,7 @@ import { formatNaira, formatShortDate, formatTime } from "@/lib/format"
 import { CHECKOUT_TAB_LABELS, CHECKOUT_TABS, DEFAULT_PAGE_SIZE, PAGE_SIZES, type CheckoutTab } from "@/lib/payment-links"
 import { CheckoutSheet } from "./checkout-sheet"
 import { useUrlState, UnderlineTabs } from "./links-view"
-import { CheckoutStatusBadge, SourceTag, TestBadge } from "./parts"
+import { CheckoutStatusBadge, OverLimitBadge, SourceTag, TestBadge } from "./parts"
 
 type Patch = Record<string, string | undefined>
 const helper = createColumnHelper<DataTableFeatures, LinkCheckout>()
@@ -123,6 +123,7 @@ export function CheckoutsView({
           cell: ({ row }) => (
             <span className="flex items-center gap-1.5">
               <CheckoutStatusBadge status={row.original.status} />
+              <OverLimitBadge overLimit={row.original.overLimit} />
               <TestBadge mode={row.original.mode} />
             </span>
           ),
@@ -237,6 +238,7 @@ export function CheckoutsView({
                         <span className="flex items-center gap-1">
                           <TestBadge mode={c.mode} />
                           <CheckoutStatusBadge status={c.status} />
+                          <OverLimitBadge overLimit={c.overLimit} />
                         </span>
                       </span>
                     </Link>

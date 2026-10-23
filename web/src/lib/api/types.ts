@@ -940,6 +940,8 @@ export type LinkCheckout = {
   _id: string
   reference: string
   status: CheckoutStatus
+  /** Paid after the link had reached its payment limit: the business refunds it or honours it. */
+  overLimit?: boolean
   /** The link's mode when the checkout started. */
   mode: PaymentMode
   link: { _id: string; title: string; slug: string } | null
@@ -1025,3 +1027,62 @@ export type PublicCheckout = {
   successMessage: string | null
   redirectUrl: string | null
 }
+
+// ---- Beneficiaries and payout lists (docs/briefs/bulk-payouts.md) ----
+
+/** A saved recipient: name-checked with the bank once, shared by every member. Only the nickname can change. */
+export type Beneficiary = {
+  _id: string
+  accountNumber: string
+  /** As the bank reported it when it was saved. */
+  accountName: string
+  bankName: string | null
+  bankUuid: string
+  /** Up to 60 characters. */
+  nickname: string | null
+  /** Another business on LinkPay (when it was saved). */
+  onLinkPay: boolean
+  /** Set when a transfer to it is created. */
+  lastPaidAt: string | null
+  createdBy: { _id: string; name: string } | null
+  createdAt: string
+}
+
+/** GET /api/beneficiaries: most recently paid first, then by name. */
+export type BeneficiaryList = { items: Beneficiary[]; total: number; skip: number; take: number }
+
+/** A payout list that uses a beneficiary (GET /api/beneficiaries/:id, BENEFICIARY_IN_USE `details.payoutLists`). */
+export type PayoutListRef = { _id: string; title: string }
+
+/** A row of a payout list. `beneficiary` is null if the saved beneficiary has gone. */
+export type PayoutListItem = {
+  beneficiary: Pick<Beneficiary, "_id" | "accountName" | "nickname" | "accountNumber" | "bankName"> | null
+  amountKobo: number
+  narration: string | null
+}
+
+/** GET /api/payout-lists items (no `items`); GET /:id, POST and PATCH add `items`. */
+export type PayoutList = {
+  _id: string
+  /** 1 to 80 characters. */
+  title: string
+  /** The account it pays from by default; null means "choose each time". */
+  branch: BranchRef | null
+  count: number
+  /** Before fees. */
+  amountKobo: number
+  lastRunAt: string | null
+  /** The bulk transfer the last run made (null when the last run was a single transfer). */
+  lastBatch: string | null
+  /** The transfer the last run made when it paid one person (no batch); null otherwise. */
+  lastTransfer: string | null
+  createdBy: { _id: string; name: string } | null
+  createdAt: string
+  updatedAt: string
+  items?: PayoutListItem[]
+}
+
+export type PayoutListWithItems = PayoutList & { items: PayoutListItem[] }
+
+/** POST /api/payout-lists/:id/run, like POST /api/transfers/bulk: a batch, or one plain transfer for a single row. */
+export type PayoutListRunResult = { batch: (TransferBatch & { payoutList?: string | null }) | null; items?: Transfer[] }

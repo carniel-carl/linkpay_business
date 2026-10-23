@@ -39,6 +39,7 @@ import type {
   UnreadCount,
   User,
 } from "@/lib/api/types"
+import type { BeneficiaryList, PayoutList, PayoutListWithItems } from "@/lib/api/types"
 
 // Server Components can't change cookies, so an expired session goes through the
 // sign-out route handler, which clears the cookie and redirects to sign in.
@@ -245,3 +246,21 @@ export const getLinkCheckouts = (params: URLSearchParams) => load<LinkCheckoutLi
 
 /** One checkout, for links (the notification) to one that isn't in the list on screen. */
 export const getLinkCheckout = (id: string) => load<LinkCheckout>(`/api/payment-links/checkouts/${encodeURIComponent(id)}`)
+
+// ---- Beneficiaries and payout lists (docs/briefs/bulk-payouts.md). Reads need `accounts.view`. ----
+
+/** GET /api/beneficiaries (see lib/payouts.ts for the query). */
+export const getBeneficiaries = (params: URLSearchParams) => load<BeneficiaryList>(`/api/beneficiaries?${params}`)
+
+/** The lists the member can use (their branches' and those with no branch), most recently changed first. */
+export const getPayoutLists = () => load<{ items: PayoutList[] }>("/api/payout-lists")
+
+/** One list with its rows, or null when it doesn't exist or is for a branch the member can't see. */
+export async function getPayoutList(id: string) {
+  try {
+    return await api<PayoutListWithItems>(`/api/payout-lists/${encodeURIComponent(id)}`)
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
+    onReadError(err)
+  }
+}

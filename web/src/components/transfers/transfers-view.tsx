@@ -41,9 +41,11 @@ type Props = {
   linked: Transfer | null
   /** Shown in the empty state for members who can send. */
   newTransfer?: React.ReactNode
+  /** An extra action on the bulk transfer's banner ("Save as a list"). */
+  batchAction?: React.ReactNode
 }
 
-export function TransfersView({ data, query, canApprove, awaitingCount, showBranch, batch, linked, newTransfer }: Props) {
+export function TransfersView({ data, query, canApprove, awaitingCount, showBranch, batch, linked, newTransfer, batchAction }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -195,7 +197,7 @@ export function TransfersView({ data, query, canApprove, awaitingCount, showBran
         {pending ? "Loading transfers" : ""}
       </p>
 
-      {batch && <BatchBanner batch={batch} onClear={() => navigate({ batch: undefined, page: undefined })} />}
+      {batch && <BatchBanner batch={batch} extra={batchAction} onClear={() => navigate({ batch: undefined, page: undefined })} />}
 
       <div className="surface overflow-hidden">
         <nav aria-label="Transfer status" className="overflow-x-auto px-4 pt-2 sm:px-6">
@@ -298,7 +300,7 @@ export function TransfersView({ data, query, canApprove, awaitingCount, showBran
 }
 
 /** A bulk transfer: totals, progress and approve or reject everything still waiting. */
-function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => void }) {
+function BatchBanner({ batch, extra, onClear }: { batch: TransferBatch; extra?: React.ReactNode; onClear: () => void }) {
   const [busy, setBusy] = useState<"approve" | "reject" | "cancel" | null>(null)
   const pin = useTransactionPin()
   const waiting = batch.statusCounts.pending_approval
@@ -351,7 +353,7 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
         {sent > 0 && `${sent} sent. `}
         {failed > 0 && `${failed} not sent.`}
       </p>
-      {(approvable > 0 || cancellable > 0) && (
+      {(approvable > 0 || cancellable > 0 || extra) && (
         <div className="flex flex-wrap gap-2">
           {approvable > 0 && (
             <>
@@ -371,6 +373,7 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
               Cancel bulk transfer
             </Button>
           )}
+          {extra}
         </div>
       )}
       {pin.dialog}

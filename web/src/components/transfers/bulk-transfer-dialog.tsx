@@ -66,8 +66,8 @@ const apiItems = (list: Row[], names: Record<string, Checked<ResolvedAccount>>) 
 /** "Ada, Bola or Chidi". */
 const joinOr = (names: string[]) => (names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} or ${names.at(-1)}`)
 
-/** "Needs approval from Ada or Bola, then Chidi", or "Sends straight away". */
-function approvalLine(approval: BulkPreview["approval"]) {
+/** "Needs approval from Ada or Bola, then Chidi", or "Sends straight away". Also used by payout list runs. */
+export function approvalLine(approval: BulkPreview["approval"]) {
   if (!approval.needed) return "Sends straight away"
   const level = (l: BulkPreview["approval"]["levels"][number]) => {
     if (!l.approvers.length) return "someone who can approve transfers"

@@ -6,7 +6,7 @@ import type { ActionResult } from "@/lib/action-result"
 import { api } from "@/lib/api/client"
 import type { InviteAccepted, User } from "@/lib/api/types"
 import { setBusinessCookie } from "@/lib/business-context"
-import { clearSession, setSession } from "@/lib/session"
+import { clearSession, getSessionToken, setSession } from "@/lib/session"
 import { inviteRegisterSchema } from "@/lib/schemas"
 
 const path = (token: string) => `/api/invites/${encodeURIComponent(token)}`
@@ -36,9 +36,14 @@ export async function registerFromInvite(token: string, input: unknown): Promise
   redirect("/dashboard")
 }
 
-/** Signed in as someone else: sign out, then sign in (or sign up) as the invited email and come back here. */
-export async function switchAccount(token: string, invitedEmail: string, accountExists: boolean) {
+/**
+ * Signed in as someone else: sign out, then sign in (or sign up) as the invited email and come back here.
+ * Sign-in fills in the invited email from the invite in `next`.
+ */
+export async function switchAccount(token: string, accountExists: boolean) {
+  // Ends the session on the server too, like signing out: clearing the cookie alone would leave it valid.
+  if (await getSessionToken()) await api("/api/auth/logout", { method: "POST" }).catch(() => {})
   await clearSession()
   if (!accountExists) redirect(invitePage(token))
-  redirect(`/sign-in?next=${encodeURIComponent(invitePage(token))}&email=${encodeURIComponent(invitedEmail)}`)
+  redirect(`/sign-in?next=${encodeURIComponent(invitePage(token))}`)
 }
