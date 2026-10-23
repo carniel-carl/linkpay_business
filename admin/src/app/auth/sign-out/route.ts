@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { safeNext } from "@/lib/safe-next"
 import { CHALLENGE_COOKIE, SESSION_COOKIE } from "@/lib/session"
 
 /**
@@ -11,8 +12,8 @@ export function GET(request: NextRequest) {
   if (params.get("expired")) url.searchParams.set("expired", "1")
   const reason = params.get("reason")
   if (reason === "disabled" || reason === "no_role") url.searchParams.set("reason", reason)
-  const next = params.get("next")
-  if (next && next.startsWith("/") && !next.startsWith("//")) url.searchParams.set("next", next)
+  const next = safeNext(params.get("next"))
+  if (next) url.searchParams.set("next", next)
 
   const res = NextResponse.redirect(url)
   res.cookies.delete(SESSION_COOKIE)

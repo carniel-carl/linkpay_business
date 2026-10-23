@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { safeNext } from "@/lib/safe-next"
 
 // Auth-state guard only: the proxy can't verify the staff token. The console layout does that
 // with GET /api/admin/auth/me and signs out an ended session. Names match lib/session.ts.
@@ -27,7 +28,8 @@ export function proxy(request: NextRequest) {
 
   if (!signedIn) {
     const url = new URL("/sign-in", request.url)
-    if (pathname !== HOME) url.searchParams.set("next", `${pathname}${search}`)
+    const next = safeNext(`${pathname}${search}`)
+    if (next && pathname !== HOME) url.searchParams.set("next", next)
     return NextResponse.redirect(url)
   }
   return NextResponse.next()

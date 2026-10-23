@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { safeNext } from "@/lib/safe-next"
 import { CHALLENGE_COOKIE, CHOICE_COOKIES, SESSION_COOKIE } from "@/lib/session"
 
 /**
@@ -9,8 +10,8 @@ export function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
   const url = new URL("/sign-in", request.url)
   if (params.get("expired")) url.searchParams.set("expired", "1")
-  const next = params.get("next")
-  if (next && next.startsWith("/") && !next.startsWith("//")) url.searchParams.set("next", next)
+  const next = safeNext(params.get("next"))
+  if (next) url.searchParams.set("next", next)
   const email = params.get("email")
   if (email) url.searchParams.set("email", email)
 

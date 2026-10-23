@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
+import { safeNext } from "@/lib/safe-next"
 
 // Auth-state guard only. Business-status routing happens on the server with GET /api/business,
 // because the proxy can't verify the JWT or see the business.
@@ -75,7 +76,8 @@ export async function proxy(request: NextRequest) {
 
   if (!signedIn) {
     const url = new URL("/sign-in", request.url)
-    if (pathname !== HOME) url.searchParams.set("next", `${pathname}${search}`)
+    const next = safeNext(`${pathname}${search}`)
+    if (next && pathname !== HOME) url.searchParams.set("next", next)
     return NextResponse.redirect(url)
   }
   return NextResponse.next()

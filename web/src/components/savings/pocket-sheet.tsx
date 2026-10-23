@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { Pocket, PocketMovement } from "@/lib/api/types"
 import { formatDate, formatDateTime, formatNaira } from "@/lib/format"
 import { describeAutoSave, formatDay, MOVEMENT_LABELS } from "@/lib/savings"
@@ -169,8 +170,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-const newKey = () => crypto.randomUUID().replaceAll("-", "")
-
 /** Inline amount form for adding to or withdrawing from the pocket. */
 function MoveForm({
   pocket,
@@ -186,7 +185,7 @@ function MoveForm({
 }) {
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
-  const [key, setKey] = useState(newKey)
+  const idempotency = useIdempotencyKey()
   const [fieldError, setFieldError] = useState<string>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
@@ -205,18 +204,15 @@ function MoveForm({
     setFieldError(undefined)
     setBusy(true)
     setError(undefined)
+    const request = { amountKobo: kobo, note: note.trim() || undefined }
+    // A retry with the same amount and note keeps the key, whatever went wrong; a corrected request gets a new one.
     const result = await movePocketMoney(pocket._id, deposit ? "deposit" : "withdraw", {
-      amountKobo: kobo,
-      note: note.trim() || undefined,
-      idempotencyKey: key,
+      ...request,
+      idempotencyKey: idempotency.keyFor(request),
     })
     setBusy(false)
-    if (!result.ok) {
-      setError(result.error)
-      // A plain retry (account busy) keeps the key; anything else gets a new one for the corrected request.
-      if (result.code !== "ACCOUNT_BUSY") setKey(newKey())
-      return
-    }
+    if (!result.ok) return setError(result.error)
+    idempotency.reset()
     toast.success(
       deposit
         ? `${formatNaira(kobo)} added to ${pocket.name}.`

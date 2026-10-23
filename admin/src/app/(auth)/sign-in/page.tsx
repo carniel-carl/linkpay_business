@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { Info } from "lucide-react"
 import { AuthHeader } from "@/components/auth/auth-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { safeNext } from "@/lib/safe-next"
 import { SignInForm } from "./sign-in-form"
 
 export const metadata: Metadata = { title: "Sign in" }
@@ -14,7 +15,7 @@ const ENDED = {
 
 export default async function SignInPage({ searchParams }: PageProps<"/sign-in">) {
   const { next, expired, reason } = await searchParams
-  const nextPath = typeof next === "string" ? next : undefined
+  const nextPath = safeNext(typeof next === "string" ? next : undefined)
 
   return (
     <>
