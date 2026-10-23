@@ -1,14 +1,32 @@
 import type { Request } from "express";
 import type { Types } from "mongoose";
+import { hostname, userInfo } from "node:os";
 import { AuditLogModel, type AuditAction } from "../models/AuditLog";
 import { StaffModel } from "../models/Staff";
 
 type Id = Types.ObjectId | string;
 
-/** Who an audit entry is by: a staff member (with the request's IP) or the automatic risk checks. */
+/**
+ * Who an audit entry is by: a staff member (with the request's IP), or not a signed-in person (`system`): the
+ * automatic risk checks, or the staff command line. The name says which.
+ */
 export type Actor = { type: "staff"; staff: string; name: string; ip?: string } | { type: "system"; name: string };
 
 export const SYSTEM_ACTOR: Actor = { type: "system", name: "Automatic risk checks" };
+
+/**
+ * scripts/staff.ts, run on a server rather than through the console. Nobody signs in there, so the entry names
+ * the operating-system account and machine it ran on, for whoever has to work out who it was.
+ */
+export function cliActor(): Actor & { type: "system" } {
+  let user = process.env.USER ?? process.env.USERNAME ?? "unknown user";
+  try {
+    user = userInfo().username;
+  } catch {
+    // No account entry for this process's user (some containers): keep the environment's.
+  }
+  return { type: "system", name: `Staff command line (${user}@${hostname()})` };
+}
 
 /** The signed-in staff member, for audit entries and notifications. Use after `requireStaff`. */
 export async function staffActor(req: Request): Promise<Actor & { type: "staff" }> {

@@ -3,7 +3,15 @@ import { BeneficiaryModel, type BeneficiaryDocument } from "../models/Beneficiar
 import type { BusinessDocument } from "../models/Business";
 import { HttpError } from "../utils/HttpError";
 import { inPool } from "../utils/pool";
-import { classifyRecipient, resolveBankRecipient, sameAccountName, type ResolvedRecipient, type RowError, type TransferRequest } from "./transfers";
+import {
+  classifyRecipient,
+  resolveBankRecipient,
+  sameAccountName,
+  type KeyedRow,
+  type ResolvedRecipient,
+  type RowError,
+  type TransferRequest,
+} from "./transfers";
 
 /** Saved beneficiaries per business. */
 export const MAX_BENEFICIARIES = 2000;
@@ -109,6 +117,33 @@ export async function checkPayoutRows(business: BusinessDocument, rows: PayoutRo
     }
   });
   return { requests, errors: errors.sort((a, b) => a.row - b.row) };
+}
+
+/**
+ * Rows as an Idempotency-Key's request hash saw them, from the database alone (no name enquiry), for the
+ * replay check that runs before the bank lookups (replayBeforeLookups). With `save`, a new account was paid as
+ * the beneficiary saved for it then. Null when a saved beneficiary named in a row is gone.
+ */
+export async function keyedPayoutRows(business: BusinessDocument, rows: PayoutRow[], opts: { save?: boolean } = {}): Promise<KeyedRow[] | null> {
+  const ids = rows.flatMap((r) => ("beneficiary" in r ? [r.beneficiary] : [])).filter((id) => Types.ObjectId.isValid(id));
+  const accounts = opts.save ? rows.flatMap((r) => ("beneficiary" in r ? [] : [{ accountNumber: r.accountNumber, bankUuid: r.bankUuid }])) : [];
+  const [named, savedForAccount] = await Promise.all([
+    ids.length ? BeneficiaryModel.find({ _id: { $in: ids }, business: business._id }) : [],
+    accounts.length ? BeneficiaryModel.find({ business: business._id, $or: accounts }) : [],
+  ]);
+  const keyed: KeyedRow[] = [];
+  for (const row of rows) {
+    const { amountKobo, narration } = row;
+    if ("beneficiary" in row) {
+      const saved = named.find((b) => b.id === row.beneficiary);
+      if (!saved) return null;
+      keyed.push({ accountNumber: saved.accountNumber, bankUuid: saved.bankUuid, amountKobo, narration, beneficiary: saved._id });
+    } else {
+      const saved = savedForAccount.find((b) => b.accountNumber === row.accountNumber && b.bankUuid === row.bankUuid);
+      keyed.push({ accountNumber: row.accountNumber, bankUuid: row.bankUuid, amountKobo, narration, beneficiary: saved?._id });
+    }
+  }
+  return keyed;
 }
 
 /**

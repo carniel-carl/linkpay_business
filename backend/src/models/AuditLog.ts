@@ -24,6 +24,8 @@ export const AUDIT_ACTIONS = [
   "donation.hidden",
   "donation.shown",
   // Staff management
+  // Added directly with scripts/staff.ts, without an invite.
+  "staff.added",
   "staff.invited",
   "staff.invite_resent",
   "staff.invite_revoked",

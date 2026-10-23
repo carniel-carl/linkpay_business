@@ -169,18 +169,109 @@ describe("transfers", () => {
     const first = await bulk(token, "dup-insert-1234", headOfficeId);
     expect(first.status).toBe(201);
 
-    // Both replay checks miss it (as when the first request is still writing), so the insert hits the unique index.
+    // Every replay check misses it (as when the first request is still writing): the one before the bank lookups,
+    // and the two in createTransfers. So the insert hits the unique index.
     const findOne = TransferModel.findOne.bind(TransferModel);
     let hidden = 0;
     const spy = spyOn(TransferModel, "findOne").mockImplementation(((filter: any, ...rest: any[]) =>
-      filter?.clientKey && hidden < 2 ? (hidden++, Promise.resolve(null)) : findOne(filter, ...rest)) as any);
+      filter?.clientKey && hidden < 3 ? (hidden++, Promise.resolve(null)) : findOne(filter, ...rest)) as any);
     spies.push(spy);
     const again = await bulk(token, "dup-insert-1234", headOfficeId);
-    expect(hidden).toBe(2);
+    expect(hidden).toBe(3);
     expect(again.status).toBe(200);
     expect(again.body.batch._id).toBe(first.body.batch._id);
     expect(await TransferBatchModel.countDocuments({ business: business._id })).toBe(1);
     expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
+  });
+});
+
+describe("retries while the bank is down", () => {
+  afterEach(() => {
+    t.liquifia.down = false;
+  });
+
+  /** Liquifia calls made while `fn` runs. */
+  async function liquifiaCallsDuring<T>(fn: () => Promise<T>) {
+    const before = t.liquifia.requests.length;
+    const result = await fn();
+    return { result, calls: t.liquifia.requests.slice(before).map((r) => `${r.method} ${r.path}`) };
+  }
+
+  test("a bulk retry gets its replay without asking the bank, and changed details are still refused", async () => {
+    const { token, business, headOfficeId } = await setup();
+    const first = await bulk(token, "bulk-outage-1234", headOfficeId);
+    expect(first.status).toBe(201);
+    const payouts = t.liquifia.payouts.length;
+
+    t.liquifia.down = true;
+    const { result: again, calls } = await liquifiaCallsDuring(() => bulk(token, "bulk-outage-1234", headOfficeId));
+    expect(again.status).toBe(200);
+    expect(again.body.batch._id).toBe(first.body.batch._id);
+    expect(again.body.batch.items.map((i: { _id: string }) => i._id)).toEqual(first.body.batch.items.map((i: { _id: string }) => i._id));
+    expect(calls).toEqual([]);
+
+    // Different amounts under the same key: refused as before, not a 502.
+    const changed = await bulk(token, "bulk-outage-1234", headOfficeId, [1_000_00, 9_000_00]);
+    expect(changed.status).toBe(422);
+    expect(changed.body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+
+    // A new request still needs the bank, and says it's unavailable.
+    const fresh = await bulk(token, "bulk-outage-new-1234", headOfficeId);
+    expect(fresh.status).toBe(502);
+    expect(fresh.body.code).toBe("PROVIDER_ERROR");
+
+    expect(t.liquifia.payouts.length).toBe(payouts);
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
+    expect(await TransferBatchModel.countDocuments({ business: business._id })).toBe(1);
+  });
+
+  test("a bulk retry with saved beneficiaries and new accounts saved on the way replays too", async () => {
+    const { token, headOfficeId } = await setup();
+    const saved = await t.api("POST", "/api/beneficiaries", { token, body: { accountNumber: "0234567891", bankUuid: "BANK-ACCESS" } });
+    expect(saved.status).toBe(201);
+    const body = {
+      branch: headOfficeId,
+      items: [
+        { beneficiary: saved.body._id, amountKobo: 1_500_00, narration: "Rent" },
+        { accountNumber: "0345678912", bankUuid: "BANK-GTB", amountKobo: 2_500_00 },
+      ],
+      saveBeneficiaries: true,
+    };
+    const send = () => t.api("POST", "/api/transfers/bulk", { token, headers: withKey("bulk-saved-1234"), body });
+    const first = await send();
+    expect(first.status).toBe(201);
+
+    t.liquifia.down = true;
+    const again = await send();
+    expect(again.status).toBe(200);
+    expect(again.body.batch._id).toBe(first.body.batch._id);
+  });
+
+  test("single transfers to a bank, a saved beneficiary and an own branch replay without the bank", async () => {
+    const { token, headOfficeId, kanoId } = await setup();
+    const saved = (await t.api("POST", "/api/beneficiaries", { token, body: { accountNumber: "0456789123", bankUuid: "BANK-ACCESS" } })).body;
+    const cases = [
+      { key: "single-bank-1234", body: { branch: headOfficeId, amountKobo: 1_000_00, recipient: bank("0567891234"), saveBeneficiary: true } },
+      { key: "single-saved-1234", body: { branch: headOfficeId, amountKobo: 1_100_00, recipient: { type: "beneficiary", beneficiary: saved._id } } },
+      { key: "single-branch-1234", body: { branch: headOfficeId, amountKobo: 1_200_00, narration: "Float", recipient: { type: "branch", branch: kanoId } } },
+    ];
+    const firsts = [];
+    for (const c of cases) {
+      const res = await t.api("POST", "/api/transfers", { token, headers: withKey(c.key), body: c.body });
+      expect(res.status).toBe(201);
+      firsts.push(res.body._id);
+    }
+
+    t.liquifia.down = true;
+    for (const [i, c] of cases.entries()) {
+      const { result: again, calls } = await liquifiaCallsDuring(() => t.api("POST", "/api/transfers", { token, headers: withKey(c.key), body: c.body }));
+      expect(again.status).toBe(200);
+      expect(again.body._id).toBe(firsts[i]);
+      expect(calls).toEqual([]);
+    }
+    const changed = await t.api("POST", "/api/transfers", { token, headers: withKey("single-bank-1234"), body: { ...cases[0]!.body, amountKobo: 1_000_01 } });
+    expect(changed.status).toBe(422);
+    expect(changed.body.code).toBe("IDEMPOTENCY_KEY_REUSED");
   });
 });
 

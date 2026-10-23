@@ -20,7 +20,7 @@ export const staffAuthRouter = Router();
 
 // Same limits as /api/auth (per address and per account), on every route that checks a password or code.
 // /me and /logout stay unlimited: the console calls /me on every page.
-const authLimiter = authLimits();
+const authLimiter = authLimits("staff-auth");
 
 staffAuthRouter.post("/login", authLimiter, login);
 staffAuthRouter.post("/login/2fa", authLimiter, verifyTwoFactor);

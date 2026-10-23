@@ -8,7 +8,7 @@ export const passwordRouter = Router();
 
 // The same limits as /api/auth's, counted separately: per client address, and failed requests per account.
 // Reset requests send email and confirming checks a code; changing checks the current password.
-const passwordLimits = authLimits();
+const passwordLimits = authLimits("password");
 
 passwordRouter.post("/reset", ...passwordLimits, requestPasswordReset);
 passwordRouter.post("/reset/confirm", ...passwordLimits, resetPassword);

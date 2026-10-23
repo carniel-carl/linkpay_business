@@ -6,10 +6,12 @@
 //   bun run staff enable <email>
 //   bun run staff sign-out <email>     ends every session
 //   bun run staff list
+// Every change is written to the audit log, by "Staff command line (<os user>@<host>)".
 import { connectDB, disconnectDB } from "../src/config/db";
 import { STAFF_ROLES, SUPER_ADMIN_ROLE, isStaffRole, type StaffRole } from "../src/config/staffPermissions";
 import { StaffModel, type StaffDocument } from "../src/models/Staff";
-import { changeStaffAccess } from "../src/services/staff";
+import { audit, cliActor, type AuditEntry } from "../src/services/audit";
+import { changeStaffAccess, staffRoleLabel } from "../src/services/staff";
 import { revokeStaffSessions } from "../src/services/staffAuth";
 import { HttpError } from "../src/utils/HttpError";
 
@@ -62,6 +64,14 @@ async function changeAccess(staff: StaffDocument, next: Parameters<typeof change
 }
 
 /**
+ * Every change goes in the audit log, as the console's do, with the command line as the actor (the console
+ * can't see who ran it otherwise). Same summaries as the console's; `via: "cli"` in the details.
+ */
+async function auditCli(staff: StaffDocument, entry: Omit<AuditEntry, "target">) {
+  await audit(cliActor(), { ...entry, target: { kind: "staff", id: staff._id }, details: { ...entry.details, via: "cli" } });
+}
+
+/**
  * Runs one command against the connected database. Output goes to `log`; a refusal throws StaffCliError.
  * `ask` reads the password when --password isn't given.
  */
@@ -79,30 +89,44 @@ export async function runStaffCommand(
       if (await StaffModel.exists({ email })) throw new StaffCliError(`${email} is already a staff member`);
       const password = passwordArg ?? ask("Password (at least 8 characters):") ?? "";
       if (password.length < 8 || password.length > 128) throw new StaffCliError("The password must be 8 to 128 characters");
-      await StaffModel.create({ name: name.trim(), email, role, password: await Bun.password.hash(password) });
+      const staff = await StaffModel.create({ name: name.trim(), email, role, password: await Bun.password.hash(password) });
+      await auditCli(staff, { action: "staff.added", summary: `Added ${staff.name} (${email}) as ${staffRoleLabel(role)}`, details: { email, role } });
       log(`Added ${email} as ${role}. They sign in at the admin console with an emailed code as the second step.`);
       break;
     }
     case "set-role": {
       const role = parseRole(third);
-      await changeAccess(await findStaff(), { role });
+      const found = await findStaff();
+      const previous = found.role;
+      const staff = await changeAccess(found, { role });
+      if (previous !== role) {
+        await auditCli(staff, {
+          action: "staff.role_changed",
+          summary: `Changed ${staff.name}'s role from ${previous ? staffRoleLabel(previous) : "no role"} to ${staffRoleLabel(role)}`,
+          details: { from: previous ?? null, to: role },
+        });
+      }
       log(`${email} is now ${role}. It applies to their next request.`);
       break;
     }
     case "disable": {
       const staff = await changeAccess(await findStaff(), { status: "disabled" });
       const ended = await revokeStaffSessions(staff._id);
+      await auditCli(staff, { action: "staff.disabled", summary: `Turned off ${staff.name}'s access`, details: { sessionsEnded: ended } });
       log(`Disabled ${email} and ended ${ended} session(s)`);
       break;
     }
     case "enable": {
-      await changeAccess(await findStaff(), { status: "active" });
+      const staff = await changeAccess(await findStaff(), { status: "active" });
+      await auditCli(staff, { action: "staff.enabled", summary: `Turned on ${staff.name}'s access` });
       log(`Enabled ${email}`);
       break;
     }
     case "sign-out": {
       const staff = await findStaff();
-      log(`Ended ${await revokeStaffSessions(staff._id)} session(s) for ${email}`);
+      const ended = await revokeStaffSessions(staff._id);
+      await auditCli(staff, { action: "staff.signed_out", summary: `Signed ${staff.name} out everywhere`, details: { sessionsEnded: ended } });
+      log(`Ended ${ended} session(s) for ${email}`);
       break;
     }
     case "list": {
