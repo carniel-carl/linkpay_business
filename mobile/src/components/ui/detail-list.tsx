@@ -9,6 +9,8 @@ import { Icon } from "./icon";
 export function DetailList({ children }: { children: ReactNode }) {
   const { shadows } = useTheme();
   const items = Children.toArray(children).filter(Boolean);
+  // No rows, no sheet: an empty one is too short for its shadow (see `shadows` in tokens.ts).
+  if (!items.length) return null;
   return (
     <View style={{ boxShadow: shadows.surface }} className="overflow-hidden rounded-surface bg-card">
       {items.map((child, i) => (

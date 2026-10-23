@@ -36,6 +36,9 @@ export const CheckoutStatusTag = ({ status }: { status: CheckoutStatus }) => (
   <Tag label={CHECKOUT_STATUS_LABELS[status] ?? status} tone={CHECKOUT_TONES[status] ?? MUTED} />
 );
 
+/** "Over limit" on a payment that came in after the link had reached its payment limit; nothing otherwise. As on the web. */
+export const OverLimitTag = ({ overLimit }: { overLimit?: boolean }) => (overLimit ? <Tag label="Over limit" tone={WARNING} /> : null);
+
 /** "Test" on a link or checkout in test mode; nothing for live ones. Amber like the test banner, dashed so it never reads as a status. */
 export function TestTag({ mode }: { mode: PaymentMode | undefined }) {
   if (mode !== "test") return null;
@@ -143,7 +146,7 @@ export const CheckoutRow = memo(function CheckoutRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${c.payer.name}, ${formatNairaShort(amount)}, ${CHECKOUT_STATUS_LABELS[c.status]}${c.mode === "test" ? ", test" : ""}, ${meta}`}
+      accessibilityLabel={`${c.payer.name}, ${formatNairaShort(amount)}, ${CHECKOUT_STATUS_LABELS[c.status]}${c.overLimit ? ", over limit" : ""}${c.mode === "test" ? ", test" : ""}, ${meta}`}
       onPress={() => onPress(c)}
       className="flex-row items-center gap-3 px-4 py-3.5 active:bg-muted"
     >
@@ -161,6 +164,7 @@ export const CheckoutRow = memo(function CheckoutRow({
         </Text>
         <View className="flex-row gap-1.5">
           <CheckoutStatusTag status={c.status} />
+          <OverLimitTag overLimit={c.overLimit} />
           <TestTag mode={c.mode} />
         </View>
       </View>
@@ -189,6 +193,7 @@ export const DonorRow = memo(function DonorRow({ checkout: c, onPress }: { check
         when,
         anonymous && "anonymous on the page",
         c.hiddenFromPage && "hidden by LinkPay",
+        c.overLimit && "over limit",
         c.mode === "test" && "test",
         c.donor?.message,
       ]
@@ -215,10 +220,11 @@ export const DonorRow = memo(function DonorRow({ checkout: c, onPress }: { check
             &ldquo;{c.donor.message}&rdquo;
           </Text>
         )}
-        {(anonymous || c.hiddenFromPage || c.mode === "test") && (
+        {(anonymous || c.hiddenFromPage || c.overLimit || c.mode === "test") && (
           <View className="flex-row flex-wrap gap-1.5">
             {anonymous && <Tag label="Anonymous on the page" tone={MUTED} />}
             {c.hiddenFromPage && <Tag label="Hidden by LinkPay" tone={WARNING} />}
+            <OverLimitTag overLimit={c.overLimit} />
             <TestTag mode={c.mode} />
           </View>
         )}

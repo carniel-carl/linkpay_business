@@ -17,6 +17,12 @@ export default function PaymentsLayout() {
       <Stack.Screen name="review" options={{ title: "Check and send" }} />
       <Stack.Screen name="transfer/[id]" options={{ title: "Transfer" }} />
       <Stack.Screen name="approvals" options={{ title: "Fund approvals" }} />
+      <Stack.Screen name="bulk/index" options={{ title: "Bulk transfer" }} />
+      <Stack.Screen name="bulk/beneficiaries" options={{ title: "Saved beneficiaries" }} />
+      <Stack.Screen name="bulk/paste" options={{ title: "Paste rows" }} />
+      <Stack.Screen name="bulk/row" options={{ title: "Add someone" }} />
+      <Stack.Screen name="bulk/review" options={{ title: "Check and send" }} />
+      <Stack.Screen name="batch/[id]" options={{ title: "Bulk transfer" }} />
       <Stack.Screen name="approval-rule" options={{ title: "Approval rule" }} />
     </Stack>
   );

@@ -14,8 +14,10 @@ export function hrefFor({ type, data }: NotificationTarget): Href {
   const family = type.split(".")[0];
   if (family === "transfer") {
     const ids = Array.isArray(data.transferIds) ? data.transferIds.filter((x): x is string => typeof x === "string") : [];
-    // One transfer opens it; a bulk batch opens the Transfers view (bulk is web-only on mobile).
-    return ids.length === 1 ? { pathname: "/payments/transfer/[id]", params: { id: ids[0] } } : { pathname: "/payments", params: { view: "transfers" } };
+    // One transfer opens it; several from one bulk transfer open the batch; anything else, the Transfers view.
+    if (ids.length === 1) return { pathname: "/payments/transfer/[id]", params: { id: ids[0] } };
+    const batch = str(data.batchId);
+    return batch ? { pathname: "/payments/batch/[id]", params: { id: batch } } : { pathname: "/payments", params: { view: "transfers" } };
   }
   if (type === "payment.received") {
     const id = str(data.transactionId);

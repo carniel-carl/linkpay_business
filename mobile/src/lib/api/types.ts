@@ -272,7 +272,7 @@ export type Transfer = {
   currency: "NGN";
   branch: BranchRef | null;
   batch: string | null;
-  recipient: { accountNumber: string; accountName: string; bankName: string | null; branch: BranchRef | null };
+  recipient: { accountNumber: string; accountName: string; bankName: string | null; branch: BranchRef | null; beneficiary?: string | null };
   narration: string | null;
   reference: string;
   failureReason: string | null;
@@ -333,6 +333,106 @@ export type ApprovalTier = {
 };
 
 export type ApprovalRule = { mode: ApprovalRuleMode; thresholdKobo: number | null; tiers: ApprovalTier[] };
+
+// ---- Bulk transfers and beneficiaries (docs/briefs/bulk-payouts.md) ----
+
+/** GET /api/beneficiaries items: a business-wide address book, name-checked once when saved. */
+export type Beneficiary = {
+  _id: string;
+  accountNumber: string;
+  /** As the bank reported it when it was saved. Paying it makes no new name enquiry. */
+  accountName: string;
+  bankName: string | null;
+  bankUuid: string;
+  nickname: string | null;
+  onLinkPay: boolean;
+  lastPaidAt: string | null;
+  createdBy: { _id: string; name: string } | null;
+  createdAt: string;
+};
+
+export type BeneficiaryList = { items: Beneficiary[]; total: number; skip: number; take: number };
+
+/**
+ * A row of POST /api/transfers/bulk (and its preview): a saved beneficiary, or an account number and bank.
+ * `accountName` is the name the member reviewed; the server refuses the row with ACCOUNT_NAME_CHANGED if the
+ * bank now gives another. It isn't part of the Idempotency-Key's request hash.
+ */
+export type BulkRowInput =
+  | { beneficiary: string; amountKobo: number; narration?: string; accountName?: string }
+  | { accountNumber: string; bankUuid: string; amountKobo: number; narration?: string; accountName?: string };
+
+export type BulkRequest = { branch: string; title?: string; items: BulkRowInput[] };
+
+/** POST /api/transfers/resolve-accounts: one answer per row, in the order sent. */
+export type ResolvedRow =
+  | ({ row: number; bankUuid: string } & ResolvedAccount)
+  | { row: number; accountNumber: string; bankUuid: string; error: string; code?: string };
+
+/** A row the server refuses (INVALID_ROWS `details.rows`, or a preview's `errors`). `row` is the index sent. */
+export type BulkRowError = {
+  row: number;
+  error: string;
+  code?: string;
+  /** ACCOUNT_NAME_CHANGED: the name the bank gives the account now. */
+  accountName?: string;
+};
+
+/** POST /api/transfers/bulk/preview: a dry run of the batch. Nothing is created or held. */
+export type BulkPreview = {
+  branch: BranchRef;
+  count: number;
+  amountKobo: number;
+  feeKobo: number;
+  stampDutyKobo: number;
+  totalKobo: number;
+  /** Null when the balance couldn't be read just now. */
+  availableKobo: number | null;
+  approval: {
+    needed: boolean;
+    /** The amount that decided it: this batch plus what the member sent from the branch in the last 24 hours. */
+    decidingKobo: number;
+    earlierKobo: number;
+    levels: { level: number; any: boolean; approvers: { _id: string; name: string }[] }[];
+  };
+  rows: {
+    row: number;
+    accountNumber: string | null;
+    accountName: string | null;
+    bankName: string | null;
+    kind: TransferKind | null;
+    label: string | null;
+    beneficiary: string | null;
+    amountKobo: number;
+    feeKobo: number;
+    stampDutyKobo: number;
+    totalKobo: number;
+    narration: string | null;
+    error: string | null;
+    code: string | null;
+  }[];
+  errors: BulkRowError[];
+  /** What would stop the whole batch: NO_APPROVER or INSUFFICIENT_BALANCE. */
+  blockers: { error: string; code?: string; details?: Record<string, unknown> }[];
+  ready: boolean;
+};
+
+/** GET /api/transfers/batches/:id: a bulk transfer and every transfer in it. */
+export type TransferBatch = {
+  _id: string;
+  title: string | null;
+  payoutList: string | null;
+  count: number;
+  amountKobo: number;
+  feeKobo: number;
+  totalKobo: number;
+  createdAt: string;
+  statusCounts: Record<TransferStatus, number>;
+  items: Transfer[];
+};
+
+/** POST /api/transfers/bulk: the batch, or a plain transfer when a single row went (`batch: null`). */
+export type BulkResult = { batch: TransferBatch; items?: undefined } | { batch: null; items: Transfer[] };
 
 // ---- Invoices (/api/invoices; shapes from backend/src/controllers/invoices.ts) ----
 
@@ -725,6 +825,8 @@ export type LinkCheckout = {
   metadata: Record<string, string>;
   matchedBy: "amount" | "reference" | "manual" | "simulated" | null;
   matchedByUser: { _id: string; name: string } | null;
+  /** Paid after the link had reached its payment limit: the business refunds it or honours it. */
+  overLimit?: boolean;
   expiresAt: string;
   createdAt: string;
   /** Never on test checkouts. */

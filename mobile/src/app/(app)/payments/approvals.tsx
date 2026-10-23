@@ -1,8 +1,10 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { router, Stack } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { PaymentRowSkeleton } from "@/components/payments/payment-row";
+import { BatchRow, isBatchGroup, useBatchGroups } from "@/components/transfers/batch-row";
 import { TransferRow } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -23,6 +25,7 @@ import {
   type ApprovalTab,
 } from "@/lib/api/transfers";
 import type { ApprovalRule, Transfer } from "@/lib/api/types";
+import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
 import { formatNaira } from "@/lib/format";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
@@ -31,6 +34,7 @@ import { useTheme } from "@/theme/theme";
 
 /** Defined once, so memoised rows keep the same handler. */
 const openTransfer = (t: Transfer) => router.push({ pathname: "/payments/transfer/[id]", params: { id: t._id } });
+const openBatch = (id: string) => router.push({ pathname: "/payments/batch/[id]", params: { id } });
 
 const EMPTY: Record<ApprovalTab, { title: string; body: string }> = {
   pending: { title: "Nothing waiting for approval", body: "Transfers that need someone's approval show here until they're approved or declined." },
@@ -41,7 +45,8 @@ const EMPTY: Record<ApprovalTab, { title: string; body: string }> = {
 /**
  * Fund approvals, as on the web: what's waiting, approved or declined, and how approvals work for the
  * business. Reached from Payments › Transfers. Setting up levels stays on the web; managers can change
- * the simple rule here.
+ * the simple rule here. A bulk transfer shows as one row (count, total, level) that opens it, to approve or
+ * reject it all at once.
  */
 export default function FundApprovals() {
   const gate = useBankingGate();
@@ -52,12 +57,17 @@ export default function FundApprovals() {
   const [tab, setTab] = useState<ApprovalTab>("pending");
   const [search, setSearch] = useState("");
   const [q, setQ] = useState<string>();
+  const qc = useQueryClient();
+  const business = useBusinessContext((s) => s.businessId ?? "default");
   const list = useApprovals(tab, q);
-  const pull = usePullToRefresh(() => list.refetch());
+  // The list, the tiles and the rule (all under "transfers" for the business), and the bulk transfers' own counts.
+  const pull = usePullToRefresh(() =>
+    Promise.all([qc.invalidateQueries({ queryKey: [business, "transfers"] }), qc.invalidateQueries({ queryKey: [business, "batch"] })]),
+  );
   const pending = usePendingApprovalCount(ready).data ?? 0;
   const awaiting = useAwaitingCount(ready && approver).data ?? 0;
   const rule = useApprovalRule(ready);
-  const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
+  const items = useBatchGroups(list, true);
 
   // Search waits for a pause in typing.
   useEffect(() => {
@@ -133,7 +143,11 @@ export default function FundApprovals() {
         renderItem={({ item, index }) => (
           <View className={cn("mx-4 overflow-hidden bg-card", index === 0 && "rounded-t-surface", index === items.length - 1 && "rounded-b-surface")}>
             {index > 0 && <View className="ml-[66px] h-px bg-border" />}
-            <TransferRow transfer={item} onPress={openTransfer} approvals />
+            {isBatchGroup(item) ? (
+              <BatchRow group={item} scope={tab} onPress={openBatch} />
+            ) : (
+              <TransferRow transfer={item} onPress={openTransfer} approvals />
+            )}
           </View>
         )}
         ListEmptyComponent={

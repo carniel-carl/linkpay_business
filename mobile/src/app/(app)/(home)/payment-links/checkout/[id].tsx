@@ -2,7 +2,7 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
-import { CheckoutStatusTag, TestTag } from "@/components/payment-links/parts";
+import { CheckoutStatusTag, OverLimitTag, TestTag } from "@/components/payment-links/parts";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FormError } from "@/components/ui/form-error";
@@ -57,6 +57,7 @@ export default function CheckoutScreen() {
       <View className="gap-2 px-1">
         <View className="flex-row gap-1.5">
           <CheckoutStatusTag status={c.status} />
+          <OverLimitTag overLimit={c.overLimit} />
           <TestTag mode={c.mode} />
         </View>
         <Figure size={34}>{formatNaira(received ? (c.paidKobo ?? 0) : c.priceKobo)}</Figure>
@@ -76,6 +77,14 @@ export default function CheckoutScreen() {
                 : `Waiting for their transfer until ${formatDateTime(c.expiresAt)}.`}
         </Text>
       </View>
+
+      {c.overLimit && (
+        <View className="rounded-field bg-warning-subtle px-4 py-3">
+          <Text className="text-[14px] leading-5 text-warning-foreground">
+            This payment came in after the link reached its payment limit. Refund it or honour it.
+          </Text>
+        </View>
+      )}
 
       <DetailList>
         <DetailRow label="Reference" value={c.reference} copy={c.reference} />

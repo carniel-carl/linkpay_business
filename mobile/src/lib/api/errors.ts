@@ -46,6 +46,16 @@ const MESSAGES: Record<string, string> = {
   SAME_ACCOUNT: "You can't send money to the account it's coming from.",
   ACCOUNT_BUSY: "Another transfer from this account is going through. Try again in a moment.",
   INVALID_BANK: "Choose a bank from the list.",
+  RECIPIENT_BANK_UNKNOWN: "We can't send to this account's bank automatically yet. Contact support.",
+  // Bulk transfers (docs/briefs/bulk-payouts.md). Row codes also come back per row, in a preview or INVALID_ROWS.
+  INVALID_ROWS: "Some rows need fixing before anything is sent.",
+  INVALID_ACCOUNT_NUMBER: "Account numbers are 10 digits.",
+  RECIPIENT_UNAVAILABLE: "This account can't receive transfers.",
+  // 502, and a per-row code: the bank's name check came back without a name. A passing outage, not a wrong account.
+  NAME_CHECK_UNAVAILABLE: "We couldn't check this account with the bank right now. Try again in a moment.",
+  ACCOUNT_NAME_CHANGED: "The bank now gives a different name for this account. Check it's who you mean to pay.",
+  BENEFICIARY_NOT_FOUND: "That saved beneficiary was removed. Take the row out, or add the account by its number.",
+  IDEMPOTENCY_KEY_REUSED: "This transfer changed after it was first sent. Check your transfers before you send it again.",
   BUSINESS_REQUIRED: "Set up your business first.",
   BUSINESS_EXISTS: "This account already has a business.",
   KYB_INCOMPLETE: "A few requirements are still missing.",
@@ -102,6 +112,9 @@ const MESSAGES: Record<string, string> = {
   TRANSACTION_PIN_ALREADY_SET: "You already have a transaction PIN. Change it instead.",
   WEAK_TRANSACTION_PIN: "That PIN is easy to guess. Avoid repeated digits and runs like 1234.",
 };
+
+/** Friendly copy for a code reported inside a response (a bulk row's), or the server's own message. */
+export const messageForCode = (code: string | null | undefined, fallback: string) => (code && MESSAGES[code]) || fallback;
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */
 export function friendlyMessage(err: unknown): string {

@@ -4,7 +4,23 @@ import { formatNaira } from "@/lib/format";
 import { api, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
 import { pinHeader } from "./transaction-pin";
-import type { ApprovalRule, ApprovalTier, Bank, FeeQuote, ResolvedAccount, Transfer, TransferList, TransferStatus } from "./types";
+import { ApiError } from "./errors";
+import type {
+  ApprovalRule,
+  ApprovalTier,
+  Bank,
+  BulkPreview,
+  BulkRequest,
+  BulkResult,
+  BulkRowError,
+  FeeQuote,
+  ResolvedAccount,
+  ResolvedRow,
+  Transfer,
+  TransferBatch,
+  TransferList,
+  TransferStatus,
+} from "./types";
 
 // /api/transfers. Copy (status and kind labels) matches the web's Transfers page.
 
@@ -215,6 +231,113 @@ export const sendTransfer = (body: SendRequest, idempotencyKey: string, pin: str
     headers: { "Idempotency-Key": idempotencyKey, ...pinHeader(pin) },
     timeoutMs: MONEY_TIMEOUT_MS,
   });
+
+// ---- Bulk transfers (docs/briefs/bulk-payouts.md) ----
+
+/**
+ * Accounts per resolve-accounts call in a bulk review. The API asks the banks five at a time and allows 60 calls
+ * per member in 15 minutes; slices of 25 keep each call short on a phone and the progress moving, and a full
+ * 200-row check is 8 calls.
+ */
+export const BULK_CHECK_SLICE = 25;
+
+/** Name checks and the preview can wait on the banks for every row they ask about, so they get longer than a plain read. */
+const BULK_REVIEW_TIMEOUT_MS = 60_000;
+
+/** Name enquiries for a bulk review, no PIN: one answer per row, in order. Moves no money. */
+export const resolveAccounts = (items: { accountNumber: string; bankUuid: string }[], signal?: AbortSignal) =>
+  api<{ items: ResolvedRow[]; resolved: number; failed: number }>("/api/transfers/resolve-accounts", {
+    method: "POST",
+    json: { items },
+    timeoutMs: BULK_REVIEW_TIMEOUT_MS,
+    signal,
+  });
+
+/** A dry run of a bulk transfer: each row's fee and problem, the totals, the balance and who would approve. No PIN. */
+export const previewBulkTransfer = (body: BulkRequest, signal?: AbortSignal) =>
+  api<BulkPreview>("/api/transfers/bulk/preview", { method: "POST", json: body, timeoutMs: BULK_REVIEW_TIMEOUT_MS, signal });
+
+/**
+ * Sends a bulk transfer. As with one transfer, the PIN is this request's header only, and the Idempotency-Key
+ * comes from the rows (without the names the member reviewed, as the API's request hash leaves them out), so
+ * sending the same rows again after a lost answer, a wrong PIN or a re-checked name returns the first batch.
+ */
+export const sendBulkTransfer = (body: BulkRequest, idempotencyKey: string, pin: string) =>
+  api<BulkResult>("/api/transfers/bulk", {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": idempotencyKey, ...pinHeader(pin) },
+    timeoutMs: MONEY_TIMEOUT_MS,
+  });
+
+/** The rows an INVALID_ROWS refusal names (`details.rows`); nothing was created. */
+export function invalidRowsOf(err: unknown): BulkRowError[] {
+  if (!(err instanceof ApiError) || err.code !== "INVALID_ROWS") return [];
+  const rows = (err.details as { rows?: unknown } | undefined)?.rows;
+  return Array.isArray(rows) ? rows.filter((r): r is BulkRowError => typeof r?.row === "number" && typeof r?.error === "string") : [];
+}
+
+/** A bulk transfer and every transfer in it. `poll`: check again every 10 s while any is in progress. */
+export function useTransferBatch(id: string, { poll = true }: { poll?: boolean } = {}) {
+  const business = useBusinessKey();
+  return useQuery({
+    queryKey: [business, "batch", id],
+    queryFn: () => api<TransferBatch>(`/api/transfers/batches/${idSegment(id)}`),
+    refetchInterval: (q) => (poll && q.state.data?.items.some((t) => t.status === "processing") ? 10_000 : false),
+  });
+}
+
+/** After a batch changes: the answer replaces the cached batch and its transfers, and money and lists refresh. */
+export function useBatchChanged() {
+  const qc = useQueryClient();
+  const business = useBusinessKey();
+  return (b: TransferBatch) => {
+    qc.setQueryData([business, "batch", b._id], b);
+    for (const t of b.items) qc.setQueryData([business, "transfer", t._id], t);
+    void qc.invalidateQueries({ queryKey: [business] });
+  };
+}
+
+/** Reject or cancel everything in a batch that's still waiting. Neither moves money, so neither needs the PIN. */
+export function useBatchAction() {
+  const changed = useBatchChanged();
+  return useMutation({
+    mutationFn: ({ id, action, note }: { id: string; action: "reject" | "cancel"; note?: string }) =>
+      api<TransferBatch>(`/api/transfers/batches/${idSegment(id)}/${action}`, {
+        method: "POST",
+        json: action === "reject" ? { note: note || undefined } : {},
+        timeoutMs: MONEY_TIMEOUT_MS,
+      }),
+    onSuccess: changed,
+  });
+}
+
+/**
+ * Approves the current level of everything in a batch that's waiting; the last level sends the payouts. A plain
+ * call, not a mutation, so the PIN stays out of react-query's state.
+ */
+export const approveBatch = (id: string, note: string | undefined, pin: string) =>
+  api<TransferBatch>(`/api/transfers/batches/${idSegment(id)}/approve`, {
+    method: "POST",
+    json: { note: note || undefined },
+    headers: pinHeader(pin),
+    timeoutMs: MONEY_TIMEOUT_MS,
+  });
+
+/** "Ada, Bola or Chidi". */
+const joinOr = (names: string[]) => (names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} or ${names.at(-1)}`);
+
+/** A preview's approval as one line, as on the web: "Needs approval from Ada or Bola, then Chidi", or "Sends straight away". */
+export function approvalLine(approval: BulkPreview["approval"]) {
+  if (!approval.needed) return "Sends straight away";
+  const level = (l: BulkPreview["approval"]["levels"][number]) => {
+    if (!l.approvers.length) return "someone who can approve transfers";
+    if (l.any && l.approvers.length > 3) return "anyone who can approve transfers";
+    const names = l.approvers.map((a) => a.name);
+    return names.length > 3 ? `${names.slice(0, 2).join(", ")} or ${names.length - 2} others` : joinOr(names);
+  };
+  return `Needs approval from ${approval.levels.map(level).join(", then ")}`;
+}
 
 export function useApprovalRule(enabled = true) {
   const business = useBusinessKey();
