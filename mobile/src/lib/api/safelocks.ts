@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
-import { api } from "./client";
+import { api, MONEY_TIMEOUT_MS } from "./client";
 import type { Safelock, SafelockLimits, SafelockList } from "./types";
 
 // /api/safelocks (docs/briefs/savings.md §6). Reads need accounts.view; create and rename need savings.manage.
@@ -67,7 +67,7 @@ export function useCreateSafelock() {
   const business = useBusinessKey();
   return useMutation({
     mutationFn: ({ input, idempotencyKey }: { input: SafelockInput; idempotencyKey: string }) =>
-      api<Safelock>("/api/safelocks", { method: "POST", json: input, headers: { "Idempotency-Key": idempotencyKey } }),
+      api<Safelock>("/api/safelocks", { method: "POST", json: input, headers: { "Idempotency-Key": idempotencyKey }, timeoutMs: MONEY_TIMEOUT_MS }),
     onSuccess: (lock) => {
       qc.setQueryData([business, "safelock", lock._id], lock);
       void qc.invalidateQueries({ queryKey: [business, "safelocks"] });

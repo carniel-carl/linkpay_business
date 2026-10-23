@@ -1,7 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
-import { api } from "./client";
+import { api, MONEY_TIMEOUT_MS } from "./client";
 import type { Pocket, PocketActivity, PocketColor, PocketIcon, PocketList, PocketMovement } from "./types";
 
 // /api/pockets (docs/briefs/savings.md). Reads need accounts.view; every write needs savings.manage.
@@ -102,6 +102,7 @@ async function run(change: Change): Promise<Pocket> {
         method: "POST",
         json: { amountKobo: change.amountKobo, ...(change.note && { note: change.note }) },
         headers: { "Idempotency-Key": change.idempotencyKey },
+        timeoutMs: MONEY_TIMEOUT_MS,
       });
       return res.pocket;
     }

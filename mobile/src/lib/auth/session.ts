@@ -9,6 +9,8 @@ import { KEYS, secureDelete, secureGet, secureSet } from "./secure-storage";
 let accessToken: string | null = null;
 let accessExpiresAt = 0;
 let inFlight: Promise<string> | null = null;
+// Bumped by forgetSession, so a refresh that lands after a sign-out can't put the session back.
+let generation = 0;
 
 export type SessionEndReason = "expired" | "revoked" | "signedOut" | "tooManyAttempts";
 let onSessionEnded: (reason: SessionEndReason) => void = () => {};
@@ -45,6 +47,7 @@ export const hasStoredSession = async () => !!(await secureGet(KEYS.refreshToken
 export const storedRefreshToken = () => secureGet(KEYS.refreshToken);
 
 export async function forgetSession() {
+  generation++;
   accessToken = null;
   accessExpiresAt = 0;
   inFlight = null;
@@ -52,6 +55,7 @@ export async function forgetSession() {
 }
 
 async function doRefresh(): Promise<string> {
+  const started = generation;
   const refreshToken = await secureGet(KEYS.refreshToken);
   if (!refreshToken) {
     onSessionEnded("expired");
@@ -69,6 +73,11 @@ async function doRefresh(): Promise<string> {
     throw new ApiError(0, "Network request failed", "NETWORK");
   }
   const body = await res.json().catch(() => ({}));
+  // Signed out while this was on its way: leave the keychain alone, and end the pair it brought back.
+  if (started !== generation) {
+    if (res.ok) void endSessionOnServer((body as RefreshResponse).refreshToken);
+    throw new ApiError(401, "Signed out", "INVALID_REFRESH_TOKEN");
+  }
   if (res.status === 401) {
     await forgetSession();
     onSessionEnded(body?.code === "SESSION_REVOKED" ? "revoked" : "expired");
@@ -101,15 +110,15 @@ export function invalidateAccessToken() {
 }
 
 /**
- * For sign-out: the server ends the session even if the access token has expired. `forgetDevice` also
- * ends this phone's biometric sign-in there.
+ * For sign-out, after the phone has forgotten the session: the server ends it even if the access token has
+ * expired, and stops pushing to this phone. `forgetDevice` also ends this phone's biometric sign-in there.
+ * Best effort, and never waits long; not through api(), which waits for an unlock.
  */
-export async function endSessionOnServer({ forgetDevice = false } = {}) {
-  const refreshToken = await secureGet(KEYS.refreshToken);
-  if (!refreshToken) return;
+export async function endSessionOnServer(refreshToken: string, { forgetDevice = false } = {}) {
   await fetch(`${API_URL}/api/auth/logout`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refreshToken, ...(forgetDevice && { forgetDevice: true }) }),
+    signal: AbortSignal.timeout(10_000),
   }).catch(() => undefined);
 }

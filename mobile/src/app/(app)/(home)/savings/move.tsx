@@ -1,4 +1,3 @@
-import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -11,6 +10,7 @@ import { NairaField } from "@/components/ui/naira-field";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { useAccounts } from "@/lib/api/banking";
+import { idempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { usePocket, usePocketChange } from "@/lib/api/savings";
 import type { Pocket } from "@/lib/api/types";
@@ -23,7 +23,7 @@ const MAX_KOBO = 10_000_000_000;
 /**
  * Add money (from the branch's available balance into the pocket) or Withdraw (back to available). Nothing
  * leaves the account, so there's no passcode, as the brief suggests. One Idempotency-Key per amount and note,
- * so a retry after a dropped connection can't move the money twice.
+ * kept through errors, so a retry after a dropped connection can't move the money twice.
  */
 export default function MovePocketMoney() {
   const { id, direction } = useLocalSearchParams<{ id: string; direction: "deposit" | "withdraw" }>();
@@ -52,7 +52,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  const [key, setKey] = useState(() => Crypto.randomUUID());
+  const [keyFor] = useState(() => idempotencyKeys());
   const deposit = direction === "deposit";
   const branchName = pocket.branch?.name ?? "the branch";
 
@@ -86,16 +86,15 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
   function edit(next: { amount?: string; note?: string }) {
     if (next.amount !== undefined) setAmount(next.amount);
     if (next.note !== undefined) setNote(next.note);
-    // A different amount or note is a different move, so it gets its own key.
-    setKey(Crypto.randomUUID());
     change.reset();
   }
 
   function submit() {
     setSubmitted(true);
     if (amountError || kobo === undefined) return;
+    const move = { amountKobo: kobo, note: note.trim() || undefined };
     change.mutate(
-      { kind: direction, id: pocket._id, amountKobo: kobo, note: note.trim() || undefined, idempotencyKey: key },
+      { kind: direction, id: pocket._id, ...move, idempotencyKey: keyFor(move) },
       {
         onSuccess: () => {
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -184,7 +183,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
   );
 }
 
-/** Savings-specific wording for the two errors whose shared copy talks about transfers. */
+/** Savings-specific wording for the errors whose shared copy talks about transfers, and for a timeout. */
 function moveError(err: unknown, branchName: string) {
   if (err instanceof ApiError && err.code === "INSUFFICIENT_BALANCE") {
     const d = err.details as { availableKobo?: number } | undefined;
@@ -194,6 +193,9 @@ function moveError(err: unknown, branchName: string) {
   }
   if (err instanceof ApiError && err.code === "ACCOUNT_BUSY") {
     return "A transfer or another savings move on this account is going through. Try again in a moment.";
+  }
+  if (err instanceof ApiError && err.code === "TIMEOUT") {
+    return "That took too long, so the money may already have moved. Check the pocket's activity before you try again.";
   }
   return friendlyMessage(err);
 }

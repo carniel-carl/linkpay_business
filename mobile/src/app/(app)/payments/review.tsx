@@ -10,7 +10,7 @@ import { FormError } from "@/components/ui/form-error";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display } from "@/components/ui/typography";
 import { useAccounts } from "@/lib/api/banking";
-import { friendlyMessage } from "@/lib/api/errors";
+import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import { KIND_LABELS, sendTransfer, useFee, type SendRequest } from "@/lib/api/transfers";
 import { useAuth } from "@/lib/auth/store";
 import { useBusinessContext } from "@/lib/business-context";
@@ -76,8 +76,8 @@ export default function Review() {
       recipient: draft.to === "branch" ? { type: "branch", branch: draft.toBranch! } : { type: "bank", accountNumber: draft.accountNumber, bankUuid: draft.bank!.uuid },
     };
     try {
-      // The draft's key stays the same on a retry, so a send whose answer got lost can't go twice.
-      const transfer = await sendTransfer(body, draft.idempotencyKey);
+      // The same details get the same key on a retry, so a send whose answer got lost can't go twice.
+      const transfer = await sendTransfer(body, draft.keyFor(body));
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       useSendDraft.getState().start();
       void qc.invalidateQueries({ queryKey: [business] });
@@ -86,7 +86,11 @@ export default function Review() {
       router.push({ pathname: "/payments/transfer/[id]", params: { id: transfer._id, sent: "1" } });
     } catch (err) {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setError(friendlyMessage(err));
+      setError(
+        err instanceof ApiError && err.code === "TIMEOUT"
+          ? "That took too long, so the transfer may already have gone. Check your transfers before you send it again."
+          : friendlyMessage(err),
+      );
     } finally {
       setSending(false);
     }

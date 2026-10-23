@@ -57,16 +57,20 @@ export async function failedAttempts() {
 
 export type VerifyResult = { ok: true } | { ok: false; attemptsLeft: number };
 
+/** Out of tries (attemptsLeft 0) means the caller signs out; the code isn't even checked then. */
 export async function verifyPasscode(passcode: string): Promise<VerifyResult> {
   const raw = await secureGet(KEYS.passcode);
   if (!raw) return { ok: false, attemptsLeft: 0 };
+  const failed = await failedAttempts();
+  if (failed >= MAX_ATTEMPTS) return { ok: false, attemptsLeft: 0 };
+  // Counted before the check, so closing the app mid-check can't make a guess free.
+  const attempts = failed + 1;
+  await secureSet(KEYS.attempts, String(attempts));
   const stored = JSON.parse(raw) as Stored;
   if (equal(await derive(passcode, hexToBytes(stored.salt)), stored.hash)) {
     await secureDelete(KEYS.attempts);
     return { ok: true };
   }
-  const attempts = (await failedAttempts()) + 1;
-  await secureSet(KEYS.attempts, String(attempts));
   return { ok: false, attemptsLeft: Math.max(0, MAX_ATTEMPTS - attempts) };
 }
 
