@@ -22,7 +22,7 @@ import {
 } from "@/lib/api/transaction-pin";
 import { SchemeScope, useTheme } from "@/theme/theme";
 import { PasscodeEntry, type EntryResult } from "./passcode-entry";
-import { ChoosePin, PinModal, PinNotice, type ChosenResult } from "./transaction-pin";
+import { ChoosePin, PinModal, PinNotice, ResetPinForm, usePinReset, type ChosenResult } from "./transaction-pin";
 
 /**
  * Confirming a covered action (docs/briefs/transaction-pin.md) with the server-checked transaction PIN. It
@@ -35,7 +35,9 @@ import { ChoosePin, PinModal, PinNotice, type ChosenResult } from "./transaction
  * The PIN lives in the keypad's state for one try: `run` puts it on that request's header, and it's cleared
  * whatever the answer. A wrong or missing PIN asks again on the same sheet, so `run` is called again with the
  * same body and keeps its Idempotency-Key. No PIN yet: the sheet sets one up (password, then the PIN twice) and
- * carries on with the action. Anything that isn't about the PIN closes the sheet and goes to `onError`.
+ * carries on with the action. Forgot it or locked: the sheet resets it (an emailed code and the password, then
+ * the new PIN twice) and carries on the same way. Anything that isn't about the PIN closes the sheet and goes to
+ * `onError`.
  */
 export type PinRequest<T> = {
   /** The keypad's title: what's about to happen, e.g. "Send ₦25,000?". */
@@ -57,7 +59,10 @@ type Step =
   | { kind: "password"; error?: string }
   | { kind: "choose"; password: string }
   | { kind: "noPassword" }
-  /** A first PIN was saved here, then the action itself failed: say the PIN is kept before the screen shows why. */
+  /** Resetting a forgotten or locked PIN; Cancel goes `back` to the keypad or the lock. */
+  | { kind: "reset"; back: Step }
+  | { kind: "resetChoose"; back: Step }
+  /** A first or reset PIN was saved here, then the action itself failed: say the PIN is kept before the screen shows why. */
   | { kind: "saved"; err: unknown };
 
 type Job = {
@@ -124,8 +129,9 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
   const [step, setStep] = useState<Step>(job.start);
   const [running, setRunning] = useState(false);
   const [pending, setPending] = useState<string>();
-  // A first PIN chosen on this sheet is saved before the action runs, so it stays saved if the action then fails.
+  // A first or reset PIN chosen on this sheet is saved before the action runs, so it stays saved if the action then fails.
   const pinSaved = useRef(false);
+  const reset = usePinReset(me.data?.email);
 
   const refreshStatus = useCallback(() => void qc.invalidateQueries({ queryKey: pinStatusQuery.queryKey }), [qc]);
 
@@ -154,13 +160,13 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
   const cancel = () => {
     if (running) return;
     if (step.kind === "saved") closeWithError(step.err);
+    else if (step.kind === "reset") setStep(step.back);
+    else if (step.kind === "resetChoose") setStep({ kind: "reset", back: step.back });
     else onClose();
   };
 
-  function resetPin() {
-    onClose();
-    router.push({ pathname: "/more/transaction-pin", params: { reset: "1" } });
-  }
+  /** "Forgot PIN?" and "Reset PIN" reset it here, so the action isn't lost. */
+  const resetPin = () => setStep({ kind: "reset", back: step.kind === "locked" ? step : { kind: "enter" } });
 
   /** The covered request failed. A PIN problem keeps the sheet open on the right step; anything else closes it. */
   function failed(err: unknown): EntryResult {
@@ -226,6 +232,23 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     return run(pin);
   }
 
+  /** A reset PIN: save it with the code and password, then carry on with the action using it, as above. */
+  async function resetChosen(pin: string, back: Step): Promise<ChosenResult> {
+    setRunning(true);
+    setPending("Saving your PIN…");
+    const saved = await reset.save(pin);
+    if (saved !== "saved") {
+      setRunning(false);
+      setPending(undefined);
+      if (typeof saved === "object") return saved;
+      // A wrong code or password: back to the form, which says which.
+      setStep({ kind: "reset", back });
+      return "error";
+    }
+    pinSaved.current = true;
+    return run(pin);
+  }
+
   const spinner = <ActivityIndicator color={colors["band-foreground"]} />;
   const cancelButton = (
     <TextButton tone="band" onPress={cancel}>
@@ -273,6 +296,33 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     );
   } else if (step.kind === "password") {
     body = <PasswordStep error={step.error} onContinue={(password) => setStep({ kind: "choose", password })} onCancel={onClose} />;
+  } else if (step.kind === "reset") {
+    const { back } = step;
+    body = (
+      <BandForm title="Reset your transaction PIN" description={reset.intro}>
+        <ResetPinForm
+          reset={reset}
+          onChoose={() => setStep({ kind: "resetChoose", back })}
+          cancel={
+            <TextButton className="self-center" onPress={cancel}>
+              Cancel
+            </TextButton>
+          }
+        />
+      </BandForm>
+    );
+  } else if (step.kind === "resetChoose") {
+    const { back } = step;
+    body = (
+      <ChoosePin
+        key="reset"
+        title="Choose a new PIN"
+        subtitle={CHOOSE_SUBTITLE}
+        pending={pending}
+        onChosen={(pin) => resetChosen(pin, back)}
+        footer={running ? spinner : cancelButton}
+      />
+    );
   } else if (step.kind === "saved") {
     const { err } = step;
     body = (
@@ -288,7 +338,7 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     body = (
       <ChoosePin
         title="Choose a PIN"
-        subtitle="4 digits that aren't easy to guess. You'll enter them to confirm payments and team changes."
+        subtitle={CHOOSE_SUBTITLE}
         pending={pending}
         onChosen={(pin) => chosen(pin, password)}
         footer={running ? spinner : cancelButton}
@@ -299,13 +349,11 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
   return <PinModal onRequestClose={cancel}>{body}</PinModal>;
 }
 
-/** Setting the first PIN starts with the account password, on the band in the auth screens' dark palette. */
-function PasswordStep({ error, onContinue, onCancel }: { error?: string; onContinue: (password: string) => void; onCancel: () => void }) {
+const CHOOSE_SUBTITLE = "4 digits that aren't easy to guess. You'll enter them to confirm payments and team changes.";
+
+/** A form on the band in the auth screens' dark palette: setting the first PIN, or resetting one. */
+function BandForm({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   const insets = useSafeAreaInsets();
-  const [password, setPassword] = useState("");
-  const submit = () => {
-    if (password) onContinue(password);
-  };
   return (
     <SchemeScope scheme="dark">
       <KeyboardAwareScrollView
@@ -317,32 +365,43 @@ function PasswordStep({ error, onContinue, onCancel }: { error?: string; onConti
           <Logo onBand size={40} />
         </View>
         <View className="gap-2.5 pb-7 pt-9">
-          <Display size={30}>Set your transaction PIN</Display>
-          <Text className="text-[15px] leading-[22px] text-muted-foreground">
-            LinkPay asks for these 4 digits before money moves or your team changes. It's separate from this phone's passcode. Enter your password to
-            choose one; once it's set, this goes ahead.
-          </Text>
+          <Display size={30}>{title}</Display>
+          <Text className="text-[15px] leading-[22px] text-muted-foreground">{description}</Text>
         </View>
-        <View className="gap-5">
-          <FormError message={error} />
-          <PasswordField
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            autoComplete="current-password"
-            textContentType="password"
-            autoFocus
-            returnKeyType="next"
-            onSubmitEditing={submit}
-          />
-          <Button disabled={!password} onPress={submit}>
-            Continue
-          </Button>
-          <TextButton className="self-center" onPress={onCancel}>
-            Cancel
-          </TextButton>
-        </View>
+        <View className="gap-5">{children}</View>
       </KeyboardAwareScrollView>
     </SchemeScope>
+  );
+}
+
+/** Setting the first PIN starts with the account password. */
+function PasswordStep({ error, onContinue, onCancel }: { error?: string; onContinue: (password: string) => void; onCancel: () => void }) {
+  const [password, setPassword] = useState("");
+  const submit = () => {
+    if (password) onContinue(password);
+  };
+  return (
+    <BandForm
+      title="Set your transaction PIN"
+      description="LinkPay asks for these 4 digits before money moves or your team changes. It's separate from this phone's passcode. Enter your password to choose one; once it's set, this goes ahead."
+    >
+      <FormError message={error} />
+      <PasswordField
+        label="Password"
+        value={password}
+        onChangeText={setPassword}
+        autoComplete="current-password"
+        textContentType="password"
+        autoFocus
+        returnKeyType="next"
+        onSubmitEditing={submit}
+      />
+      <Button disabled={!password} onPress={submit}>
+        Continue
+      </Button>
+      <TextButton className="self-center" onPress={onCancel}>
+        Cancel
+      </TextButton>
+    </BandForm>
   );
 }

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
-import { Button } from "@/components/ui/button";
+import { Button, TextButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { NairaField } from "@/components/ui/naira-field";
 import { OptionList, OptionRow } from "@/components/ui/options";
@@ -13,6 +13,8 @@ import { can, useAccounts } from "@/lib/api/banking";
 import { friendlyMessage } from "@/lib/api/errors";
 import { useResolveAccount } from "@/lib/api/transfers";
 import type { Account } from "@/lib/api/types";
+import { useBulkDraft } from "@/lib/bulk-draft";
+import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
 import { formatAccountNumber, formatNaira } from "@/lib/format";
 import { parseNaira, useSendDraft } from "@/lib/send-draft";
@@ -204,6 +206,15 @@ export default function Send() {
         maxLength={100}
       />
       <Button onPress={next}>Continue</Button>
+      <TextButton
+        className="self-center"
+        onPress={() => {
+          useBulkDraft.getState().open(useBusinessContext.getState().businessId ?? "default", source?.branch._id);
+          router.push("/payments/bulk");
+        }}
+      >
+        Paying several people? Make a bulk transfer
+      </TextButton>
     </KeyboardAwareScrollView>
   );
 }

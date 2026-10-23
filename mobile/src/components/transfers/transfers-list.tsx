@@ -1,7 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { PaymentRowSkeleton } from "@/components/payments/payment-row";
+import { BatchRow, isBatchGroup, useBatchGroups } from "@/components/transfers/batch-row";
 import { TransferRow } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -17,6 +19,8 @@ import {
   type TransferTab,
 } from "@/lib/api/transfers";
 import type { Overview, Transfer } from "@/lib/api/types";
+import { useBulkDraft } from "@/lib/bulk-draft";
+import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
 import { usePullToRefresh } from "@/lib/query";
@@ -25,10 +29,18 @@ import { useTheme } from "@/theme/theme";
 
 /** Defined once, so memoised rows keep the same handler. */
 const openTransfer = (t: Transfer) => router.push({ pathname: "/payments/transfer/[id]", params: { id: t._id } });
+const openBatch = (id: string) => router.push({ pathname: "/payments/batch/[id]", params: { id } });
+
+/** Bulk transfer: carries on with a list being prepared for this business, or starts one. */
+const openBulk = () => {
+  useBulkDraft.getState().open(useBusinessContext.getState().businessId ?? "default");
+  router.push("/payments/bulk");
+};
 
 /**
  * Every transfer the member can see, by status, with "Needs your approval" for approvers. Lives under the
- * Payments tab's "Transfers" view; `header` is the view switch, drawn above the status chips.
+ * Payments tab's "Transfers" view; `header` is the view switch, drawn above the status chips. In "Needs your
+ * approval", a bulk transfer is one row that opens it, to approve or reject it all at once.
  */
 export function TransfersList({
   overview,
@@ -51,10 +63,16 @@ export function TransfersList({
   const tabs = TRANSFER_TABS.filter((t) => t.key !== "awaiting" || approver);
   const tab: TransferTab = wanted && tabs.some((t) => t.key === wanted) ? wanted : "all";
   const list = useTransfers(tab, { q });
-  const pull = usePullToRefresh(() => list.refetch());
+  const qc = useQueryClient();
+  const business = useBusinessContext((s) => s.businessId ?? "default");
+  // The list, the counts and approval rule above it, and bulk transfers' own counts (their rows in "Needs your
+  // approval"): everything under "transfers" for the business, so a rule or approval changed elsewhere shows too.
+  const pull = usePullToRefresh(() =>
+    Promise.all([qc.invalidateQueries({ queryKey: [business, "transfers"] }), qc.invalidateQueries({ queryKey: [business, "batch"] })]),
+  );
   const rule = useApprovalRule();
   const pending = usePendingApprovalCount().data ?? 0;
-  const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
+  const items = useBatchGroups(list, tab === "awaiting");
 
   return (
     <FlatList
@@ -97,6 +115,23 @@ export function TransfersList({
               </Pressable>
             ))}
           </ScrollView>
+          {/* Bulk transfer: pay many people from one account. */}
+          {sender && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Bulk transfer"
+              accessibilityHint="Pay many people from one account, for salaries or suppliers"
+              onPress={openBulk}
+              className="mx-4 flex-row items-center gap-3 rounded-field bg-muted px-4 py-3 active:opacity-80"
+            >
+              <Icon ios="person.3" android="groups" size={18} color={colors["muted-foreground"]} />
+              <View className="flex-1 gap-0.5">
+                <Text className="text-[14px] font-semibold text-foreground">Bulk transfer</Text>
+                <Text className="text-[13px] leading-[18px] text-muted-foreground">Pay up to 200 people from one account, for salaries or suppliers.</Text>
+              </View>
+              <Icon ios="chevron.right" android="chevron_right" size={14} color={colors["muted-foreground"]} />
+            </Pressable>
+          )}
           {/* Fund approvals: what's waiting, approved or declined, and the rule. */}
           <Pressable
             accessibilityRole="button"
@@ -136,10 +171,14 @@ export function TransfersList({
           )}
         >
           {index > 0 && <View className="ml-[66px] h-px bg-border" />}
-          <TransferRow
-            transfer={item}
-            onPress={openTransfer}
-          />
+          {isBatchGroup(item) ? (
+            <BatchRow group={item} scope="awaiting" onPress={openBatch} />
+          ) : (
+            <TransferRow
+              transfer={item}
+              onPress={openTransfer}
+            />
+          )}
         </View>
       )}
       ListEmptyComponent={

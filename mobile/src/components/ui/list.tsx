@@ -11,14 +11,17 @@ export function ListSection({ title, footer, children }: { title?: string; foote
   return (
     <View className="gap-2">
       {title && <Text className="px-4 text-[14px] font-medium text-muted-foreground">{title}</Text>}
-      <View style={{ boxShadow: shadows.surface }} className="overflow-hidden rounded-surface bg-card">
-        {items.map((child, i) => (
-          <Fragment key={i}>
-            {i > 0 && <View className="ml-16 h-px bg-border" />}
-            {child}
-          </Fragment>
-        ))}
-      </View>
+      {/* No rows, no card: an empty one is too short for its shadow (see `shadows` in tokens.ts). */}
+      {items.length > 0 && (
+        <View style={{ boxShadow: shadows.surface }} className="overflow-hidden rounded-surface bg-card">
+          {items.map((child, i) => (
+            <Fragment key={i}>
+              {i > 0 && <View className="ml-16 h-px bg-border" />}
+              {child}
+            </Fragment>
+          ))}
+        </View>
+      )}
       {footer && <Text className="px-4 text-[13px] leading-[18px] text-muted-foreground">{footer}</Text>}
     </View>
   );

@@ -152,14 +152,21 @@ export const themeVars = {
   dark: vars(Object.fromEntries(Object.entries(dark).map(([k, v]) => [`--${k}`, toRgbTriplet(v)]))),
 };
 
-/** Soft navy-tinted elevation, the web's `--shadow-surface`. Never pure black. */
+/**
+ * Soft navy-tinted elevation, the web's `--shadow-surface`. Never pure black. The deep layer's negative spread
+ * needs a view at least twice that tall and wide (32pt for `surface`, 36pt for `raised`): on a smaller one iOS
+ * builds the shadow from an empty rect and logs CoreGraphics NaN errors. Smaller views use `control`, the
+ * surface shadow's first layer, which is all that ever showed on them.
+ */
 export const shadows = {
   light: {
     surface: "0px 1px 2px rgba(28, 45, 63, 0.06), 0px 12px 32px -16px rgba(28, 45, 63, 0.24)",
     raised: "0px 1px 2px rgba(28, 45, 63, 0.08), 0px 18px 40px -18px rgba(28, 45, 63, 0.34)",
+    control: "0px 1px 2px rgba(28, 45, 63, 0.06)",
   },
   dark: {
     surface: "0px 1px 2px rgba(10, 18, 28, 0.3), 0px 14px 36px -16px rgba(10, 18, 28, 0.6)",
     raised: "0px 1px 2px rgba(10, 18, 28, 0.35), 0px 20px 44px -18px rgba(10, 18, 28, 0.7)",
+    control: "0px 1px 2px rgba(10, 18, 28, 0.3)",
   },
 } as const;

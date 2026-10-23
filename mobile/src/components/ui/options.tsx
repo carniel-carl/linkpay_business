@@ -12,17 +12,20 @@ export function OptionList({ label, hint, error, children }: { label?: string; h
   return (
     <View className="gap-2">
       {label && <Text className="text-[14px] font-medium text-foreground">{label}</Text>}
-      <View
-        style={{ boxShadow: shadows.surface }}
-        className={cn("overflow-hidden rounded-surface bg-card", error && "border-[1.5px] border-destructive")}
-      >
-        {items.map((child, i) => (
-          <Fragment key={i}>
-            {i > 0 && <View className="ml-4 h-px bg-border" />}
-            {child}
-          </Fragment>
-        ))}
-      </View>
+      {/* No choices yet (still loading), no card: an empty one is too short for its shadow (see `shadows` in tokens.ts). */}
+      {items.length > 0 && (
+        <View
+          style={{ boxShadow: shadows.surface }}
+          className={cn("overflow-hidden rounded-surface bg-card", error && "border-[1.5px] border-destructive")}
+        >
+          {items.map((child, i) => (
+            <Fragment key={i}>
+              {i > 0 && <View className="ml-4 h-px bg-border" />}
+              {child}
+            </Fragment>
+          ))}
+        </View>
+      )}
       {error ? (
         <Text accessibilityLiveRegion="polite" className="text-[13px] leading-[18px] text-destructive-foreground">
           {error}

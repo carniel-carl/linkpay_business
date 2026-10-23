@@ -1,4 +1,4 @@
-import { router, Stack } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { Button } from "@/components/ui/button";
@@ -8,17 +8,24 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { friendlyMessage } from "@/lib/api/errors";
 import { useBanks } from "@/lib/api/transfers";
 import type { Bank } from "@/lib/api/types";
+import { useBulkDraft } from "@/lib/bulk-draft";
 import { LIST_PERFORMANCE } from "@/lib/list";
 import { useSendDraft } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
 
 const bankKey = (b: Bank) => b.uuid;
 
-/** Every bank the payout partner supports, searchable. Choosing one goes back to the form. */
+/**
+ * Every bank the payout partner supports, searchable. Choosing one goes back to the form: Send money's, or with
+ * `?for=bulk` a bulk transfer row's.
+ */
 export default function Banks() {
   const { colors } = useTheme();
   const banks = useBanks();
-  const { draft, update } = useSendDraft();
+  const bulk = useLocalSearchParams<{ for?: string }>().for === "bulk";
+  const sendBank = useSendDraft((s) => s.draft.bank);
+  const bulkBank = useBulkDraft((s) => s.form.bank);
+  const selected = bulk ? bulkBank : sendBank;
   const [q, setQ] = useState("");
   const list = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -66,15 +73,16 @@ export default function Banks() {
             {index > 0 && <View className="ml-4 h-px bg-border" />}
             <Pressable
               accessibilityRole="radio"
-              accessibilityState={{ checked: draft.bank?.uuid === item.uuid }}
+              accessibilityState={{ checked: selected?.uuid === item.uuid }}
               onPress={() => {
-                update({ bank: item });
+                if (bulk) useBulkDraft.getState().updateForm({ bank: item, bankText: undefined, bankError: undefined });
+                else useSendDraft.getState().update({ bank: item });
                 router.back();
               }}
               className="min-h-[52px] flex-row items-center justify-between px-4 active:bg-muted"
             >
               <Text className="flex-1 text-[16px] text-foreground">{item.name}</Text>
-              {draft.bank?.uuid === item.uuid && <Icon ios="checkmark" android="check" size={17} color={colors.primary} />}
+              {selected?.uuid === item.uuid && <Icon ios="checkmark" android="check" size={17} color={colors.primary} />}
             </Pressable>
           </View>
         )}

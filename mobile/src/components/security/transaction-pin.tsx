@@ -1,16 +1,23 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { StatusBar } from "expo-status-bar";
-import { useState, type ReactNode } from "react";
-import { Modal, Text, View } from "react-native";
+import { useRef, useState, type ReactNode } from "react";
+import { Keyboard, Modal, Text, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ResendCode } from "@/components/auth/resend-code";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
-import { isWeakPin, WEAK_PIN } from "@/lib/api/transaction-pin";
+import { CodeField } from "@/components/ui/code-field";
+import { FormError } from "@/components/ui/form-error";
+import { PasswordField, type TextInputRef } from "@/components/ui/text-field";
+import { friendlyMessage } from "@/lib/api/errors";
+import { isApiCode, isWeakPin, pinStatusQuery, requestTransactionPinReset, resetTransactionPin, WEAK_PIN } from "@/lib/api/transaction-pin";
 import { useAuth } from "@/lib/auth/store";
 import { PasscodeEntry, type EntryResult } from "./passcode-entry";
 
-// Building blocks for the transaction PIN: the navy modal its keypad sits in, choosing a new PIN, and a
-// message screen for a locked PIN or a missing password. Used by the confirmation sheet and More, Transaction PIN.
+// Building blocks for the transaction PIN: the navy modal its keypad sits in, choosing a new PIN, a message
+// screen for a locked PIN or a missing password, and the reset form. Used by the confirmation sheet and More,
+// Transaction PIN.
 
 /**
  * A native full-screen modal on the navy band, like the passcode confirmation, so it covers the header and tab
@@ -142,5 +149,143 @@ export function PinNotice({
         )}
       </View>
     </View>
+  );
+}
+
+/** What saving a reset PIN came to: saved, "failed" (the form now says why), or choose again with a message. */
+export type ResetSaved = "saved" | "failed" | { again: string };
+
+export type PinReset = ReturnType<typeof usePinReset>;
+
+/**
+ * A forgotten or locked PIN: a code by email, then the code, the password and a new PIN. Ends a lock too. The
+ * state lives in the caller, not the form, so it outlasts the keypad: after a wrong code or password the form
+ * comes back with the rest kept. `save` sends the new PIN; the caller says what happens next.
+ */
+export function usePinReset(email?: string) {
+  const qc = useQueryClient();
+  const [sentTo, setSentTo] = useState<string>();
+  // A code went out less than a minute ago, so the server won't send another yet.
+  const [recent, setRecent] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [errors, setErrors] = useState<{ code?: string; password?: string; form?: string }>({});
+  // Counts wrong codes; the code field is keyed by it, so a wrong code starts it again empty.
+  const [wrongCodes, setWrongCodes] = useState(0);
+  const refreshStatus = () => void qc.invalidateQueries({ queryKey: pinStatusQuery.queryKey });
+
+  async function request() {
+    setRequesting(true);
+    setErrors({});
+    try {
+      setSentTo((await requestTransactionPinReset()).sentTo);
+    } catch (err) {
+      if (isApiCode(err, "OTP_COOLDOWN")) {
+        setRecent(true);
+        setSentTo(email ?? "your email");
+      } else {
+        if (isApiCode(err, "TRANSACTION_PIN_REQUIRED")) refreshStatus();
+        setErrors({ form: friendlyMessage(err) });
+      }
+    } finally {
+      setRequesting(false);
+    }
+  }
+
+  async function save(newPin: string): Promise<ResetSaved> {
+    try {
+      qc.setQueryData(pinStatusQuery.queryKey, await resetTransactionPin({ password, code, newPin }));
+    } catch (err) {
+      if (isApiCode(err, "WEAK_TRANSACTION_PIN")) return { again: friendlyMessage(err) };
+      if (isApiCode(err, "INVALID_CODE")) {
+        // Cleared for another try, as on the other code screens.
+        setCode("");
+        setWrongCodes((n) => n + 1);
+        setErrors({ code: friendlyMessage(err) });
+      } else if (isApiCode(err, "INCORRECT_PASSWORD")) setErrors({ password: friendlyMessage(err) });
+      else {
+        if (isApiCode(err, "TRANSACTION_PIN_REQUIRED")) refreshStatus();
+        setErrors({ form: friendlyMessage(err) });
+      }
+      return "failed";
+    }
+    setPassword("");
+    return "saved";
+  }
+
+  const intro = !sentTo
+    ? `We'll email a 6-digit code to ${email ?? "you"}. With the code and your password, you choose a new PIN. Resetting also ends a lock.`
+    : `${recent ? `We sent a code to ${sentTo} less than a minute ago.` : `Enter the code we sent to ${sentTo}.`} It expires in 10 minutes.`;
+
+  return { intro, sentTo, requesting, code, password, errors, wrongCodes, setCode, setPassword, setErrors, request, save };
+}
+
+/**
+ * The reset form for `usePinReset`: "Email me a code", then the code and password. `onChoose` opens the keypad
+ * for the new PIN; `cancel` goes under the buttons. The intro (`reset.intro`) is the caller's to place.
+ */
+export function ResetPinForm({ reset, onChoose, cancel }: { reset: PinReset; onChoose: () => void; cancel: ReactNode }) {
+  const passwordField = useRef<TextInputRef>(null);
+  const { sentTo, errors, setErrors } = reset;
+  const ready = /^\d{6}$/.test(reset.code) && !!reset.password;
+
+  function start() {
+    if (!ready) return;
+    Keyboard.dismiss();
+    setErrors({});
+    onChoose();
+  }
+
+  if (!sentTo) {
+    return (
+      <>
+        <FormError message={errors.form} />
+        <View className="gap-3">
+          <Button loading={reset.requesting} onPress={() => void reset.request()}>
+            Email me a code
+          </Button>
+          {cancel}
+        </View>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <FormError message={errors.form ?? errors.code} />
+      <CodeField
+        key={reset.wrongCodes}
+        label="Reset code"
+        value={reset.code}
+        onChange={(v) => {
+          reset.setCode(v);
+          setErrors((e) => ({ ...e, code: undefined }));
+        }}
+        onComplete={() => passwordField.current?.focus()}
+        invalid={!!errors.code}
+      />
+      <PasswordField
+        ref={passwordField}
+        label="Password"
+        value={reset.password}
+        onChangeText={(v) => {
+          reset.setPassword(v);
+          setErrors((e) => ({ ...e, password: undefined }));
+        }}
+        error={errors.password}
+        autoComplete="current-password"
+        textContentType="password"
+        returnKeyType="next"
+        onSubmitEditing={start}
+      />
+      <View className="gap-3">
+        <Button disabled={!ready} onPress={start}>
+          Choose a new PIN
+        </Button>
+        <ResendCode onResend={requestTransactionPinReset} />
+        {cancel}
+      </View>
+    </>
   );
 }

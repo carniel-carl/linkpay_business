@@ -63,9 +63,10 @@ export function Segmented<K extends string>({
       className={cn("h-11 flex-row rounded-full bg-muted p-1", className)}
     >
       {segmentWidth > 0 && (
+        // About 31pt tall (NativeWind's rem is 14), too short for the surface shadow's deep layer.
         <Animated.View
           pointerEvents="none"
-          style={[{ boxShadow: shadows.surface }, thumb]}
+          style={[{ boxShadow: shadows.control }, thumb]}
           className="absolute bottom-1 left-1 top-1 rounded-full bg-card"
         />
       )}
