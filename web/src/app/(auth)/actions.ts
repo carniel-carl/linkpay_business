@@ -6,23 +6,21 @@ import { api } from "@/lib/api/client"
 import { ApiError, friendlyMessage } from "@/lib/api/errors"
 import type { AuthSession, TwoFactorChallenge } from "@/lib/api/types"
 import type { ActionResult } from "@/lib/action-result"
+import { safeNext } from "@/lib/safe-next"
 import { clearSession, getChallenge, setChallenge, setSession } from "@/lib/session"
 import { code, email, emailOnlySchema, signInSchema, signUpSchema } from "@/lib/schemas"
 
 type LoginResponse = AuthSession | TwoFactorChallenge
 
-/** Only allow same-site relative paths as a post-login destination. */
-function safeNext(next?: string) {
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard"
-}
-
 async function finishLogin(res: LoginResponse, userEmail: string, next?: string): Promise<never> {
+  // Only a path on this site goes on as the post-login destination.
+  const target = safeNext(next)
   if ("twoFactorRequired" in res) {
     await setChallenge({ token: res.challengeToken, method: res.method, email: userEmail })
-    redirect(`/sign-in/two-factor${next ? `?next=${encodeURIComponent(next)}` : ""}`)
+    redirect(`/sign-in/two-factor${target ? `?next=${encodeURIComponent(target)}` : ""}`)
   }
   await setSession(res.accessToken)
-  redirect(safeNext(next))
+  redirect(target ?? "/dashboard")
 }
 
 export async function signUp(input: unknown): Promise<ActionResult> {
@@ -96,7 +94,7 @@ export async function verifyTwoFactor(input: { code: string }, next?: string): P
     return result
   }
   await setSession(result.data.accessToken)
-  redirect(safeNext(next))
+  redirect(safeNext(next, "/dashboard"))
 }
 
 export async function resendTwoFactor(): Promise<ActionResult> {

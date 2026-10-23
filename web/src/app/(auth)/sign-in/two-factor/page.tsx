@@ -3,6 +3,7 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { AuthFrame } from "@/components/auth/auth-frame"
 import { signInLedger } from "@/components/auth/ledgers"
+import { safeNext } from "@/lib/safe-next"
 import { getChallenge } from "@/lib/session"
 import { TwoFactorForm } from "./two-factor-form"
 
@@ -11,7 +12,8 @@ export const metadata: Metadata = { title: "Two-step verification" }
 export default async function TwoFactorPage({ searchParams }: PageProps<"/sign-in/two-factor">) {
   const challenge = await getChallenge()
   if (!challenge) redirect("/sign-in")
-  const { next } = await searchParams
+  const params = await searchParams
+  const next = safeNext(typeof params.next === "string" ? params.next : undefined)
 
   const totp = challenge.method === "totp"
   return (
@@ -29,10 +31,10 @@ export default async function TwoFactorPage({ searchParams }: PageProps<"/sign-i
       sheetTitle="Two-step verification"
       ledger={signInLedger("two-factor")}
     >
-      <TwoFactorForm method={challenge.method} next={typeof next === "string" ? next : undefined} />
+      <TwoFactorForm method={challenge.method} next={next} />
       <p className="mt-6 text-sm text-muted-foreground">
         <Link
-          href={typeof next === "string" ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in"}
+          href={next ? `/sign-in?next=${encodeURIComponent(next)}` : "/sign-in"}
           className="font-medium text-primary underline-offset-4 hover:underline"
         >
           Back to sign in

@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
+import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { AccountWithBalance, Bank, BranchRef, FeeQuote, ResolvedAccount } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { approvalsNeeded, parseNairaToKobo } from "@/lib/transfers"
@@ -38,14 +39,13 @@ type Props = {
   children: React.ReactNode
 }
 
-const newKey = () => crypto.randomUUID().replaceAll("-", "")
 const available = (a?: SourceAccount) => a?.balance?.availableKobo ?? a?.balance?.amountKobo
 
 /** Send money to a bank account or another branch: details, then a review with the fee before anything moves. */
 export function NewTransferDialog({ accounts, defaultBranchId, children }: Props) {
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<"details" | "review">("details")
-  const [key, setKey] = useState(newKey)
+  const idempotency = useIdempotencyKey()
 
   const [sourceId, setSourceId] = useState(defaultBranchId ?? accounts[0]?.branch._id ?? "")
   const [to, setTo] = useState<"bank" | "branch">("bank")
@@ -73,7 +73,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
 
   function reset() {
     setStep("details")
-    setKey(newKey())
+    idempotency.reset()
     setSourceId(defaultBranchId ?? accounts[0]?.branch._id ?? "")
     setTo("bank")
     setBankUuid("")
@@ -135,20 +135,17 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
   async function send() {
     setBusy(true)
     setError(undefined)
-    const result = await createTransfer({
+    const request = {
       branch: sourceId,
       amountKobo: amountKobo!,
       narration: narration.trim() || undefined,
-      recipient: to === "bank" ? { type: "bank", accountNumber, bankUuid } : { type: "branch", branch: targetBranch },
-      idempotencyKey: key,
-    })
-    setBusy(false)
-    if (!result.ok) {
-      setError(result.error)
-      // Anything that changes what's sent gets a new key; a plain retry keeps it.
-      if (result.code && result.code !== "ACCOUNT_BUSY") setKey(newKey())
-      return
+      recipient: to === "bank" ? { type: "bank" as const, accountNumber, bankUuid } : { type: "branch" as const, branch: targetBranch },
     }
+    // Sending the same details again keeps the key, whatever went wrong (it may have gone through);
+    // changing anything that's sent gets a new one.
+    const result = await createTransfer({ ...request, idempotencyKey: idempotency.keyFor(request) })
+    setBusy(false)
+    if (!result.ok) return setError(result.error)
     const t = result.data
     if (t.status === "pending_approval") {
       const levels = t.approval?.levels.length ?? 1

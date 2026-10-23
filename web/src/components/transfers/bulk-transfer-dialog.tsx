@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { Bank } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { parseNairaToKobo } from "@/lib/transfers"
@@ -39,7 +40,6 @@ type Row = {
   error?: string
 }
 
-const newKey = () => crypto.randomUUID().replaceAll("-", "")
 const norm = (s: string) => s.toLowerCase().replace(/\b(plc|limited|ltd|bank|of|nigeria|the)\b/g, "").replace(/[^a-z0-9]/g, "")
 
 /** Splits one CSV line, honouring double quotes ("Lagos, Ikeja"). */
@@ -105,7 +105,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   const [serverErrors, setServerErrors] = useState<Record<number, string>>({})
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
-  const [key, setKey] = useState(newKey)
+  const idempotency = useIdempotencyKey()
 
   useEffect(() => {
     if (!open || banks) return
@@ -124,7 +124,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setTitle("")
     setServerErrors({})
     setError(undefined)
-    setKey(newKey())
+    idempotency.reset()
   }
 
   async function onFile(file?: File) {
@@ -138,17 +138,17 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setBusy(true)
     setError(undefined)
     setServerErrors({})
-    const result = await createBulkTransfer({
+    const request = {
       branch: sourceId,
       title: title.trim() || undefined,
       items: rows.map((r) => ({ accountNumber: r.accountNumber, bankUuid: r.bank!.uuid, amountKobo: r.amountKobo!, narration: r.narration })),
-      idempotencyKey: key,
-    })
+    }
+    // The same rows sent again keep the key, whatever went wrong; editing the list or the account gets a new one.
+    const result = await createBulkTransfer({ ...request, idempotencyKey: idempotency.keyFor(request) })
     setBusy(false)
     if (!result.ok) {
       setError(result.error)
       if (result.rows) setServerErrors(Object.fromEntries(result.rows.map((r) => [r.row, r.error])))
-      if (result.code && result.code !== "ACCOUNT_BUSY") setKey(newKey())
       return
     }
     const batch = result.data.batch

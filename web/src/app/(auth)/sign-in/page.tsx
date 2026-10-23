@@ -4,13 +4,14 @@ import { Info } from "lucide-react"
 import { AuthFrame } from "@/components/auth/auth-frame"
 import { signInLedger } from "@/components/auth/ledgers"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { safeNext } from "@/lib/safe-next"
 import { SignInForm } from "./sign-in-form"
 
 export const metadata: Metadata = { title: "Sign in" }
 
 export default async function SignInPage({ searchParams }: PageProps<"/sign-in">) {
   const { next, expired, email } = await searchParams
-  const nextPath = typeof next === "string" ? next : undefined
+  const nextPath = safeNext(typeof next === "string" ? next : undefined)
 
   return (
     <AuthFrame

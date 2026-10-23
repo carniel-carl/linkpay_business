@@ -21,6 +21,7 @@ import { Field, FieldDescription, FieldError, FieldLabel, FieldLegend, FieldSet 
 import { Input } from "@/components/ui/input"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
+import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { SafelockLimits } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { addDays, daysBetween, formatDay, todayInLagos } from "@/lib/savings"
@@ -29,8 +30,6 @@ import { cn } from "@/lib/utils"
 import type { PocketBranch } from "./pocket-form-dialog"
 
 const PRESETS = [30, 90, 180, 365]
-
-const newKey = () => crypto.randomUUID().replaceAll("-", "")
 
 type Values = { branch: string; title: string; amount: string; unlockOn: string }
 
@@ -56,13 +55,11 @@ export function SafelockFormDialog({
   const [error, setError] = useState<string>()
   const [agreed, setAgreed] = useState(false)
   const [busy, setBusy] = useState(false)
-  // One key per thing being locked: a double click or a retry after a dropped response locks once.
-  const [key, setKey] = useState(newKey)
+  // One key per thing being locked: a double click, or a retry after any error (a dropped response, the
+  // partner being down), locks once. Changing the name, branch, amount or date gets a new key.
+  const idempotency = useIdempotencyKey()
 
-  const set = <K extends keyof Values>(k: K, value: Values[K]) => {
-    setV((prev) => ({ ...prev, [k]: value }))
-    setKey(newKey())
-  }
+  const set = <K extends keyof Values>(k: K, value: Values[K]) => setV((prev) => ({ ...prev, [k]: value }))
   const branch = branches.find((b) => b._id === v.branch)
   const kobo = parseNairaToKobo(v.amount)
   const today = todayInLagos()
@@ -93,7 +90,8 @@ export function SafelockFormDialog({
   async function lock() {
     setBusy(true)
     setError(undefined)
-    const result = await createSafelock({ branch: v.branch, title: v.title.trim(), amountKobo: kobo!, unlockOn: v.unlockOn, idempotencyKey: key })
+    const request = { branch: v.branch, title: v.title.trim(), amountKobo: kobo!, unlockOn: v.unlockOn }
+    const result = await createSafelock({ ...request, idempotencyKey: idempotency.keyFor(request) })
     setBusy(false)
     if (!result.ok) {
       // Back to the form, with the problem next to the field it's about.
@@ -105,7 +103,6 @@ export function SafelockFormDialog({
             : null
       if (field) setErrors({ [field]: result.error })
       else setError(result.error)
-      if (result.code !== "ACCOUNT_BUSY") setKey(newKey())
       setStep("details")
       return
     }
@@ -123,7 +120,7 @@ export function SafelockFormDialog({
           setStep("details")
           setErrors({})
           setError(undefined)
-          setKey(newKey())
+          idempotency.reset()
         }
       }}
     >

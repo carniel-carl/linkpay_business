@@ -5,13 +5,9 @@ import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
 import type { StaffChallenge, StaffSession } from "@/lib/api/types"
 import type { ActionResult } from "@/lib/action-result"
+import { safeNext } from "@/lib/safe-next"
 import { clearSession, getChallenge, getSessionToken, setChallenge, setSession } from "@/lib/session"
 import { code, signInSchema } from "@/lib/schemas"
-
-/** Only allow same-site relative paths as a post-login destination. */
-function safeNext(next?: string) {
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/"
-}
 
 const expiredChallenge = { ok: false as const, error: "Your sign-in has expired. Start again.", code: "INVALID_STAFF_TOKEN" }
 
@@ -23,7 +19,9 @@ export async function signIn(input: unknown, next?: string): Promise<ActionResul
   )
   if (!result.ok) return result
   await setChallenge({ token: result.data.challengeToken, method: result.data.method, email: body.email })
-  redirect(`/sign-in/two-factor${next ? `?next=${encodeURIComponent(next)}` : ""}`)
+  // Only a path on this site goes on as the post-login destination.
+  const target = safeNext(next)
+  redirect(`/sign-in/two-factor${target ? `?next=${encodeURIComponent(target)}` : ""}`)
 }
 
 export async function verifyTwoFactor(input: { code: string }, next?: string): Promise<ActionResult> {
@@ -43,7 +41,7 @@ export async function verifyTwoFactor(input: { code: string }, next?: string): P
     return result
   }
   await setSession(result.data.accessToken)
-  redirect(safeNext(next))
+  redirect(safeNext(next, "/"))
 }
 
 export async function resendTwoFactor(): Promise<ActionResult> {
