@@ -5,11 +5,12 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { createColumnHelper, useTable, type PaginationState, type Updater } from "@tanstack/react-table"
 import { ArrowUpRight, RotateCw, SearchX, X } from "lucide-react"
 import { toast } from "sonner"
-import { actOnBatch } from "@/app/(dashboard)/transfers/actions"
+import { actOnBatch, approveBatch } from "@/app/(dashboard)/transfers/actions"
 import { DataTable, dataTableFeatures, type DataTableFeatures } from "@/components/data-table/data-table"
 import { DataTablePagination } from "@/components/data-table/data-table-pagination"
 import { SearchBox } from "@/components/data-table/search-box"
 import { RowsSkeleton } from "@/components/transactions/skeletons"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Spinner } from "@/components/ui/spinner"
@@ -299,6 +300,7 @@ export function TransfersView({ data, query, canApprove, awaitingCount, showBran
 /** A bulk transfer: totals, progress and approve or reject everything still waiting. */
 function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => void }) {
   const [busy, setBusy] = useState<"approve" | "reject" | "cancel" | null>(null)
+  const pin = useTransactionPin()
   const waiting = batch.statusCounts.pending_approval
   const approvable = batch.items.filter((i) => i.canApprove).length
   const cancellable = batch.items.filter((i) => i.canCancel).length
@@ -307,8 +309,17 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
 
   async function act(action: "approve" | "reject" | "cancel") {
     setBusy(action)
-    const result = await actOnBatch(batch._id, action)
+    // Approving takes the transaction PIN; rejecting and cancelling don't.
+    const result =
+      action === "approve"
+        ? await pin.confirm({
+            purpose: `approve ${approvable === 1 ? "the transfer" : `all ${approvable} transfers`} waiting for you in this bulk transfer`,
+            confirmLabel: approvable === 1 ? "Approve" : `Approve all ${approvable}`,
+            run: (transactionPin) => approveBatch(batch._id, transactionPin),
+          })
+        : await actOnBatch(batch._id, action)
     setBusy(null)
+    if (!result) return
     if (!result.ok) return toast.error(result.error)
     const stillWaiting = result.data.statusCounts.pending_approval
     toast.success(
@@ -362,6 +373,7 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
           )}
         </div>
       )}
+      {pin.dialog}
     </section>
   )
 }

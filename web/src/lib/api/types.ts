@@ -21,6 +21,17 @@ export type User = {
   updatedAt: string
 }
 
+/** GET /api/transaction-pin, and the body every PIN endpoint returns. One PIN per user, for every business. */
+export type TransactionPinStatus = {
+  isSet: boolean
+  locked: boolean
+  /** ISO time the lock ends, while it's locked. */
+  lockedUntil: string | null
+  /** Tries left before it locks (5 after a right PIN); null when no PIN is set. */
+  attemptsLeft: number | null
+  changedAt: string | null
+}
+
 export type Person = {
   _id: string
   fullName: string

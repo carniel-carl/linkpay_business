@@ -4,7 +4,7 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { RotateCw } from "lucide-react"
 import { toast } from "sonner"
-import { actOnTransfer } from "@/app/(dashboard)/transfers/actions"
+import { actOnTransfer, approveTransfer } from "@/app/(dashboard)/transfers/actions"
 import { CopyButton } from "@/components/accounts/copy-button"
 import { FormError } from "@/components/common/form-error"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import type { Transfer } from "@/lib/api/types"
 import { formatDateTime, formatNaira } from "@/lib/format"
 import { KIND_LABELS } from "@/lib/transfers"
@@ -35,6 +36,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<"approve" | "reject" | "cancel" | null>(null)
   const [checking, startCheck] = useTransition()
+  const pin = useTransactionPin()
   const levels = t.approval?.levels.length ?? 0
   const current = t.approval?.current ?? null
   // Approving an earlier level hands it on; only the last level sends the money.
@@ -43,8 +45,19 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
   async function act(action: "approve" | "reject" | "cancel") {
     setPending(action)
     setError(undefined)
-    const result = await actOnTransfer(t._id, action, note)
+    // Approving takes the transaction PIN; rejecting and cancelling don't.
+    const result =
+      action === "approve"
+        ? await pin.confirm({
+            purpose: finalLevel
+              ? `approve ${formatNaira(t.amountKobo)} to ${recipientName(t)} and send it`
+              : `approve level ${current} of ${formatNaira(t.amountKobo)} to ${recipientName(t)}`,
+            confirmLabel: finalLevel ? "Approve and send" : `Approve level ${current}`,
+            run: (transactionPin) => approveTransfer(t._id, note, transactionPin),
+          })
+        : await actOnTransfer(t._id, action, note)
     setPending(null)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     toast.success(
       action === "approve"
@@ -188,6 +201,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
           )}
         </SheetFooter>
       )}
+      {pin.dialog}
     </>
   )
 }

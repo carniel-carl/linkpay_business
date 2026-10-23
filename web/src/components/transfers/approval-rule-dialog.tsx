@@ -21,6 +21,7 @@ import {
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldSet, FieldTitle } from "@/components/ui/field"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import type { ApprovalMode, TransferSettings } from "@/lib/api/types"
 import { koboToInput, parseNairaToKobo } from "@/lib/transfers"
 
@@ -42,6 +43,7 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
   const [thresholdError, setThresholdError] = useState<string>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
+  const pin = useTransactionPin()
 
   async function save() {
     setError(undefined)
@@ -55,8 +57,13 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
       input = { mode, thresholdKobo: kobo }
     } else input = { mode }
     setBusy(true)
-    const result = await updateApprovalRule(input)
+    const result = await pin.confirm({
+      purpose: "change when transfers need approval",
+      confirmLabel: "Save rule",
+      run: (transactionPin) => updateApprovalRule(input, transactionPin),
+    })
     setBusy(false)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     toast.success("Approval rule saved.")
     setOpen(false)
@@ -138,6 +145,7 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
             </Button>
           )}
         </DialogFooter>
+        {pin.dialog}
       </DialogContent>
     </Dialog>
   )

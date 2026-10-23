@@ -5,6 +5,7 @@ import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
 import { ApiError, friendlyMessage } from "@/lib/api/errors"
+import { pinHeader } from "@/lib/api/transaction-pin"
 import type { Bank, FeeQuote, ResolvedAccount, Transfer, TransferBatch, TransferSettings } from "@/lib/api/types"
 import { BULK_CHECK_SLICE } from "@/lib/transfers"
 
@@ -14,6 +15,9 @@ const amountKobo = z.number().int().min(100)
 const narration = z.string().trim().max(100).optional()
 // Generated once per form in the browser, so a double submit or a retry after a dropped response sends once.
 const idempotencyKey = z.string().regex(/^[A-Za-z0-9_-]{8,100}$/)
+// Sending, approving and changing the approval rule also take the member's transaction PIN, which goes to
+// the API as the X-Transaction-Pin header (lib/api/transaction-pin.ts). A retry after a wrong PIN keeps the
+// same Idempotency-Key: nothing was done.
 
 /** Balances, the transfers list and the transactions list all change. */
 const refresh = () => revalidatePath("/", "layout")
@@ -90,10 +94,10 @@ const createInput = z.object({
   idempotencyKey,
 })
 
-export async function createTransfer(input: z.input<typeof createInput>) {
+export async function createTransfer(input: z.input<typeof createInput>, pin: string) {
   const { idempotencyKey: key, ...body } = createInput.parse(input)
   const result = await runAction(() =>
-    api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": key } }),
+    api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": key, ...pinHeader(pin) } }),
   )
   if (result.ok) refresh()
   return result
@@ -106,13 +110,13 @@ const bulkInput = z.object({
   idempotencyKey,
 })
 
-export async function createBulkTransfer(input: z.input<typeof bulkInput>) {
+export async function createBulkTransfer(input: z.input<typeof bulkInput>, pin: string) {
   const { idempotencyKey: key, ...body } = bulkInput.parse(input)
   const result = await runAction(() =>
     api<{ batch: TransferBatch | null; items?: Transfer[] }>("/api/transfers/bulk", {
       method: "POST",
       json: body,
-      headers: { "Idempotency-Key": key },
+      headers: { "Idempotency-Key": key, ...pinHeader(pin) },
     }),
   )
   if (result.ok) refresh()
@@ -121,18 +125,38 @@ export async function createBulkTransfer(input: z.input<typeof bulkInput>) {
 
 const note = z.string().trim().max(300).optional()
 
-/** approve | reject | cancel | refresh on one transfer. */
-export async function actOnTransfer(transferId: string, action: "approve" | "reject" | "cancel" | "refresh", text?: string) {
-  const path = `/api/transfers/${encodeURIComponent(id.parse(transferId))}/${z.enum(["approve", "reject", "cancel", "refresh"]).parse(action)}`
+/** reject | cancel | refresh on one transfer. Approving takes the PIN: approveTransfer. */
+export async function actOnTransfer(transferId: string, action: "reject" | "cancel" | "refresh", text?: string) {
+  const path = `/api/transfers/${encodeURIComponent(id.parse(transferId))}/${z.enum(["reject", "cancel", "refresh"]).parse(action)}`
   const result = await runAction(() => api<Transfer>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
   if (result.ok) refresh()
   return result
 }
 
-/** approve | reject | cancel everything in a bulk transfer that's still waiting. */
-export async function actOnBatch(batchId: string, action: "approve" | "reject" | "cancel", text?: string) {
-  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/${z.enum(["approve", "reject", "cancel"]).parse(action)}`
+/** Approves one transfer at the member's level. */
+export async function approveTransfer(transferId: string, text: string | undefined, pin: string) {
+  const path = `/api/transfers/${encodeURIComponent(id.parse(transferId))}/approve`
+  const result = await runAction(() =>
+    api<Transfer>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: pinHeader(pin) }),
+  )
+  if (result.ok) refresh()
+  return result
+}
+
+/** reject | cancel everything in a bulk transfer that's still waiting. Approving takes the PIN: approveBatch. */
+export async function actOnBatch(batchId: string, action: "reject" | "cancel", text?: string) {
+  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/${z.enum(["reject", "cancel"]).parse(action)}`
   const result = await runAction(() => api<TransferBatch>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
+  if (result.ok) refresh()
+  return result
+}
+
+/** Approves everything in a bulk transfer that's waiting at the member's level. */
+export async function approveBatch(batchId: string, pin: string, text?: string) {
+  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/approve`
+  const result = await runAction(() =>
+    api<TransferBatch>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: pinHeader(pin) }),
+  )
   if (result.ok) refresh()
   return result
 }
@@ -155,9 +179,11 @@ const settingsInput = z.discriminatedUnion("mode", [
   }),
 ])
 
-export async function updateApprovalRule(input: z.input<typeof settingsInput>) {
+export async function updateApprovalRule(input: z.input<typeof settingsInput>, pin: string) {
   const approval = settingsInput.parse(input)
-  const result = await runAction(() => api<TransferSettings>("/api/transfers/settings", { method: "PATCH", json: { approval } }))
+  const result = await runAction(() =>
+    api<TransferSettings>("/api/transfers/settings", { method: "PATCH", json: { approval }, headers: pinHeader(pin) }),
+  )
   if (result.ok) {
     revalidatePath("/transfers")
     revalidatePath("/approvals", "layout")

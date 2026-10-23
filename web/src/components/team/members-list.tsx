@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import type { BranchRef, Membership, RoleInfo, RolesResponse, TeamMember } from "@/lib/api/types"
 import { applyResult } from "@/lib/forms"
 import { formatDate, initials } from "@/lib/format"
@@ -203,10 +204,16 @@ function AccessDialog({
   })
   const { isSubmitting, isDirty, errors } = form.formState
   const grantable = grantableRoles(actor, roles.roles)
+  const pin = useTransactionPin()
 
   async function onSubmit(values: AccessValues) {
-    const result = await updateMemberAccess(member._id, values)
-    if (!applyResult(form, result)) return
+    const roleChanged = values.role !== member.role
+    const result = await pin.confirm({
+      purpose: roleChanged ? `make ${name} ${roleLabel(values.role, roles.roles)}` : `change ${name}'s branches`,
+      confirmLabel: "Save changes",
+      run: (transactionPin) => updateMemberAccess(member._id, values, transactionPin),
+    })
+    if (!result || !applyResult(form, result)) return
     onClose()
     toast.success(mode === "role" ? `${name} is now ${roleLabel(result.data.role, roles.roles)}.` : `${name}'s branches updated.`)
   }
@@ -245,6 +252,7 @@ function AccessDialog({
             Save changes
           </Button>
         </DialogFooter>
+        {pin.dialog}
       </DialogContent>
     </Dialog>
   )
@@ -264,10 +272,16 @@ function RemoveDialog({
   businessName: string
 }) {
   const [pending, startTransition] = useTransition()
+  const pin = useTransactionPin()
 
   function remove() {
     startTransition(async () => {
-      const result = await removeMember(memberId)
+      const result = await pin.confirm({
+        purpose: `remove ${name} from ${businessName}`,
+        confirmLabel: `Remove ${name}`,
+        run: (transactionPin) => removeMember(memberId, transactionPin),
+      })
+      if (!result) return
       if (result.ok) {
         onOpenChange(false)
         toast.success(`${name} no longer has access to ${businessName}.`)
@@ -299,6 +313,7 @@ function RemoveDialog({
             Remove
           </AlertDialogAction>
         </AlertDialogFooter>
+        {pin.dialog}
       </AlertDialogContent>
     </AlertDialog>
   )

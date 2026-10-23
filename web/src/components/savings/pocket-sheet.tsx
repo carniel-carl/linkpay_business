@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
 import type { Pocket, PocketMovement } from "@/lib/api/types"
 import { formatDate, formatDateTime, formatNaira } from "@/lib/format"
@@ -186,6 +187,7 @@ function MoveForm({
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
   const idempotency = useIdempotencyKey()
+  const pin = useTransactionPin()
   const [fieldError, setFieldError] = useState<string>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
@@ -205,12 +207,19 @@ function MoveForm({
     setBusy(true)
     setError(undefined)
     const request = { amountKobo: kobo, note: note.trim() || undefined }
-    // A retry with the same amount and note keeps the key, whatever went wrong; a corrected request gets a new one.
-    const result = await movePocketMoney(pocket._id, deposit ? "deposit" : "withdraw", {
-      ...request,
-      idempotencyKey: idempotency.keyFor(request),
-    })
+    // A retry with the same amount and note keeps the key, whatever went wrong (a wrong PIN included); a
+    // corrected request gets a new one.
+    const idempotencyKey = idempotency.keyFor(request)
+    // Adding money doesn't take the PIN; withdrawing does.
+    const result = deposit
+      ? await movePocketMoney(pocket._id, "deposit", { ...request, idempotencyKey })
+      : await pin.confirm({
+          purpose: `withdraw ${formatNaira(kobo)} from ${pocket.name} to ${branch}`,
+          confirmLabel: `Withdraw ${formatNaira(kobo)}`,
+          run: (transactionPin) => movePocketMoney(pocket._id, "withdraw", { ...request, idempotencyKey }, transactionPin),
+        })
     setBusy(false)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     idempotency.reset()
     toast.success(
@@ -222,47 +231,51 @@ function MoveForm({
   }
 
   return (
-    <form onSubmit={submit} noValidate className="grid gap-4 border-b bg-card p-6" aria-label={deposit ? "Add money" : "Withdraw"}>
-      <p className="font-medium">{deposit ? `Add money from ${branch}` : `Withdraw to ${branch}`}</p>
-      <FormError message={error} />
-      <Field data-invalid={!!fieldError}>
-        <FieldLabel htmlFor="pocket-move-amount">Amount</FieldLabel>
-        <NairaInput id="pocket-move-amount" value={amount} invalid={!!fieldError} onChange={setAmount} autoFocus />
-        {fieldError ? (
-          <FieldError>{fieldError}</FieldError>
-        ) : (
-          limitKobo !== null && (
-            <FieldDescription className="flex flex-wrap items-center gap-x-2">
-              <span>
-                <span className="figure">{formatNaira(limitKobo)}</span> {deposit ? `available in ${branch}` : "in this pocket"}
-              </span>
-              {limitKobo >= 100 && (
-                <button
-                  type="button"
-                  className="rounded-sm font-medium text-foreground underline-offset-4 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                  onClick={() => setAmount(koboToInput(limitKobo))}
-                >
-                  Use all
-                </button>
-              )}
-            </FieldDescription>
-          )
-        )}
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="pocket-move-note">Note (optional)</FieldLabel>
-        <Input id="pocket-move-note" maxLength={100} value={note} onChange={(e) => setNote(e.target.value)} placeholder={deposit ? "October VAT" : "Paid the generator deposit"} />
-      </Field>
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={busy}>
-          {busy && <Spinner />}
-          {deposit ? "Add money" : "Withdraw"}
-        </Button>
-        <Button type="button" variant="ghost" onClick={onDone} disabled={busy}>
-          Cancel
-        </Button>
-      </div>
-    </form>
+    <>
+      <form onSubmit={submit} noValidate className="grid gap-4 border-b bg-card p-6" aria-label={deposit ? "Add money" : "Withdraw"}>
+        <p className="font-medium">{deposit ? `Add money from ${branch}` : `Withdraw to ${branch}`}</p>
+        <FormError message={error} />
+        <Field data-invalid={!!fieldError}>
+          <FieldLabel htmlFor="pocket-move-amount">Amount</FieldLabel>
+          <NairaInput id="pocket-move-amount" value={amount} invalid={!!fieldError} onChange={setAmount} autoFocus />
+          {fieldError ? (
+            <FieldError>{fieldError}</FieldError>
+          ) : (
+            limitKobo !== null && (
+              <FieldDescription className="flex flex-wrap items-center gap-x-2">
+                <span>
+                  <span className="figure">{formatNaira(limitKobo)}</span> {deposit ? `available in ${branch}` : "in this pocket"}
+                </span>
+                {limitKobo >= 100 && (
+                  <button
+                    type="button"
+                    className="rounded-sm font-medium text-foreground underline-offset-4 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                    onClick={() => setAmount(koboToInput(limitKobo))}
+                  >
+                    Use all
+                  </button>
+                )}
+              </FieldDescription>
+            )
+          )}
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="pocket-move-note">Note (optional)</FieldLabel>
+          <Input id="pocket-move-note" maxLength={100} value={note} onChange={(e) => setNote(e.target.value)} placeholder={deposit ? "October VAT" : "Paid the generator deposit"} />
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={busy}>
+            {busy && <Spinner />}
+            {deposit ? "Add money" : "Withdraw"}
+          </Button>
+          <Button type="button" variant="ghost" onClick={onDone} disabled={busy}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+      {/* Outside the form: React passes events up through portals, and the dialog has forms of its own. */}
+      {pin.dialog}
+    </>
   )
 }
 
@@ -270,13 +283,22 @@ function ClosePocket({ pocket, onClosed }: { pocket: Pocket; onClosed: () => voi
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
+  const pin = useTransactionPin()
   const branch = pocket.branch?.name ?? "the branch"
 
   async function close() {
     setPending(true)
     setError(undefined)
-    const result = await closePocket(pocket._id)
+    const result = await pin.confirm({
+      purpose:
+        pocket.balanceKobo > 0
+          ? `close ${pocket.name} and move ${formatNaira(pocket.balanceKobo)} back to ${branch}`
+          : `close ${pocket.name}`,
+      confirmLabel: "Close pocket",
+      run: (transactionPin) => closePocket(pocket._id, transactionPin),
+    })
     setPending(false)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     setOpen(false)
     toast.success(
@@ -322,6 +344,7 @@ function ClosePocket({ pocket, onClosed }: { pocket: Pocket; onClosed: () => voi
             Close pocket
           </AlertDialogAction>
         </AlertDialogFooter>
+        {pin.dialog}
       </AlertDialogContent>
     </AlertDialog>
   )

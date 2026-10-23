@@ -5,6 +5,7 @@ import { z } from "zod"
 import { runAction } from "@/lib/action"
 import type { ActionResult } from "@/lib/action-result"
 import { api } from "@/lib/api/client"
+import { pinHeader } from "@/lib/api/transaction-pin"
 import type { Pocket, PocketActivity, PocketIcon, PocketMovement, Safelock } from "@/lib/api/types"
 import { POCKET_ICON_KEYS } from "@/lib/savings"
 
@@ -60,15 +61,24 @@ export async function updatePocket(pocketId: string, input: z.input<typeof updat
 
 const moveInput = z.object({ amountKobo, note: z.string().trim().max(100).optional(), idempotencyKey })
 
-/** Add money (from the branch's available balance) or withdraw it (back to available). */
-export async function movePocketMoney(pocketId: string, direction: "deposit" | "withdraw", input: z.input<typeof moveInput>) {
+/**
+ * Add money (from the branch's available balance) or withdraw it (back to available). Withdrawing takes the
+ * member's transaction PIN (the X-Transaction-Pin header); adding doesn't.
+ */
+export async function movePocketMoney(
+  pocketId: string,
+  direction: "deposit" | "withdraw",
+  input: z.input<typeof moveInput>,
+  pin?: string,
+) {
   const { idempotencyKey: key, ...body } = moveInput.parse(input)
-  const path = `/api/pockets/${encodeURIComponent(id.parse(pocketId))}/${z.enum(["deposit", "withdraw"]).parse(direction)}`
+  const move = z.enum(["deposit", "withdraw"]).parse(direction)
+  const path = `/api/pockets/${encodeURIComponent(id.parse(pocketId))}/${move}`
   const result = await runAction(() =>
     api<{ pocket: Pocket; movement: PocketMovement }>(path, {
       method: "POST",
       json: { amountKobo: body.amountKobo, note: body.note || undefined },
-      headers: { "Idempotency-Key": key },
+      headers: { "Idempotency-Key": key, ...(move === "withdraw" && pinHeader(pin)) },
     }),
   )
   if (!result.ok && result.code === "INSUFFICIENT_BALANCE") {
@@ -78,10 +88,10 @@ export async function movePocketMoney(pocketId: string, direction: "deposit" | "
   return result
 }
 
-/** Everything left goes back to the branch's available balance; the pocket stays for its history. */
-export async function closePocket(pocketId: string) {
+/** Everything left goes back to the branch's available balance; the pocket stays for its history. Takes the PIN. */
+export async function closePocket(pocketId: string, pin: string) {
   const path = `/api/pockets/${encodeURIComponent(id.parse(pocketId))}/close`
-  const result = await runAction(() => api<Pocket>(path, { method: "POST" }))
+  const result = await runAction(() => api<Pocket>(path, { method: "POST", headers: pinHeader(pin) }))
   if (result.ok) refresh()
   return result
 }
@@ -95,11 +105,11 @@ export async function getPocketActivity(pocketId: string, before?: string) {
 
 const safelockInput = z.object({ branch: id, title: z.string().trim().min(1).max(40), amountKobo, unlockOn: day, idempotencyKey })
 
-/** Locks money until `unlockOn`. It can't be undone: the form confirms first. */
-export async function createSafelock(input: z.input<typeof safelockInput>) {
+/** Locks money until `unlockOn`. It can't be undone: the form confirms first, then asks for the PIN. */
+export async function createSafelock(input: z.input<typeof safelockInput>, pin: string) {
   const { idempotencyKey: key, ...body } = safelockInput.parse(input)
   const result = await runAction(() =>
-    api<Safelock>("/api/safelocks", { method: "POST", json: body, headers: { "Idempotency-Key": key } }),
+    api<Safelock>("/api/safelocks", { method: "POST", json: body, headers: { "Idempotency-Key": key, ...pinHeader(pin) } }),
   )
   if (!result.ok && result.code === "INSUFFICIENT_BALANCE") {
     return { ...result, error: "That's more than this branch has available. Money held for transfers or already saved can't be locked." }

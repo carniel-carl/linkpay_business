@@ -2,6 +2,7 @@
 // controllers/admin.ts). Rules must match; messages are ours.
 import { z } from "zod"
 import { BUSINESS_TYPES, ID_TYPES, PERSON_ROLES } from "@/lib/kyb"
+import { isWeakPin, WEAK_PIN_MESSAGE } from "@/lib/transaction-pin"
 
 export const email = z.email("Enter a valid email address.").trim().toLowerCase()
 export const code = z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code.")
@@ -149,3 +150,31 @@ export const changePasswordSchema = z.object({
   newPassword: password,
 })
 export type ChangePasswordValues = z.infer<typeof changePasswordSchema>
+
+// ---- Transaction PIN (backend/src/controllers/transactionPin.ts) ----
+
+export const transactionPin = z.string().regex(/^\d{4}$/, "Enter all 4 digits.")
+const enterPassword = z.string().min(1, "Enter your password.")
+/** A new PIN, typed twice. Weak ones are refused here before the backend does (WEAK_TRANSACTION_PIN). */
+const newPinFields = {
+  newPin: transactionPin.refine((pin) => !isWeakPin(pin), WEAK_PIN_MESSAGE),
+  confirmPin: z.string().min(1, "Enter the new PIN again."),
+}
+const pinsMatch = (v: { newPin: string; confirmPin: string }) => v.newPin === v.confirmPin
+const pinsMatchIssue = { path: ["confirmPin"], message: "The two PINs don't match. Enter the new PIN again." }
+
+/** The first PIN: the account password, then the PIN twice. */
+export const setPinSchema = z.object({ password: enterPassword, ...newPinFields }).refine(pinsMatch, pinsMatchIssue)
+export type SetPinValues = z.infer<typeof setPinSchema>
+
+/** A new PIN, proven with the current PIN or the password. */
+export const changePinSchema = z
+  .object({ proof: z.enum(["pin", "password"]), currentPin: z.string(), password: z.string(), ...newPinFields })
+  .refine((v) => v.proof !== "pin" || /^\d{4}$/.test(v.currentPin), { path: ["currentPin"], message: "Enter your current PIN." })
+  .refine((v) => v.proof !== "password" || v.password.length > 0, { path: ["password"], message: "Enter your password." })
+  .refine(pinsMatch, pinsMatchIssue)
+export type ChangePinValues = z.infer<typeof changePinSchema>
+
+/** A forgotten or locked PIN: the emailed code, the password, then the new PIN twice. */
+export const resetPinSchema = z.object({ code, password: enterPassword, ...newPinFields }).refine(pinsMatch, pinsMatchIssue)
+export type ResetPinValues = z.infer<typeof resetPinSchema>

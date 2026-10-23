@@ -18,6 +18,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import type { Invite, Membership, RoleInfo } from "@/lib/api/types"
 import { timeAgo } from "@/lib/format"
 import { canManage } from "@/lib/permissions"
@@ -52,6 +53,7 @@ export function InvitesList({ invites, actor, roles }: { invites: Invite[]; acto
 
 function InviteRow({ invite, manageable, roles }: { invite: Invite; manageable: boolean; roles: RoleInfo[] }) {
   const [resending, startResend] = useTransition()
+  const pin = useTransactionPin()
   // How long Resend stays disabled: the backend's retryAt when it gives one, otherwise a minute.
   const [cooldownMs, setCooldownMs] = useState(0)
   const coolingDown = cooldownMs > 0
@@ -65,7 +67,12 @@ function InviteRow({ invite, manageable, roles }: { invite: Invite; manageable: 
 
   function resend() {
     startResend(async () => {
-      const result = await resendInvite(invite._id)
+      const result = await pin.confirm({
+        purpose: `send ${invite.email} a new invite link`,
+        confirmLabel: "Resend invite",
+        run: (transactionPin) => resendInvite(invite._id, transactionPin),
+      })
+      if (!result) return
       if (result.ok) {
         setCooldownMs(COOLDOWN_MS)
         toast.success(`New link sent to ${invite.email}. The old one no longer works.`)
@@ -102,6 +109,7 @@ function InviteRow({ invite, manageable, roles }: { invite: Invite; manageable: 
           <RevokeButton invite={invite} />
         </div>
       )}
+      {pin.dialog}
     </li>
   )
 }
