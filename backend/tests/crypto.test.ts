@@ -1,11 +1,12 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Types } from "mongoose";
-import { migrateEncryption } from "../scripts/migrate-encryption";
+import { migrateEncryption, requireV2Advice } from "../scripts/migrate-encryption";
+import { env } from "../src/config/env";
 import { BusinessModel, bvnContext } from "../src/models/Business";
 import { UserModel } from "../src/models/User";
 import { setEmailProvider } from "../src/services/email";
 import { signAccessToken } from "../src/services/tokens";
-import { decrypt, encrypt, isLegacyCiphertext } from "../src/utils/crypto";
+import { decrypt, encrypt, encryptionModeMessage, isLegacyCiphertext } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
 
 const b64 = (b: Buffer) => b.toString("base64url");
@@ -149,7 +150,7 @@ describe("BVNs at rest, and scripts/migrate-encryption.ts", () => {
     expect(person(current).bvnEncrypted).toBe(person(current, before).bvnEncrypted);
     expect(after.updatedAt).toEqual(before.updatedAt);
 
-    expect(await migrateEncryption({ apply: true })).toEqual({ legacy: 0, rewritten: 0, skipped: 0, unreadable: [] });
+    expect(await migrateEncryption({ apply: true })).toEqual({ legacy: 0, rewritten: 0, skipped: 0, unreadable: [], remaining: 0 });
   });
 
   test("a value this key can't read is reported and left alone", async () => {
@@ -162,6 +163,61 @@ describe("BVNs at rest, and scripts/migrate-encryption.ts", () => {
     expect(report.unreadable).toEqual([{ business: String(id), person: String(legacy), error: expect.any(String) }]);
     const stored = (await raw(id)).people.find((p: any) => p._id.equals(legacy)).bvnEncrypted as string;
     expect(stored.startsWith("v2:")).toBe(false);
+    expect(report.remaining).toBe(1);
+    expect(requireV2Advice(report, true)).toBe("Don't set ENCRYPTION_REQUIRE_V2=1 yet: 1 value(s) can't be read with this key.");
     await BusinessModel.collection.updateOne({ _id: id, "people._id": legacy }, { $unset: { "people.$.bvnEncrypted": 1 } });
+  });
+
+  describe("ENCRYPTION_REQUIRE_V2=1", () => {
+    afterEach(() => {
+      env.encryptionRequireV2 = false;
+    });
+
+    test("old-format values are refused with a clear error; v2 values still read", () => {
+      const ctx = bvnContext(new Types.ObjectId(), new Types.ObjectId());
+      const legacy = encrypt("22345678901");
+      const current = encrypt("12345678901", ctx);
+      env.encryptionRequireV2 = true;
+      expect(() => decrypt(legacy)).toThrow("ENCRYPTION_REQUIRE_V2=1");
+      expect(() => decrypt(legacy, ctx)).toThrow("migrate:encryption --apply");
+      expect(decrypt(current, ctx)).toBe("12345678901");
+      // Nothing new is written in the old format either.
+      expect(() => encrypt("22345678901")).toThrow("ENCRYPTION_REQUIRE_V2=1");
+      // The migration can still read them.
+      expect(decrypt(legacy, undefined, { allowLegacy: true })).toBe("22345678901");
+    });
+
+    test("startup says whether the old format is refused", () => {
+      expect(encryptionModeMessage()).toContain("still read");
+      env.encryptionRequireV2 = true;
+      expect(encryptionModeMessage()).toContain("refused (ENCRYPTION_REQUIRE_V2=1)");
+    });
+
+    test("provisioning refuses a BVN still in the old format", async () => {
+      const { id } = await businessWithPeople();
+      await BusinessModel.updateOne({ _id: id }, { status: "submitted" });
+      env.encryptionRequireV2 = true;
+      const res = await t.api("POST", `/api/admin/businesses/${id}/approve`, { token: await signStaffToken() });
+      expect(t.liquifia.customers.some((c) => c.customer_reference === `biz${id}`)).toBe(false);
+      // Approval itself stands; the account setup fails, saying why, until the BVN is migrated.
+      expect(res.status).toBe(200);
+      const business = (await BusinessModel.findById(id))!;
+      expect(business.liquifia?.accountStatus).toBe("failed");
+      expect(business.liquifia?.lastError).toContain("ENCRYPTION_REQUIRE_V2=1");
+    });
+
+    test("the migration still rewrites old values with the flag on, then says it can stay on", async () => {
+      await BusinessModel.deleteMany({});
+      await businessWithPeople();
+      expect(requireV2Advice(await migrateEncryption(), false)).toStartWith("Run it with --apply.");
+
+      env.encryptionRequireV2 = true;
+      const report = await migrateEncryption({ apply: true });
+      expect(report.rewritten).toBe(1);
+      expect(report.remaining).toBe(0);
+      expect(requireV2Advice(report, true)).toBe("No values left in the old format, and ENCRYPTION_REQUIRE_V2=1 is already set here.");
+      env.encryptionRequireV2 = false;
+      expect(requireV2Advice(report, true)).toStartWith("No values left in the old format. You can now set ENCRYPTION_REQUIRE_V2=1");
+    });
   });
 });

@@ -330,6 +330,15 @@ describe("KYB documents", () => {
     });
     expect((await open("6a0000000000000000000000")).status).toBe(404);
     expect(await AuditLogModel.countDocuments({ business: biz._id, action: "kyb.document_opened" })).toBe(1);
+
+    // A PDF viewer fetching it again moments later is the same look, not a new one.
+    expect((await open(doc.id)).status).toBe(200);
+    expect(await AuditLogModel.countDocuments({ business: biz._id, action: "kyb.document_opened" })).toBe(1);
+    // After the window it counts again.
+    // createdAt is immutable through Mongoose, so this goes through the driver.
+    await AuditLogModel.collection.updateMany({ business: biz._id, action: "kyb.document_opened" }, { $set: { createdAt: new Date(Date.now() - 6 * 60_000) } });
+    expect((await open(doc.id)).status).toBe(200);
+    expect(await AuditLogModel.countDocuments({ business: biz._id, action: "kyb.document_opened" })).toBe(2);
   });
 });
 

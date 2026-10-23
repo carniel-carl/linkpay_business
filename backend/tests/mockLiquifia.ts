@@ -49,6 +49,8 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
     accounts,
     balances,
     requests: [] as { method: string; path: string; body?: any; idempotencyKey?: string | null }[],
+    /** Every call answers 503 while this is on, as during an outage at Liquifia or the bank. */
+    down: false,
     /** Make the next N virtual-account creates fail with a 503. */
     failNextAccountCreates: 0,
     /** Payments received, newest first like a statement. Tests push these (see `inboundTransfer()`). */
@@ -122,6 +124,7 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
       state.requests.push({ method: req.method, path, body, idempotencyKey });
 
       if (req.headers.get("Authorization") !== "Bearer sk_test_mock") return error(401, "UNAUTHORIZED", "Bad key");
+      if (state.down) return error(503, "UNAVAILABLE", "Service unavailable");
 
       if (req.method === "POST" && path === "/customers") {
         if (customers.some((c) => c.customer_reference === body.customer_reference)) {

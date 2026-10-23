@@ -1,6 +1,7 @@
-// scripts/staff.ts: the CLI goes through the same atomic access change as the admin console.
+// scripts/staff.ts: the CLI goes through the same atomic access change as the admin console, and is audited.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { parseStaffArgs, runStaffCommand, StaffCliError } from "../scripts/staff";
+import { AuditLogModel } from "../src/models/AuditLog";
 import { StaffModel } from "../src/models/Staff";
 import { StaffSessionModel } from "../src/models/StaffSession";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
@@ -12,6 +13,7 @@ beforeAll(async () => {
 afterAll(() => t.stop());
 beforeEach(async () => {
   await StaffModel.deleteMany({});
+  await AuditLogModel.deleteMany({});
 });
 
 const lines: string[] = [];
@@ -64,6 +66,8 @@ describe("staff CLI", () => {
     for (const argv of [["set-role", "lone@linkpay.test", "support"], ["disable", "lone@linkpay.test"]]) {
       expect(await refusal(run(...argv))).toBe("There must always be at least one active super admin. Add another super admin first.");
     }
+    // A refused change leaves nothing in the audit log.
+    expect(await AuditLogModel.countDocuments()).toBe(0);
     expect(await StaffModel.findOne({ email: "lone@linkpay.test" })).toMatchObject({ role: "super_admin", status: "active" });
 
     await superAdmin("second@linkpay.test");
@@ -84,6 +88,41 @@ describe("staff CLI", () => {
       for (const r of results.filter((r) => r !== null)) expect(r).toContain("at least one active super admin");
       expect(await activeSuperAdmins()).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  test("every change is in the audit log, by the command line, and shows in the console's audit list", async () => {
+    await superAdmin("first@linkpay.test");
+    await run("add", "ada@linkpay.test", "Ada Obi", "--role", "support");
+    await run("set-role", "ada@linkpay.test", "support"); // no change, no entry (as in the console)
+    await run("set-role", "ada@linkpay.test", "compliance");
+    await signStaffToken("ada@linkpay.test");
+    await run("disable", "ada@linkpay.test");
+    await run("enable", "ada@linkpay.test");
+    await run("sign-out", "ada@linkpay.test");
+    await run("list");
+    expect(await refusal(run("add", "ada@linkpay.test", "Again"))).toBe("ada@linkpay.test is already a staff member");
+
+    const ada = (await StaffModel.findOne({ email: "ada@linkpay.test" }))!;
+    const entries = await AuditLogModel.find().sort({ _id: 1 });
+    expect(entries.map((e) => e.action)).toEqual(["staff.added", "staff.role_changed", "staff.disabled", "staff.enabled", "staff.signed_out"]);
+    for (const e of entries) {
+      expect(e.actor!.type).toBe("system");
+      expect(e.actor!.name).toStartWith("Staff command line (");
+      expect(e.actor!.staff ?? null).toBeNull();
+      expect(e.target).toMatchObject({ kind: "staff" });
+      expect(String(e.target!.id)).toBe(ada.id);
+      expect(e.details).toMatchObject({ via: "cli" });
+    }
+    expect(entries[0]!.summary).toBe("Added Ada Obi (ada@linkpay.test) as Support (read only)");
+    expect(entries[0]!.details).toMatchObject({ email: "ada@linkpay.test", role: "support" });
+    expect(entries[1]!.details).toMatchObject({ from: "support", to: "compliance" });
+    expect(entries[2]!.details).toMatchObject({ sessionsEnded: 1 });
+
+    const token = await signStaffToken("first@linkpay.test");
+    const listed = await t.api("GET", "/api/admin/audit?action=staff.added", { token });
+    expect(listed.status).toBe(200);
+    expect(listed.body.items).toHaveLength(1);
+    expect(listed.body.items[0].actor).toMatchObject({ type: "system", _id: null });
   });
 
   test("staff saved before roles existed can be given one", async () => {

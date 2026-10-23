@@ -28,7 +28,7 @@ import { authLimits, limiter } from "../middleware/rateLimits";
 export const authRouter = Router();
 
 // Per address and per account, on every endpoint that checks a password or code, to slow down guessing.
-const authLimiter = authLimits();
+const authLimiter = authLimits("auth");
 
 authRouter.post("/register", authLimiter, register);
 authRouter.post("/verify-email", authLimiter, verifyEmail);
@@ -46,7 +46,7 @@ authRouter.post("/biometric", requireAuth, enableBiometricSignIn);
 authRouter.delete("/biometric", requireAuth, disableBiometricSignIn);
 
 // Refreshes come every few minutes from every signed-in phone, often many behind one carrier IP.
-const refreshLimiter = limiter({ limit: 300 });
+const refreshLimiter = limiter("auth:refresh", { limit: 300 });
 
 authRouter.post("/refresh", refreshLimiter, refresh);
 authRouter.post("/logout", refreshLimiter, logout);

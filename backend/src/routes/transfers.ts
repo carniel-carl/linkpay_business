@@ -38,17 +38,17 @@ const approve = requirePermission("transfers.approve");
 const pin = requireTransactionPin;
 // The bulk review's lookups move no money, so no PIN, but each call can ask the bank about 200 accounts:
 // limited per member (15-minute window), with room to check and fix a 200-row upload several times over.
-const reviewLimit = () => limiter({ limit: 60, keyGenerator: (req) => `user:${req.userId}` });
+const reviewLimit = (name: string) => limiter(name, { limit: 60, keyGenerator: (req) => `user:${req.userId}` });
 
 transfersRouter.get("/banks", create, getBanks);
 transfersRouter.post("/resolve-account", create, resolveAccount);
-transfersRouter.post("/resolve-accounts", create, reviewLimit(), resolveAccounts);
+transfersRouter.post("/resolve-accounts", create, reviewLimit("transfers:resolve-accounts"), resolveAccounts);
 transfersRouter.get("/fee", create, getFee);
 transfersRouter.get("/settings", view, getTransferSettings);
 transfersRouter.patch("/settings", requirePermission("transfers.manage"), pin, updateTransferSettings);
 transfersRouter.get("/approvers", requirePermission("transfers.manage"), listApprovers);
 
-transfersRouter.post("/bulk/preview", create, reviewLimit(), previewBulkTransfer);
+transfersRouter.post("/bulk/preview", create, reviewLimit("transfers:bulk-preview"), previewBulkTransfer);
 transfersRouter.post("/bulk", create, pin, createBulkTransfer);
 transfersRouter.get("/batches/:id", view, getBatch);
 transfersRouter.post("/batches/:id/approve", approve, pin, approveBatch);

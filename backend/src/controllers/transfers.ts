@@ -15,17 +15,19 @@ import {
   MAX_LEVELS,
   MAX_TIERS,
 } from "../services/approvals";
-import { beneficiaryRecipient, checkPayoutRows, findBeneficiary, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
+import { beneficiaryRecipient, checkPayoutRows, findBeneficiary, keyedPayoutRows, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
 import { branchScope, canAccessBranch, ensureOwnerMembership, hasPermission } from "../services/team";
 import {
   cancelTransfers,
   createTransfers,
   decideTransfers,
+  keyedBranchRow,
   listBanks,
   planForRequest,
   previewTransfers,
   quoteFee,
   refreshTransfer,
+  replayBeforeLookups,
   resolveBankRecipient,
   resolveBankRecipients,
   resolveBranchRecipient,
@@ -447,6 +449,26 @@ export const createTransfer: RequestHandler = async (req, res) => {
     .object({ branch: objectId, amountKobo, narration, recipient: recipientInput, saveBeneficiary: z.boolean().optional() })
     .parse(req.body);
   const business = req.business!;
+  const key = clientKey(req);
+  // A retry is answered before the bank is asked about the recipient again, so it still works while the bank is down.
+  const early = await replayBeforeLookups({
+    business,
+    membership: req.membership!,
+    userId: req.userId!,
+    branchId: body.branch,
+    clientKey: key,
+    rows: async () => {
+      const { recipient: r, amountKobo, narration } = body;
+      if (r.type === "branch") {
+        const row = await keyedBranchRow(business, r.branch, { amountKobo, narration });
+        return row && [row];
+      }
+      const row = r.type === "bank" ? { accountNumber: r.accountNumber, bankUuid: r.bankUuid, amountKobo, narration } : { beneficiary: r.beneficiary, amountKobo, narration };
+      return keyedPayoutRows(business, [row], { save: body.saveBeneficiary });
+    },
+  });
+  if (early) return void res.status(200).json((await serialize(req, early.transfers.slice(0, 1)))[0]);
+
   let beneficiary: Types.ObjectId | undefined;
   let recipient;
   if (body.recipient.type === "branch") {
@@ -468,7 +490,7 @@ export const createTransfer: RequestHandler = async (req, res) => {
     userId: req.userId!,
     branchId: body.branch,
     requests: [{ recipient, amountKobo: body.amountKobo, narration: body.narration, beneficiary }],
-    clientKey: clientKey(req),
+    clientKey: key,
   });
   res.status(replayed ? 200 : 201).json((await serialize(req, transfers.slice(0, 1)))[0]);
 };
@@ -499,8 +521,19 @@ const bulkBody = z.object({
 export const createBulkTransfer: RequestHandler = async (req, res) => {
   const body = bulkBody.parse(req.body);
   const business = req.business!;
-  const requests = await resolvePayoutRows(business, body.items, { save: body.saveBeneficiaries, userId: req.userId! });
+  const key = clientKey(req);
+  // A retry is answered before every row's name enquiry, so it still works while the bank is down.
+  const early = await replayBeforeLookups({
+    business,
+    membership: req.membership!,
+    userId: req.userId!,
+    branchId: body.branch,
+    clientKey: key,
+    rows: () => keyedPayoutRows(business, body.items, { save: body.saveBeneficiaries }),
+  });
+  if (early) return void res.status(200).json(await describeBulkResult(req, early.transfers, early.batch));
 
+  const requests = await resolvePayoutRows(business, body.items, { save: body.saveBeneficiaries, userId: req.userId! });
   const { transfers, batch, replayed } = await createTransfers({
     business,
     membership: req.membership!,
@@ -508,7 +541,7 @@ export const createBulkTransfer: RequestHandler = async (req, res) => {
     branchId: body.branch,
     requests,
     batchTitle: body.title,
-    clientKey: clientKey(req),
+    clientKey: key,
   });
   res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
 };

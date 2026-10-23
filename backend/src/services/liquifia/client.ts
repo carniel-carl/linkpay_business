@@ -22,6 +22,43 @@ type RequestOptions = {
 
 export const isLiveMode = () => env.liquifia.secretKey.startsWith("sk_live_");
 
+/**
+ * An answer that isn't the shape we rely on. Status 0, like a timeout: callers treat it as an unknown outcome,
+ * never as "none", an empty list or a refusal, so a changed or broken response can't pass for one.
+ */
+const unexpected = (what: string) => new LiquifiaError(0, "UNEXPECTED_RESPONSE", `Liquifia's ${what}`);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * A 404 that is Liquifia's own answer (its JSON error body), as opposed to a proxy's page or a route that has
+ * moved, which say nothing about the thing asked for.
+ */
+const isLiquifiaNotFound = (err: unknown) => err instanceof LiquifiaError && err.status === 404 && !/^HTTP_/.test(err.code);
+
+/**
+ * A payout as the transfer code relies on it: an id, and a status and reference that are text when present.
+ * `reference`: the one we sent, which the payout must carry if it says. `needStatus`: a status is required.
+ */
+function asPayout(value: unknown, what: string, opts: { reference?: string; needStatus?: boolean } = {}): LiquifiaPayout {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id) throw unexpected(`${what} has no payout id`);
+  if (opts.needStatus ? typeof value.status !== "string" : value.status != null && typeof value.status !== "string") {
+    throw unexpected(`${what} (payout ${value.id}) has no usable status`);
+  }
+  if (value.reference != null && typeof value.reference !== "string") throw unexpected(`${what} (payout ${value.id}) has a reference that isn't text`);
+  if (opts.reference !== undefined && value.reference != null && value.reference !== opts.reference) {
+    throw unexpected(`${what} is payout ${value.id} with reference ${String(value.reference)}, not ${opts.reference}`);
+  }
+  return value as LiquifiaPayout;
+}
+
+/** An amount Liquifia sends as a number or numeric text. Anything else must not become NaN (NaN passes every `>` check). */
+function asAmount(value: unknown, what: string) {
+  const n = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) throw unexpected(`${what} isn't a number`);
+  return n;
+}
+
 /** Generates an idempotency key in the format Liquifia accepts. */
 export const newIdempotencyKey = () => crypto.randomUUID().replaceAll("-", "");
 
@@ -79,25 +116,33 @@ export const liquifia = {
   // The docs list /integrator, but only its alias /me exists on the live API.
   getIntegrator: () => request<Record<string, unknown>>("GET", "/me"),
   getWallet: () => request<Record<string, unknown>>("GET", "/wallet"),
+  /** Never empty: an empty or odd list would be cached for a day and refuse every bank (services/transfers.ts). */
   listBanks: async () => {
-    const result = await request<{ banks?: LiquifiaBank[] } | LiquifiaBank[]>("GET", "/banks", { query: { country: "NG", currency: "NGN" } });
-    return Array.isArray(result) ? result : (result.banks ?? []);
+    const result = await request<unknown>("GET", "/banks", { query: { country: "NG", currency: "NGN" } });
+    const banks = Array.isArray(result) ? result : isRecord(result) ? result.banks : undefined;
+    if (!Array.isArray(banks) || !banks.length) throw unexpected("bank list is empty or isn't a list");
+    if (!banks.every((b) => isRecord(b) && typeof b.uuid === "string" && typeof b.name === "string")) {
+      throw unexpected("bank list has a bank without a uuid or name");
+    }
+    return banks as LiquifiaBank[];
   },
 
   createCustomer: (body: LiquifiaCustomerInput) => request<LiquifiaCustomer>("POST", "/customers", { body }),
   findCustomerByReference: async (reference: string) => {
-    const result = await request<LiquifiaCustomer[] | { customers?: LiquifiaCustomer[]; items?: LiquifiaCustomer[] }>(
-      "GET",
-      "/customers",
-      { query: { search: reference, take: 10 } },
-    );
-    const list = Array.isArray(result) ? result : (result.customers ?? result.items ?? []);
-    return list.find((c) => c.customer_reference === reference);
+    const result = await request<unknown>("GET", "/customers", { query: { search: reference, take: 10 } });
+    const list = Array.isArray(result) ? result : isRecord(result) ? (result.customers ?? result.items) : undefined;
+    // An odd answer isn't "no such customer".
+    if (!Array.isArray(list)) throw unexpected("customer search isn't a list");
+    return (list as LiquifiaCustomer[]).find((c) => isRecord(c) && c.customer_reference === reference);
   },
   createVirtualAccount: (customerId: string, body: LiquifiaVirtualAccountInput, idempotencyKey: string) =>
     request<LiquifiaVirtualAccount>("POST", `/customers/${customerId}/virtual-accounts`, { body, idempotencyKey }),
-  getVirtualAccountBalance: (virtualAccountId: string, opts: { timeoutMs?: number } = {}) =>
-    request<LiquifiaBalance>("GET", `/virtual-accounts/${virtualAccountId}/balance`, { timeoutMs: opts.timeoutMs }),
+  /** `balance` is always a finite number of kobo here, never NaN: a balance check must not pass on a broken answer. */
+  getVirtualAccountBalance: async (virtualAccountId: string, opts: { timeoutMs?: number } = {}) => {
+    const result = await request<unknown>("GET", `/virtual-accounts/${virtualAccountId}/balance`, { timeoutMs: opts.timeoutMs });
+    if (!isRecord(result)) throw unexpected(`balance for ${virtualAccountId} isn't an object`);
+    return { ...result, balance: asAmount(result.balance, `balance for ${virtualAccountId}`) } as LiquifiaBalance;
+  },
   /**
    * One page of payments received on every account of the integrator, not only ours. The docs list skip/take
    * (and country/currency) but no sort order or date filter, so services/transactions.ts works the order out.
@@ -105,7 +150,7 @@ export const liquifia = {
   listInboundTransfers: async (page: { skip: number; take: number }) => {
     const rows = await request<LiquifiaInboundTransfer[]>("GET", "/inbound-transfers", { query: page });
     // Anything but a list must not pass for the end of the list.
-    if (!Array.isArray(rows)) throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", "Liquifia's inbound-transfer list isn't an array");
+    if (!Array.isArray(rows)) throw unexpected("inbound-transfer list isn't an array");
     return rows;
   },
 
@@ -115,28 +160,37 @@ export const liquifia = {
       body: { account_number: accountNumber, bank_uuid: bankUuid, country: "NG", currency: "NGN" },
     }),
   quotePayoutFee: (amountNaira: number) => request<LiquifiaFeeQuote>("GET", "/payouts/fee", { query: { amount: amountNaira } }),
-  createPayout: (body: LiquifiaPayoutInput, idempotencyKey: string) =>
-    request<LiquifiaPayout>("POST", "/payouts", { body: { country: "NG", currency: "NGN", ...body }, idempotencyKey }),
-  getPayout: (payoutId: string) => request<LiquifiaPayout>("GET", `/payouts/${payoutId}`),
+  /** The payout created (or replayed for this key). Without an id, or about another reference, it's an unknown outcome. */
+  createPayout: async (body: LiquifiaPayoutInput, idempotencyKey: string) => {
+    const payout = await request<unknown>("POST", "/payouts", { body: { country: "NG", currency: "NGN", ...body }, idempotencyKey });
+    return asPayout(payout, "answer to creating payout " + body.reference, { reference: body.reference });
+  },
+  getPayout: async (payoutId: string) => {
+    const payout = asPayout(await request<unknown>("GET", `/payouts/${payoutId}`), `payout ${payoutId}`, { needStatus: true });
+    if (payout.id !== payoutId) throw unexpected(`payout ${payoutId} came back as payout ${payout.id}`);
+    return payout;
+  },
   /**
    * The payout we sent with this reference, or null when Liquifia has none. The settlement trace is the only
-   * lookup by reference in the docs (the list has no reference filter); a 404 there is taken to mean "none".
-   * The payout is then read by id and its reference checked, so a wrong match is never adopted.
+   * lookup by reference in the docs (the list has no reference filter); a 404 there, in Liquifia's own error
+   * format, is taken to mean "none". Anything else odd is an unknown outcome (UNEXPECTED_RESPONSE), never
+   * "none": "none" lets a retry's refusal fail the transfer and release its money. The payout is then read by
+   * id and its reference checked, so a wrong match is never adopted.
    */
   findPayoutByReference: async (reference: string) => {
-    let trace: LiquifiaPayoutTrace;
+    let trace: unknown;
     try {
-      trace = await request<LiquifiaPayoutTrace>("GET", `/payouts/${encodeURIComponent(reference)}/trace`);
+      trace = await request<unknown>("GET", `/payouts/${encodeURIComponent(reference)}/trace`);
     } catch (err) {
-      if (err instanceof LiquifiaError && err.status === 404) return null;
+      if (isLiquifiaNotFound(err)) return null;
+      if (err instanceof LiquifiaError && err.status === 404) throw unexpected(`trace for payout ${reference} was a 404 without Liquifia's error body`);
       throw err;
     }
-    // Status 0: an unexpected answer is an unknown outcome to callers, never a rejection.
-    if (!trace?.id) throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", `Liquifia's trace for payout ${reference} has no id`);
-    const payout = await request<LiquifiaPayout>("GET", `/payouts/${encodeURIComponent(trace.id)}`);
-    if (payout?.reference !== reference) {
-      throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", `Liquifia's payout ${trace.id} has reference ${payout?.reference}, not ${reference}`);
-    }
+    if (!isRecord(trace) || typeof trace.id !== "string" || !trace.id) throw unexpected(`trace for payout ${reference} has no id`);
+    const what = `payout ${trace.id} (traced from ${reference})`;
+    const payout = asPayout(await request<unknown>("GET", `/payouts/${encodeURIComponent(trace.id)}`), what, { needStatus: true });
+    // It must say it's ours: a payout without our reference is never adopted.
+    if (payout.reference !== reference) throw unexpected(`${what} has reference ${String(payout.reference)}, not ${reference}`);
     return payout;
   },
 };

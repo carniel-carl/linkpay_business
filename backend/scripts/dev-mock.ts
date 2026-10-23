@@ -37,6 +37,7 @@ const { startInvoiceReminders } = await import("../src/services/invoices");
 const { startRiskChecks } = await import("../src/services/risk");
 const { startSafelockReleases } = await import("../src/services/safelocks");
 const { startLinkImageCleanup } = await import("../src/services/paymentLinkImages");
+const { settleStaleMovements } = await import("../src/services/pockets");
 // Faster than production so settled payouts and the money they move show up within seconds.
 const stopSync = startTransactionSync(10_000);
 const stopTransfers = startTransferProcessor(5_000);
@@ -44,6 +45,8 @@ const stopReminders = startInvoiceReminders(60_000);
 const stopRiskChecks = startRiskChecks(60_000);
 const stopSafelockReleases = startSafelockReleases(60_000);
 const stopImageCleanup = startLinkImageCleanup(60 * 60 * 1000);
+// As in index.ts. A fresh in-memory database has nothing to settle; kept so the two start the same jobs.
+void settleStaleMovements().catch((err) => console.error("Couldn't settle pocket movements at startup:", err));
 const server = app.listen(Number(process.env.PORT), async () => {
   console.log(`Mock API on http://localhost:${process.env.PORT} (in-memory MongoDB, mock Liquifia at ${liquifia.url}). Data is lost on exit.`);
   // `bun run dev:mock --seed`: a verified demo business with branches and payments (scripts/dev-seed.ts).

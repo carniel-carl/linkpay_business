@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import { isValidObjectId } from "mongoose";
 import { z } from "zod";
 import { DOCUMENT_TYPES, type DocumentType } from "../config/kyb";
+import { AuditLogModel } from "../models/AuditLog";
 import { BUSINESS_STATUSES, BusinessModel, type BusinessDocument } from "../models/Business";
 import { KybDocumentModel } from "../models/KybDocument";
 import { UserModel } from "../models/User";
@@ -146,20 +147,31 @@ export const getBusiness: RequestHandler<IdParams> = async (req, res) => {
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 
+const DOCUMENT_OPEN_WINDOW_MS = 5 * 60_000;
+
 export const downloadBusinessDocument: RequestHandler<DocParams> = async (req, res) => {
   const business = await findBusiness(req.params.id);
   if (!isValidObjectId(req.params.documentId)) throw new HttpError(400, "Invalid id");
   const doc = await KybDocumentModel.findOne({ _id: req.params.documentId, business: business._id }).select("type person");
   if (!doc) throw new HttpError(404, "Document not found");
-  // Recorded before the file goes out: who looked at whose personal documents.
-  const person = doc.person ? business.people.id(doc.person)?.fullName : null;
-  await audit(await staffActor(req), {
+  // Recorded before the file goes out: who looked at whose personal documents. A PDF viewer fetches the file
+  // several times (range requests, reloads), so one person opening one document counts once per few minutes.
+  const opened = await AuditLogModel.exists({
     action: "kyb.document_opened",
-    business: business._id,
-    target: { kind: "business", id: business._id },
-    summary: `Opened ${DOCUMENT_TYPES[doc.type as DocumentType]}${person ? ` for ${person}` : ""}`,
-    details: { documentId: doc.id, type: doc.type, ...(doc.person && { person: String(doc.person) }) },
+    "actor.staff": req.staffId,
+    "details.documentId": doc.id,
+    createdAt: { $gt: new Date(Date.now() - DOCUMENT_OPEN_WINDOW_MS) },
   });
+  if (!opened) {
+    const person = doc.person ? business.people.id(doc.person)?.fullName : null;
+    await audit(await staffActor(req), {
+      action: "kyb.document_opened",
+      business: business._id,
+      target: { kind: "business", id: business._id },
+      summary: `Opened ${DOCUMENT_TYPES[doc.type as DocumentType]}${person ? ` for ${person}` : ""}`,
+      details: { documentId: doc.id, type: doc.type, ...(doc.person && { person: String(doc.person) }) },
+    });
+  }
   await streamDocument(res, business._id, req.params.documentId);
 };
 

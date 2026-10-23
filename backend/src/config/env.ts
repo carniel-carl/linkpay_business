@@ -68,6 +68,9 @@ export const env = {
   biometricMaxAgeDays: Number(process.env.BIOMETRIC_MAX_AGE_DAYS ?? 180),
   // 32-byte hex key used to encrypt sensitive PII (e.g. BVNs) at rest.
   encryptionKey: required("ENCRYPTION_KEY"),
+  // 1 once `bun run migrate:encryption --apply` has rewritten every value as v2: values in the old format
+  // (bound to no record) are then refused instead of read, so one copied in from elsewhere can't be used.
+  encryptionRequireV2: process.env.ENCRYPTION_REQUIRE_V2 === "1",
   uploadDir: process.env.UPLOAD_DIR ?? "uploads",
   liquifia: {
     baseUrl: process.env.LIQUIFIA_BASE_URL ?? "https://fiat-api.pouchfinance.xyz/api/v1",

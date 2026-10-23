@@ -372,6 +372,94 @@ export async function planForRequest(opts: {
   return { plan: approvalPlan(opts.business, opts.membership, decidingKobo), earlierKobo, decidingKobo };
 }
 
+/** What an Idempotency-Key's request hash covers in each row: where the money goes, how much, and the narration. */
+export type KeyedRow = {
+  accountNumber: string;
+  bankUuid: string;
+  amountKobo: number;
+  narration?: string | null;
+  beneficiary?: Types.ObjectId | string | null;
+};
+
+/**
+ * What a request asks for, so the same Idempotency-Key with different details is refused. The batch title is
+ * left out: it moves no money, and a payout list's default title carries the date, so a retry after midnight
+ * would be refused (and the client could then send it again under a new key). The account name a bulk row was
+ * reviewed with is left out too: it's a check on the recipient (resolvePayoutRows), not part of the payment. A
+ * retry after the name was checked again must replay the first batch, not be refused or sent twice. The shape
+ * must not change: stored hashes are compared with it.
+ */
+function sendRequestHash(branchId: Types.ObjectId, payoutList: Types.ObjectId | undefined, rows: KeyedRow[]) {
+  return requestHash({
+    branch: String(branchId),
+    payoutList: payoutList ? String(payoutList) : null,
+    rows: rows.map((r) => ({
+      accountNumber: r.accountNumber,
+      bankUuid: r.bankUuid,
+      amountKobo: r.amountKobo,
+      narration: r.narration ?? null,
+      beneficiary: r.beneficiary ? String(r.beneficiary) : null,
+    })),
+  });
+}
+
+/** The first transfer this member sent with this Idempotency-Key, if any. */
+const firstWithKey = (business: BusinessDocument, userId: string, clientKey: string) =>
+  TransferModel.findOne({ business: business._id, createdBy: userId, clientKey });
+
+/** The answer to a replay: the transfer the key created, or its whole batch. */
+async function replayOf(first: TransferDocument) {
+  if (!first.batch) return { transfers: [first], batch: null, replayed: true as const };
+  const [transfers, batch] = await Promise.all([TransferModel.find({ batch: first.batch }).sort({ _id: 1 }), TransferBatchModel.findById(first.batch)]);
+  return { transfers, batch, replayed: true as const };
+}
+
+/** The branch money leaves from, and its account, if the member may send from it. Database only. */
+async function sendingAccount(business: BusinessDocument, membership: MembershipDocument, branchId: string) {
+  const branch = await BranchModel.findOne({ _id: branchId, business: business._id });
+  if (!branch || !canAccessBranch(membership, branch._id)) throw new HttpError(404, "Branch not found");
+  const account = await VirtualAccountModel.findOne({ branch: branch._id });
+  if (!account) throw new HttpError(409, `${branch.name}'s account isn't ready yet`, "ACCOUNT_NOT_READY");
+  return { branch, account };
+}
+
+/**
+ * A retry's answer, found before the recipients are looked up with the bank: a client retrying its
+ * Idempotency-Key while the bank is down gets the replay of what it first sent (or IDEMPOTENCY_KEY_REUSED if
+ * the details changed), not a 502. `rows` works out the hashed details from the database alone, and returns
+ * null when it can't (a saved beneficiary is gone, say); the caller then carries on as usual, and
+ * createTransfers checks the key again after the lookups and under the lock.
+ */
+export async function replayBeforeLookups(opts: {
+  business: BusinessDocument;
+  membership: MembershipDocument;
+  userId: string;
+  branchId: string;
+  payoutList?: Types.ObjectId;
+  clientKey?: string;
+  rows: () => Promise<KeyedRow[] | null>;
+}) {
+  if (!opts.clientKey) return null;
+  const first = await firstWithKey(opts.business, opts.userId, opts.clientKey);
+  if (!first) return null;
+  // The same refusals as sending, so a retry can't get round them (a suspended business, a branch taken away).
+  assertMoneyCanMove(opts.business);
+  const { branch } = await sendingAccount(opts.business, opts.membership, opts.branchId);
+  const rows = await opts.rows();
+  if (!rows) return null;
+  assertSameRequest(first.requestHash, sendRequestHash(branch._id, opts.payoutList, rows));
+  return replayOf(first);
+}
+
+/** A transfer to one of the business's branches, as its Idempotency-Key hash saw it; null if that needs the bank list. */
+export async function keyedBranchRow(business: BusinessDocument, branchId: string, row: { amountKobo: number; narration?: string }) {
+  const branch = await BranchModel.findOne({ _id: branchId, business: business._id }).select("_id");
+  const account = branch && (await VirtualAccountModel.findOne({ branch: branch._id }).select("accountNumber bankUuid"));
+  // The first send stored the bank's id on the account (bankUuidForAccount); without it, only the bank list knows.
+  if (!account?.bankUuid) return null;
+  return { accountNumber: account.accountNumber, bankUuid: account.bankUuid, amountKobo: row.amountKobo, narration: row.narration } satisfies KeyedRow;
+}
+
 /**
  * Creates one transfer, or a batch, from a branch's account. Checks the available balance and holds the
  * money under a lock. Transfers that don't need approval are sent to Liquifia straight away.
@@ -389,39 +477,29 @@ export async function createTransfers(opts: {
 }) {
   const { business, membership, userId, requests } = opts;
   assertMoneyCanMove(business);
-  const branch = await BranchModel.findOne({ _id: opts.branchId, business: business._id });
-  if (!branch || !canAccessBranch(membership, branch._id)) throw new HttpError(404, "Branch not found");
-  const account = await VirtualAccountModel.findOne({ branch: branch._id });
-  if (!account) throw new HttpError(409, `${branch.name}'s account isn't ready yet`, "ACCOUNT_NOT_READY");
+  const { branch, account } = await sendingAccount(business, membership, opts.branchId);
 
-  // What this request asks for, so the same Idempotency-Key with different details is refused. The batch title
-  // is left out: it moves no money, and a payout list's default title carries the date, so a retry after
-  // midnight would be refused (and the client could then send it again under a new key). The account name a bulk
-  // row was reviewed with is left out too: it's a check on the recipient (resolvePayoutRows), not part of the
-  // payment. A retry after the name was checked again must replay the first batch, not be refused or sent twice.
   const hash = opts.clientKey
-    ? requestHash({
-        branch: String(branch._id),
-        payoutList: opts.payoutList ? String(opts.payoutList) : null,
-        rows: requests.map((r) => ({
+    ? sendRequestHash(
+        branch._id,
+        opts.payoutList,
+        requests.map((r) => ({
           accountNumber: r.recipient.accountNumber,
           bankUuid: r.recipient.bankUuid,
           amountKobo: r.amountKobo,
-          narration: r.narration ?? null,
-          beneficiary: r.beneficiary ? String(r.beneficiary) : null,
+          narration: r.narration,
+          beneficiary: r.beneficiary,
         })),
-      })
+      )
     : undefined;
 
   /** What was created the first time this Idempotency-Key was used, if it was. */
   const replay = async () => {
     if (!opts.clientKey) return null;
-    const first = await TransferModel.findOne({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
+    const first = await firstWithKey(business, userId, opts.clientKey);
     if (!first) return null;
     assertSameRequest(first.requestHash, hash);
-    if (!first.batch) return { transfers: [first], batch: null, replayed: true };
-    const [transfers, batch] = await Promise.all([TransferModel.find({ batch: first.batch }).sort({ _id: 1 }), TransferBatchModel.findById(first.batch)]);
-    return { transfers, batch, replayed: true };
+    return replayOf(first);
   };
 
   const earlier = await replay();
