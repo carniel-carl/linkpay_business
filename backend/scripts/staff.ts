@@ -6,11 +6,13 @@
 //   bun run staff enable <email>
 //   bun run staff sign-out <email>     ends every session
 //   bun run staff list
-// Every change is written to the audit log, by "Staff command line (<os user>@<host>)".
+// Every change is written to the audit log, by "Staff command line (<os user>@<host>)". A role change also
+// notifies the staff member, as the console does.
 import { connectDB, disconnectDB } from "../src/config/db";
 import { STAFF_ROLES, SUPER_ADMIN_ROLE, isStaffRole, type StaffRole } from "../src/config/staffPermissions";
 import { StaffModel, type StaffDocument } from "../src/models/Staff";
 import { audit, cliActor, type AuditEntry } from "../src/services/audit";
+import { staffRoleChanged } from "../src/services/notificationEvents";
 import { changeStaffAccess, staffRoleLabel } from "../src/services/staff";
 import { revokeStaffSessions } from "../src/services/staffAuth";
 import { HttpError } from "../src/utils/HttpError";
@@ -105,6 +107,9 @@ export async function runStaffCommand(
           summary: `Changed ${staff.name}'s role from ${previous ? staffRoleLabel(previous) : "no role"} to ${staffRoleLabel(role)}`,
           details: { from: previous ?? null, to: role },
         });
+        // Told as the console tells them, after the audit entry. It shows in their notifications the next time
+        // the console loads them (this process can't reach a server's live stream).
+        await staffRoleChanged(staff._id, role, cliActor().name);
       }
       log(`${email} is now ${role}. It applies to their next request.`);
       break;

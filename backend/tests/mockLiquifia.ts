@@ -65,6 +65,8 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
     payouts: [] as Payout[],
     /** Account holders for name enquiry, keyed by account number. Unknown numbers resolve to "Test Recipient" unless they start with 000. */
     bankAccounts: new Map<string, string>(),
+    /** Account numbers whose name enquiry answers 200 with no name (as a bank's empty answer might come through). */
+    namelessAccounts: new Set<string>(),
     /** Make the next N payout creates fail with this error (e.g. a 503 or a timeout-like 502). */
     failNextPayouts: 0,
     failPayoutsWith: { status: 503, code: "UNAVAILABLE", message: "Try again later" },
@@ -180,6 +182,7 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
       if (req.method === "POST" && path === "/payouts/validate") {
         const bank = MOCK_BANKS.find((b) => b.uuid === body?.bank_uuid);
         if (!bank || !/^\d{10}$/.test(body?.account_number ?? "")) return error(400, "VALIDATION_ERROR", "Invalid account");
+        if (state.namelessAccounts.has(body.account_number)) return json({ account_number: body.account_number, account_name: "", bank_name: bank.name });
         const own = accounts.find((a) => a.account_number === body.account_number);
         const name = own ? own.account_name : (state.bankAccounts.get(body.account_number) ?? (body.account_number.startsWith("000") ? null : "Test Recipient"));
         if (!name) return error(400, "ACCOUNT_NOT_FOUND", "Account not found");

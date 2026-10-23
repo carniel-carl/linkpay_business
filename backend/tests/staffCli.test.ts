@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { parseStaffArgs, runStaffCommand, StaffCliError } from "../scripts/staff";
 import { AuditLogModel } from "../src/models/AuditLog";
+import { NotificationModel } from "../src/models/Notification";
 import { StaffModel } from "../src/models/Staff";
 import { StaffSessionModel } from "../src/models/StaffSession";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
@@ -123,6 +124,29 @@ describe("staff CLI", () => {
     expect(listed.status).toBe(200);
     expect(listed.body.items).toHaveLength(1);
     expect(listed.body.items[0].actor).toMatchObject({ type: "system", _id: null });
+  });
+
+  test("a role change tells the staff member, as the console does, by the command line", async () => {
+    const first = await superAdmin("first@linkpay.test");
+    await run("add", "ada@linkpay.test", "Ada Obi", "--role", "support");
+    const ada = (await StaffModel.findOne({ email: "ada@linkpay.test" }))!;
+    const told = () => NotificationModel.find({ audience: "staff", recipient: ada._id, type: "staff.role_changed" }).sort({ _id: 1 }).lean();
+    await run("set-role", "ada@linkpay.test", "support"); // no change, nothing to tell
+    expect(await told()).toHaveLength(0);
+
+    await run("set-role", "ada@linkpay.test", "operations");
+    const [note, ...rest] = await told();
+    expect(rest).toHaveLength(0);
+    expect(note).toMatchObject({ title: "Your role changed", link: "/" });
+    expect(note!.body).toMatch(/^Staff command line \(.+@.+\) made you Operations\.$/);
+    // Theirs to see in the console.
+    const listed = await t.api("GET", "/api/admin/notifications", { token: await signStaffToken("ada@linkpay.test") });
+    expect(listed.body.items.map((n: any) => n.type)).toContain("staff.role_changed");
+
+    // A refused change tells nobody.
+    expect(await refusal(run("set-role", "first@linkpay.test", "support"))).toContain("at least one active super admin");
+    expect(await NotificationModel.countDocuments({ recipient: first._id, type: "staff.role_changed" })).toBe(0);
+    expect(await told()).toHaveLength(1);
   });
 
   test("staff saved before roles existed can be given one", async () => {

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { BusinessModel } from "../src/models/Business";
+import { NotificationModel } from "../src/models/Notification";
 import { CheckoutModel } from "../src/models/PaymentLink";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
@@ -157,6 +158,36 @@ describe("a payment limit", () => {
     // Once someone's time to pay runs out, their place is free.
     await CheckoutModel.updateOne({ token: first[0]!.body.token }, { expiresAt: new Date(Date.now() - 1000) });
     expect((await start(link.slug, payer("c"), "10.3.0.3")).status).toBe(201);
+  });
+
+  test("a payment that lands after its place went to someone else is recorded, but flagged and the team told", async () => {
+    const { owner, headOfficeId, headVa } = await setup();
+    const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 3_000_00, maxPayments: 1 });
+    const late = (await start(link.slug, payer("late"), "10.4.0.1")).body;
+    // Their 30 minutes run out with no money, so the place goes to someone else, who pays.
+    await CheckoutModel.updateOne({ token: late.token }, { expiresAt: new Date(Date.now() - 1000) });
+    const onTime = await start(link.slug, payer("on-time"), "10.4.0.2");
+    expect(onTime.status).toBe(201);
+    const pay = async (checkout: { amountKobo: number }) => {
+      t.liquifia.inboundTransfers.unshift(inboundTransfer(headVa.providerAccountId, checkout.amountKobo, { narration: null, created_at: new Date().toISOString() }));
+      expect((await t.api("POST", "/api/admin/transactions/sync", { token: staffToken })).status).toBe(200);
+    };
+    await pay(onTime.body);
+    // Then the first payer's transfer lands, still inside the hold on their amount: it's theirs, so it's matched.
+    await pay(late);
+    expect((await t.api("GET", `/api/public/checkouts/${late.token}`)).body.status).toBe("paid");
+
+    const received = await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&status=received`, { token: owner.token });
+    const flags = Object.fromEntries(received.body.items.map((c: any) => [c.payer.email, c.overLimit]));
+    expect(flags).toEqual({ "chidion-time@example.com": false, "chidilate@example.com": true });
+    expect((await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body).toMatchObject({ paymentsCount: 2, maxPayments: 1 });
+
+    const told = await NotificationModel.find({ recipient: owner.user._id, type: "payment_link.paid", "data.paymentLinkId": link._id }).sort({ _id: 1 }).lean();
+    expect(told.map((n) => [n.title, (n.data as any)?.overLimit ?? false])).toEqual([
+      ["Payment link paid", false],
+      ["Payment over the link's limit", true],
+    ]);
+    expect(told[1]!.body).toEndWith("for Ankara bundle. It came after the link's limit of 1 payment was reached: refund it or honour it.");
   });
 });
 

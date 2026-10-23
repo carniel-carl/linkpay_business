@@ -153,12 +153,20 @@ async function findBatch(req: Request, id: string) {
 }
 
 async function serializeBatch(req: Request, batch: InstanceType<typeof TransferBatchModel>, transfers: TransferDocument[]) {
-  const items = await serialize(req, transfers);
+  const [items, branch, creator] = await Promise.all([
+    serialize(req, transfers),
+    BranchModel.findById(batch.branch).select("name isHeadOffice"),
+    UserModel.findById(batch.createdBy).select("name"),
+  ]);
   const counts = Object.fromEntries(TRANSFER_STATUSES.map((s) => [s, items.filter((i) => i.status === s).length]));
   return {
     _id: batch.id,
     title: batch.title ?? null,
     payoutList: batch.payoutList ? String(batch.payoutList) : null,
+    // The account it's paid from and who sent it, in the same shapes as on each transfer, so a client needn't
+    // read them from the first row.
+    branch: branch ? { _id: branch.id as string, name: branch.name, isHeadOffice: branch.isHeadOffice } : null,
+    createdBy: creator ? { _id: creator.id as string, name: creator.name } : null,
     count: batch.count,
     amountKobo: batch.amountKobo,
     feeKobo: batch.feeKobo,
@@ -499,7 +507,7 @@ export const MAX_BULK_ITEMS = 200;
 
 // The account name the member reviewed (resolve-accounts or the preview). Optional; when sent, a row whose
 // account is now under a different name is refused with ACCOUNT_NAME_CHANGED.
-const reviewedName = z.string().trim().min(1).max(200).optional();
+export const reviewedName = z.string().trim().min(1).max(200).optional();
 
 /** A bulk row: a saved beneficiary, or an account number and bank. */
 export const payoutRow = z.union([

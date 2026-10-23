@@ -383,9 +383,11 @@ function oldestFirstState(seg: Segment, from: number, unsettledSkip?: number) {
 
 // ---- When to sync ----
 
-let running: Promise<unknown> | null = null;
+type SyncCounts = Awaited<ReturnType<typeof syncInboundTransfers>>;
+
+let running: Promise<SyncCounts> | null = null;
 // A run waiting for the current one to finish (see syncAfterNewPayment). Everyone asking meanwhile shares it.
-let queued: Promise<unknown> | null = null;
+let queued: Promise<SyncCounts> | null = null;
 let lastSyncAt = 0;
 
 function startRun() {
@@ -411,7 +413,7 @@ export function syncIfStale(maxAgeMs: number) {
  * For a webhook saying money just arrived: a sync that starts after this call. A run already going may have read
  * past the new payment, so rather than joining it, one more run follows it.
  */
-export function syncAfterNewPayment(): Promise<unknown> {
+export function syncAfterNewPayment(): Promise<SyncCounts> {
   if (!running) return startRun();
   queued ??= running
     .catch(() => {})
@@ -420,6 +422,17 @@ export function syncAfterNewPayment(): Promise<unknown> {
       return running ?? startRun();
     });
   return queued;
+}
+
+/**
+ * Staff's "sync now", through the same single-flight: never a second run beside one already going (both would
+ * read the same pages and save over each other's place in the list). Staff press it for a payment that just
+ * landed, which a run already going may have read past, so like a webhook it gets a run that starts after the
+ * click: during a run, the one that follows it, shared with anyone else waiting. The counts are that run's.
+ */
+export async function syncNow() {
+  const waitedForRunningSync = running !== null;
+  return { ...(await syncAfterNewPayment()), waitedForRunningSync };
 }
 
 /** Starts the background sync (not used in tests). */

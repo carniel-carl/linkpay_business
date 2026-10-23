@@ -153,6 +153,9 @@ const checkoutSchema = new Schema(
     paidKobo: { type: Number },
     paidAt: { type: Date },
     receiptSentAt: { type: Date },
+    // Paid after the link's `maxPayments` was reached (a transfer that came after its time to pay, once its
+    // place had gone to someone else). Recorded, because the money is here; the team is told to refund or honour it.
+    overLimit: { type: Boolean },
   },
   { timestamps: true },
 );

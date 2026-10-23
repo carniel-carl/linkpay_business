@@ -113,6 +113,20 @@ describe("other lookups", () => {
     expect(await liquifia.listBanks()).toEqual([{ uuid: "BANK-GTB", name: "Guaranty Trust Bank" }]);
   });
 
+  test("a name enquiry answered without a name, or about another account, is an error, not 'no such account'", async () => {
+    const bodies = [{}, { account_name: "" }, { account_name: "   " }, { account_name: null }, { account_name: 42 }, "AMAKA OBI", [], { account_number: "0123456780", account_name: "AMAKA OBI" }];
+    for (const body of bodies) {
+      routes["POST /payouts/validate"] = data(body);
+      expectUnknown(await failure(liquifia.validateAccount("0123456789", "BANK-GTB")));
+    }
+    // "No such account" is still Liquifia's own 4xx.
+    delete routes["POST /payouts/validate"];
+    expect(await failure(liquifia.validateAccount("0123456789", "BANK-GTB"))).toMatchObject({ status: 404, code: "NOT_FOUND" });
+    // A usable answer is read as it is, the name trimmed.
+    routes["POST /payouts/validate"] = data({ account_number: "0123456789", account_name: " AMAKA OBI ", bank_name: "Guaranty Trust Bank" });
+    expect(await liquifia.validateAccount("0123456789", "BANK-GTB")).toEqual({ account_number: "0123456789", account_name: "AMAKA OBI", bank_name: "Guaranty Trust Bank" });
+  });
+
   test("an odd customer search is an error, not 'no such customer'", async () => {
     routes["GET /customers"] = data({ results: [] });
     expectUnknown(await failure(liquifia.findCustomerByReference("biz1")));

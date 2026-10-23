@@ -26,6 +26,20 @@ export type TestEnv = {
 };
 
 /** Starts an in-memory MongoDB, a mock Liquifia and the app on random ports. */
+/**
+ * An in-memory MongoDB. It picks a free port, but another process can take that port before mongod binds it
+ * (it happens when several suites or dev servers start at once), so a clash is retried on a new port.
+ */
+async function startMongo(attempts = 3): Promise<MongoMemoryServer> {
+  for (let i = 1; ; i++) {
+    try {
+      return await MongoMemoryServer.create();
+    } catch (err) {
+      if (i >= attempts || !/already in use/i.test(String(err))) throw err;
+    }
+  }
+}
+
 export async function startTestEnv(): Promise<TestEnv> {
   const liquifia = startMockLiquifia();
   env.liquifia.baseUrl = liquifia.url;
@@ -33,7 +47,7 @@ export async function startTestEnv(): Promise<TestEnv> {
     throw new Error("Refusing to run tests against a non-local Liquifia");
   }
 
-  const mongo = await MongoMemoryServer.create();
+  const mongo = await startMongo();
   await mongoose.connect(mongo.getUri(), { dbName: "test" });
   await mongoose.connection.syncIndexes();
 
