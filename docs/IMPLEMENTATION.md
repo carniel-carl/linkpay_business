@@ -633,3 +633,34 @@ Add a line per session: date, what was done, and anything left half-finished.
     - `validateAccount` treats a 200 with no name as `ACCOUNT_NOT_FOUND`.
     - About 88 CoreGraphics NaN warnings on mobile, probably an SVG drawn with empty data.
     - Admin's `start` script hardcodes port 3001.
+
+- **2026-10-23 (batch 6, minor fixes and three features):** on branch `fix/audit-batch-6`. Backend: 500/500 tests pass. Web, admin and mobile: typecheck and lint are clean.
+  - **Product owner's decisions:**
+    - **One backend instance at launch.** Don't scale horizontally until the per-instance items in the batch 5 entry are made multi-instance (MongoDB change streams, job leases).
+    - Build web payout lists, mobile bulk transfers and mobile batch approval.
+  - **Backend:**
+    - A name check that answers without a name returns `NAME_CHECK_UNAVAILABLE` (502, retryable), and a 408, 425 or 429 from the bank is treated as an outage.
+    - Admin "sync now" waits for a running sync and then shares the follow-up run. Its response has `waitedForRunningSync`.
+    - The staff CLI sends the role-change notification.
+    - Late payments past a link's `maxPayments` are flagged `overLimit`.
+    - Payout lists: a run checks for a replay first; `lastTransfer`; an idempotent create; `accountName` on run rows; batches carry `branch` and `createdBy`.
+  - **Web:**
+    - The email address moved out of auth URLs into an httpOnly `lp_auth_email` cookie (1 hour).
+    - The sign-in page shows one message at a time.
+    - Switching account on an invite now ends the server session.
+    - "Over limit" badge on checkouts.
+    - **New:** payout lists (`/payout-lists`) and Beneficiaries (`/beneficiaries`), in `src/components/payouts/` and `src/lib/payouts.ts`. Clicked through in a browser.
+  - **Mobile:**
+    - "Forgot PIN" resets inside the PIN sheet and then carries on with the action.
+    - The CoreGraphics NaN warnings came from RN iOS box shadows on views smaller than twice the shadow's negative spread (the segmented control's thumb). The thumb now uses `shadows.control`, and empty list cards aren't drawn. **Rule:** a view with `shadows.surface` must be at least 32pt in both directions, and one with `raised` at least 36pt; anything smaller uses `shadows.control`.
+    - **New:** bulk transfers (`/payments/bulk`: paste, file, saved beneficiaries or by hand, then review, PIN and batch) and batch approval (batches grouped in approvals, `/payments/batch/[id]` with Approve all, Reject all and Cancel). Batch notifications open the batch.
+  - **Mobile QA on the simulator (iPhone 17 Pro, against `dev:seed`):**
+    - Bulk transfers (beneficiaries, CSV with errors, by hand, review, PIN set-up and a wrong PIN) and batch approval (one level, two levels, Reject all, creator cancel, pull to refresh, opening from a notification) all pass.
+    - Fixed: the beneficiary picker shifting the next tap to the wrong row; lists going stale after a batch settled; pull to refresh missing the counts and the rule.
+    - The "Over limit" badge is on mobile checkouts too.
+  - **Tests:** `startTestEnv` retries the in-memory MongoDB on a port clash, which happened when several mongods started at once.
+  - **Left:**
+    - Batch approve/reject act on the whole batch, refusing it if any row is at another level.
+    - There's no batch summary endpoint: mobile loads each visible batch in full.
+    - On the web, Send money and Bulk transfer have no beneficiary picker, and there's no CSV import.
+    - In the PIN sheet's reset step, the resend timer restarts when you go back.

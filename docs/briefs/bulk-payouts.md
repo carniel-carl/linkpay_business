@@ -105,6 +105,7 @@ type PayoutList = {
 
 | Code | Status | When |
 | --- | --- | --- |
+| `NAME_CHECK_UNAVAILABLE` | 502 | The bank's name check answered without a name (a temporary outage, not "not found"). It also appears as a per-row code in `resolve-accounts`, `bulk/preview` and `INVALID_ROWS`. Retry it |
 | `BENEFICIARY_EXISTS` | 409 | Saving an account that's already saved. `details.beneficiaryId` |
 | `BENEFICIARY_OWN_ACCOUNT` | 400 | One of the business's own branch accounts |
 | `BENEFICIARY_NOT_FOUND` | 404 / 400 | Unknown, or another business's (in a list's items it's a 400) |
@@ -117,6 +118,22 @@ type PayoutList = {
 | `BRANCH_REQUIRED` | 400 | Running a list with no default branch and no `branch` in the body |
 
 Running a list can also return everything `POST /transfers/bulk` does: `INSUFFICIENT_BALANCE`, `NO_APPROVER`, `INVALID_ROWS`, `ACCOUNT_BUSY` and so on.
+
+## Changes and status (2026-10-23, batch 6)
+
+- **`POST /api/payout-lists`** accepts an optional `Idempotency-Key`, which also covers `fromBatch`.
+  - The same key and body replays with 200. The same key with a different body returns 422 `IDEMPOTENCY_KEY_REUSED`.
+  - If the list made with that key is deleted, a retry with the key creates a new list.
+- **`POST /:id/run`:**
+  - The replay is checked first, so a retry gets the original result even after the list was edited or deleted.
+  - Rows accept an optional `accountName`. A mismatch with the saved name returns `ACCOUNT_NAME_CHANGED` inside `INVALID_ROWS`.
+- **Payout lists** gain `lastTransfer: id | null`. A run sets exactly one of `lastBatch` (several people) or `lastTransfer` (one person).
+- **Batch objects** gain `branch: { _id, name, isHeadOffice } | null` and `createdBy: { _id, name } | null`.
+- **Web (done):**
+  - Payout lists: index, create and edit, pay with a review and the PIN, delete, and save a bulk transfer as a list.
+  - A minimal Beneficiaries page: search, add with a name check, nickname, delete.
+  - Still to build on web: the beneficiary picker in Send money, beneficiary rows and `saveBeneficiaries` in Bulk transfer, CSV import, and a beneficiary detail page with history.
+- **Mobile (done):** bulk transfer by paste, file, saved beneficiaries or by hand, with the same review (name checks, preview, approval line, name-change handling), the PIN, and a batch screen. Saving new recipients and payout lists are still web only.
 
 ## 3. Suggested screens
 

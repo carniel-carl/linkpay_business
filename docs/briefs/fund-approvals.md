@@ -112,6 +112,11 @@ At each new level, that level's approvers get `transfer.approval_requested` (ema
 
 ## 3. Client notes
 
+- **Mobile (2026-10-23):**
+  - Fund approvals and Transfers › Needs your approval show each batch as one row: name, count, total, level and "Needs you".
+  - The batch screen has "Approve all" (PIN), "Reject all" (note plus confirmation, no PIN) and, for the person who created it, "Cancel bulk transfer".
+  - "Approve all" only shows when every waiting row is at the member's level. The batch endpoints refuse the whole batch if any row is at another level, so a batch that has been partly approved one by one has to be finished one transfer at a time.
+
 - Web: a **Fund approvals** page (Pending / Approved / Declined, search, period, "Total pending" count) and a workflow editor behind a "Set up approvals" call to action (tiers with amount inputs, levels with a people picker from `GET approvers`). The transfer sheet shows the levels as a timeline. The existing approval rule dialog should offer the workflow as a fourth option.
 - Mobile: the transfer detail shows the level timeline, and approve/reject behave as before. Editing workflows can stay web-only at first, but show `mode: "workflow"` in the approval rule line ("Approval workflow, 2 tiers") rather than treating it as unknown.
 - Older clients that only know three modes will see `mode: "workflow"`. Make sure they don't crash.
