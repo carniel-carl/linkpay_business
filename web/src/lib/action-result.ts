@@ -12,8 +12,8 @@ export type ActionResult<T = void> =
       missing?: ChecklistItem[]
       /** When a rate-limited action (INVITE_COOLDOWN) can be tried again, ISO time. */
       retryAt?: string
-      /** Bulk transfers (INVALID_ROWS): what's wrong with each row, by index. */
-      rows?: { row: number; error: string; code?: string }[]
+      /** Bulk transfers (INVALID_ROWS): what's wrong with each row, by index. ACCOUNT_NAME_CHANGED rows carry the bank's name now. */
+      rows?: { row: number; error: string; code?: string; accountName?: string }[]
       /** TRANSACTION_PIN_INVALID: tries left before the PIN locks (1 to 4). */
       attemptsLeft?: number
       /** TRANSACTION_PIN_LOCKED: when the PIN can be used again, ISO time. */

@@ -84,7 +84,6 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
     )
   }
   const code = embed[kind]
-  const slug = /\/pay\/([^/?#]+)/.exec(embed.url)?.[1] ?? ""
   return (
     <section aria-labelledby="embed-title" className="surface grid min-w-0 gap-4 p-6 [&>*]:min-w-0">
       <div className="grid gap-1">
@@ -135,8 +134,8 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
             <CopyButton value={embed.verifyUrl} message="Address copied" label="Copy address" size="icon-xs" />
           </div>
           <p>
-            Anyone can pay a cheap link of their own with your order number and pass you that token, so check it&apos;s for this link and
-            this order. Fulfil the order only when:
+            This address answers only for this link&apos;s checkouts. Anyone can pay a cheap link of their own with your order number and pass
+            you that token, and here it gets a 404. Fulfil the order only when:
           </p>
           <ul className="grid list-disc gap-1 pl-5">
             <li>
@@ -144,15 +143,13 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
               <span className="font-mono">live</span>
             </li>
             <li>
-              <span className="font-mono">link.slug</span> is <span className="font-mono">{slug}</span> and <span className="font-mono">currency</span> is{" "}
-              <span className="font-mono">NGN</span>
+              <span className="font-mono">currency</span> is <span className="font-mono">NGN</span> and <span className="font-mono">priceKobo</span> is the
+              order total in kobo (<span className="font-mono">paidKobo</span> is at least that)
             </li>
             <li>
-              <span className="font-mono">priceKobo</span> is the order total in kobo (<span className="font-mono">paidKobo</span> is at least that)
+              <span className="font-mono">clientReference</span> is your order number
             </li>
-            <li>
-              <span className="font-mono">clientReference</span> is your order number, and you haven&apos;t already fulfilled that order
-            </li>
+            <li>you haven&apos;t fulfilled that order already. Then mark it paid, so the same checkout can&apos;t be used twice.</li>
           </ul>
           <p>
             In test mode the code works the same, but payments are simulated and come back with <span className="font-mono">mode: &quot;test&quot;</span>.

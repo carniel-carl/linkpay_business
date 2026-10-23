@@ -398,6 +398,59 @@ export type FeeQuote = {
   approvalLevels: number
 }
 
+/** POST /api/transfers/resolve-accounts: one result per row, in order. */
+export type BulkResolvedRow =
+  | ({ row: number; bankUuid: string } & ResolvedAccount)
+  | { row: number; accountNumber: string; bankUuid: string; error: string; code?: string }
+
+/** What's wrong with one bulk row (INVALID_ROWS `details.rows`, or a preview's `errors`). */
+export type BulkRowError = {
+  row: number
+  error: string
+  code?: string
+  /** ACCOUNT_NAME_CHANGED: the name the bank gives the account now. */
+  accountName?: string
+}
+
+/** POST /api/transfers/bulk/preview: a dry run of the batch. Nothing is created or held. */
+export type BulkPreview = {
+  branch: { _id: string; name: string; isHeadOffice: boolean }
+  count: number
+  amountKobo: number
+  feeKobo: number
+  stampDutyKobo: number
+  totalKobo: number
+  /** null when the balance couldn't be read just now. */
+  availableKobo: number | null
+  approval: {
+    needed: boolean
+    /** The amount that decided it: this batch plus what the member sent from the branch in the last 24 hours. */
+    decidingKobo: number
+    earlierKobo: number
+    levels: { level: number; any: boolean; approvers: { _id: string; name: string }[] }[]
+  }
+  rows: {
+    row: number
+    accountNumber: string | null
+    accountName: string | null
+    bankName: string | null
+    kind: TransferKind | null
+    label: string | null
+    beneficiary: string | null
+    amountKobo: number
+    feeKobo: number
+    stampDutyKobo: number
+    totalKobo: number
+    narration: string | null
+    error: string | null
+    code: string | null
+  }[]
+  errors: BulkRowError[]
+  /** What stops the whole batch: NO_APPROVER or INSUFFICIENT_BALANCE. */
+  blockers: { error: string; code?: string; details?: Record<string, unknown> }[]
+  ready: boolean
+}
+
 export type ApprovalMode = "never" | "always" | "above_threshold" | "workflow"
 
 /** A person named at a workflow level. `canApprove` is false once they've left or lost the right to approve. */
@@ -876,7 +929,7 @@ export type PaymentLinkEmbed = {
   inline: string
   javascript: string
   allowedOrigins: string[]
-  /** API_URL/api/public/checkouts/{token} */
+  /** API_URL/api/public/pay/<slug>/checkouts/{token}: answers only for this link's checkouts. */
   verifyUrl: string
   /** The link's mode now; the verify call returns each checkout's own. */
   mode: PaymentMode

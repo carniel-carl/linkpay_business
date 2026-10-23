@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next"
 import { Bricolage_Grotesque, Geist, Geist_Mono } from "next/font/google"
+import { headers } from "next/headers"
 import { Providers } from "@/components/common/providers"
 import "./globals.css"
 
@@ -24,11 +25,14 @@ export const viewport: Viewport = {
   ],
 }
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+// The proxy's per-request nonce (src/proxy.ts), for next-themes' inline script. Reading it renders every page per
+// request, which a nonce needs: a page built ahead of time would carry no nonce, or a stale one.
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const nonce = (await headers()).get("x-nonce") ?? undefined
   return (
     <html lang="en-NG" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${bricolage.variable} antialiased`}>
       <body className="min-h-dvh">
-        <Providers>{children}</Providers>
+        <Providers nonce={nonce}>{children}</Providers>
       </body>
     </html>
   )

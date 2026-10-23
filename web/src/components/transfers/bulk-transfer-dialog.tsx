@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { FileUp, Send } from "lucide-react"
 import { toast } from "sonner"
-import { createBulkTransfer, listBanks, quoteFees, resolveAccounts } from "@/app/(dashboard)/transfers/actions"
+import { createBulkTransfer, listBanks, previewBulkTransfer, resolveAccounts } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
 import { Button } from "@/components/ui/button"
 import {
@@ -23,7 +23,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { useIdempotencyKey } from "@/hooks/use-idempotency-key"
-import type { Bank, FeeQuote, ResolvedAccount } from "@/lib/api/types"
+import type { Bank, BulkPreview, BulkRowError, ResolvedAccount } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
 import { BULK_CHECK_SLICE, MAX_TRANSFER_KOBO, parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
@@ -49,6 +49,34 @@ const norm = (s: string) => s.toLowerCase().replace(/\b(plc|limited|ltd|bank|of|
 
 /** "Bank:account number", the key a name enquiry is kept under. */
 const lookupKey = (r: Row) => `${r.bank?.uuid}:${r.accountNumber}`
+
+/** What a preview was worked out for: the account and the rows, but not the names (they can be checked again). */
+const previewKey = (branch: string, list: Row[]) => JSON.stringify([branch, list.map((r) => [lookupKey(r), r.amountKobo, r.narration ?? null])])
+
+/** The rows as the API takes them, each with the account name the member is looking at, so the API can refuse a row whose name has changed. */
+const apiItems = (list: Row[], names: Record<string, Checked<ResolvedAccount>>) =>
+  list.map((r) => ({
+    accountNumber: r.accountNumber,
+    bankUuid: r.bank!.uuid,
+    amountKobo: r.amountKobo!,
+    narration: r.narration,
+    accountName: names[lookupKey(r)]?.data?.accountName,
+  }))
+
+/** "Ada, Bola or Chidi". */
+const joinOr = (names: string[]) => (names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} or ${names.at(-1)}`)
+
+/** "Needs approval from Ada or Bola, then Chidi", or "Sends straight away". */
+function approvalLine(approval: BulkPreview["approval"]) {
+  if (!approval.needed) return "Sends straight away"
+  const level = (l: BulkPreview["approval"]["levels"][number]) => {
+    if (!l.approvers.length) return "someone who can approve transfers"
+    if (l.any && l.approvers.length > 3) return "anyone who can approve transfers"
+    const names = l.approvers.map((a) => a.name)
+    return names.length > 3 ? `${names.slice(0, 2).join(", ")} or ${names.length - 2} others` : joinOr(names)
+  }
+  return `Needs approval from ${approval.levels.map(level).join(", then ")}`
+}
 
 /** Splits one CSV line, honouring double quotes ("Lagos, Ikeja"). */
 function splitCsvLine(line: string) {
@@ -131,10 +159,15 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   const [sourceId, setSourceId] = useState(defaultBranchId ?? accounts[0]?.branch._id ?? "")
   const [title, setTitle] = useState("")
   const [text, setText] = useState("")
-  // Name enquiries by bank and account number, and fees by amount. Kept while the dialog is open, so going
-  // back to fix a row only checks what changed; failed checks are tried again.
+  // Name enquiries by bank and account number, kept while the dialog is open, so going back to fix a row only
+  // checks what changed; failed checks are tried again.
   const [lookups, setLookups] = useState<Record<string, Checked<ResolvedAccount>>>({})
-  const [fees, setFees] = useState<Record<number, Checked<FeeQuote>>>({})
+  // The API's dry run of the batch (fees, totals, balance, approval), for the rows it was worked out for.
+  const [preview, setPreview] = useState<{ key: string; data: BulkPreview } | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  // Accounts the bank now gives a different name for, with the name the member checked before. Nothing can be
+  // sent until they've looked at the new names.
+  const [renamed, setRenamed] = useState<Record<string, string>>({})
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [serverErrors, setServerErrors] = useState<Record<number, string>>({})
   const [error, setError] = useState<string>()
@@ -155,20 +188,26 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   const invalid = rows.filter((r, i) => r.error || serverErrors[i]).length
   const tooMany = rows.length > MAX_ROWS
   const spendable = source?.balance?.availableKobo ?? source?.balance?.amountKobo
-  const checking = progress !== null
+  const checking = progress !== null || previewing
+  // Only a preview of exactly these rows from this account counts.
+  const current = preview?.key === previewKey(sourceId, rows) ? preview.data : null
 
   // The review: each row with its account name and fee, and what stops it being sent.
   const checked = rows.map((r, i) => {
     const lookup = lookups[lookupKey(r)]
-    const fee = r.amountKobo !== null ? fees[r.amountKobo] : undefined
-    const problem = r.error ?? serverErrors[i] ?? lookup?.error ?? fee?.error ?? (!lookup?.data || !fee?.data ? "Not checked yet." : undefined)
-    return { ...r, account: lookup?.data, fee: fee?.data, problem }
+    const quoted = current?.rows[i]
+    // A changed name isn't a fault to fix: the row shows the new name and waits for the member to check it.
+    const quotedError = quoted?.code === "ACCOUNT_NAME_CHANGED" ? undefined : (quoted?.error ?? undefined)
+    const problem = r.error ?? serverErrors[i] ?? lookup?.error ?? quotedError ?? (!lookup?.data || !quoted ? "Not checked yet." : undefined)
+    return { ...r, account: lookup?.data, fee: quoted, problem, was: renamed[lookupKey(r)] }
   })
   const failed = checked.filter((r) => r.problem).length
-  const feeKobo = checked.reduce((s, r) => s + (r.fee?.feeKobo ?? 0), 0)
-  const stampDutyKobo = checked.reduce((s, r) => s + (r.fee?.stampDutyKobo ?? 0), 0)
-  const grandTotalKobo = totalKobo + feeKobo
-  const short = spendable !== undefined && grandTotalKobo > spendable
+  // Rows waiting for a changed name to be checked, and how many accounts that is.
+  const changed = checked.filter((r) => r.was !== undefined && !r.problem).length
+  const changedAccounts = new Set(checked.filter((r) => r.was !== undefined && !r.problem).map(lookupKey)).size
+  const short = current?.blockers.find((b) => b.code === "INSUFFICIENT_BALANCE")
+  const blockers = current?.blockers.filter((b) => b.code !== "INSUFFICIENT_BALANCE") ?? []
+  const available = current?.availableKobo ?? spendable
 
   function reset() {
     checkRun.current++
@@ -176,7 +215,8 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setText("")
     setTitle("")
     setLookups({})
-    setFees({})
+    setPreview(null)
+    setRenamed({})
     setProgress(null)
     setServerErrors({})
     setError(undefined)
@@ -191,84 +231,127 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   }
 
   /**
-   * Name enquiries for the accounts, and fees for the amounts, that haven't been checked yet. A slice at a time
-   * (the server runs 5 at once), so the progress bar moves. False if it was stopped or the check itself failed.
+   * Shows the names the bank gives now for rows refused with ACCOUNT_NAME_CHANGED, and marks those accounts
+   * to be checked again (with the name the member saw before).
+   */
+  function markRenamed(list: Row[], names: Record<string, Checked<ResolvedAccount>>, changes: BulkRowError[]) {
+    const found = changes.filter((c) => c.code === "ACCOUNT_NAME_CHANGED" && c.accountName && list[c.row])
+    if (!found.length) return names
+    const next = { ...names }
+    const before: Record<string, string> = {}
+    for (const c of found) {
+      const key = lookupKey(list[c.row])
+      const was = names[key]?.data
+      if (!was) continue
+      before[key] = renamed[key] ?? was.accountName
+      next[key] = { data: { ...was, accountName: c.accountName! } }
+    }
+    setLookups(next)
+    setRenamed((prev) => ({ ...before, ...prev }))
+    return next
+  }
+
+  /**
+   * Name enquiries for the accounts that haven't been checked yet, a slice of rows per call so the progress bar
+   * moves (the API runs 5 at a time). The names afterwards, or null if it was stopped or the check failed.
    */
   async function check(list: Row[]) {
     const run = ++checkRun.current
     const pending = new Map<string, { accountNumber: string; bankUuid: string }>()
     for (const r of list) if (!lookups[lookupKey(r)]?.data) pending.set(lookupKey(r), { accountNumber: r.accountNumber, bankUuid: r.bank!.uuid })
     const queue = [...pending.entries()]
-    const amounts = [...new Set(list.map((r) => r.amountKobo!))].filter((a) => !fees[a]?.data)
-    const total = queue.length + amounts.length
     setError(undefined)
-    if (!total) return true
+    let names = lookups
+    if (!queue.length) return names
 
     let done = 0
-    setProgress({ done, total })
+    setProgress({ done, total: queue.length })
     try {
       for (let i = 0; i < queue.length; i += BULK_CHECK_SLICE) {
         const slice = queue.slice(i, i + BULK_CHECK_SLICE)
         const result = await resolveAccounts(slice.map(([, row]) => row))
-        if (checkRun.current !== run) return false
+        if (checkRun.current !== run) return null
         if (!result.ok) {
           setError(result.error)
-          return false
+          return null
         }
-        setLookups((prev) => ({ ...prev, ...Object.fromEntries(slice.map(([key], j) => [key, result.data[j]])) }))
-        setProgress({ done: (done += slice.length), total })
+        names = { ...names, ...Object.fromEntries(slice.map(([key], j) => [key, result.data[j]])) }
+        setLookups(names)
+        setProgress({ done: (done += slice.length), total: queue.length })
       }
-      for (let i = 0; i < amounts.length; i += BULK_CHECK_SLICE) {
-        const slice = amounts.slice(i, i + BULK_CHECK_SLICE)
-        const result = await quoteFees(slice)
-        if (checkRun.current !== run) return false
-        if (!result.ok) {
-          setError(result.error)
-          return false
-        }
-        setFees((prev) => ({ ...prev, ...Object.fromEntries(slice.map((kobo, j) => [kobo, result.data[j]])) }))
-        setProgress({ done: (done += slice.length), total })
-      }
-      return true
+      return names
     } catch {
       if (checkRun.current === run) setError("We couldn't finish checking the accounts. Check your connection and try again.")
-      return false
+      return null
     } finally {
       if (checkRun.current === run) setProgress(null)
+    }
+  }
+
+  /** The API's dry run for these rows: each fee, the totals, the balance and who would have to approve. */
+  async function runPreview(list: Row[], names: Record<string, Checked<ResolvedAccount>>) {
+    const run = checkRun.current
+    setPreviewing(true)
+    try {
+      const result = await previewBulkTransfer({ branch: sourceId, title: title.trim() || undefined, items: apiItems(list, names) })
+      if (checkRun.current !== run) return false
+      if (!result.ok) {
+        setError(result.error)
+        return false
+      }
+      markRenamed(list, names, result.data.errors)
+      setPreview({ key: previewKey(sourceId, list), data: result.data })
+      return true
+    } catch {
+      if (checkRun.current === run) setError("We couldn't work out the fees. Check your connection and try again.")
+      return false
+    } finally {
+      setPreviewing(false)
     }
   }
 
   async function review() {
     if (!rows.length || tooMany || rows.some((r) => r.error)) return
     setServerErrors({})
-    if (await check(rows)) setStep("review")
+    const names = await check(rows)
+    if (names && (await runPreview(rows, names))) setStep("review")
   }
 
   async function checkAgain() {
     setServerErrors({})
-    await check(rows)
+    const names = await check(rows)
+    if (names) await runPreview(rows, names)
   }
 
-  /** Takes the rows that can't be sent out of the list (and the CSV text), so the rest can go. */
-  function removeFailed() {
-    const drop = new Set(checked.filter((r) => r.problem).map((r) => r.line))
-    setText(text.split(/\r?\n/).filter((_, i) => !drop.has(i + 1)).join("\n"))
+  /** Takes rows out of the list (and the CSV text), so the rest can go, and works the totals out again. */
+  async function removeRows(drop: Set<number>) {
+    const next = text
+      .split(/\r?\n/)
+      .filter((_, i) => !drop.has(i + 1))
+      .join("\n")
+    setText(next)
     setServerErrors({})
-    if (drop.size >= rows.length) setStep("details")
+    const left = banks ? parseRows(next, banks) : []
+    if (!left.length || drop.size >= rows.length) return setStep("details")
+    await runPreview(left, lookups)
   }
+
+  const removeFailed = () => removeRows(new Set(checked.filter((r) => r.problem).map((r) => r.line)))
+  const removeRenamed = () => removeRows(new Set(checked.filter((r) => r.was !== undefined).map((r) => r.line)))
 
   async function send() {
     setBusy(true)
     setError(undefined)
     setServerErrors({})
-    const request = {
-      branch: sourceId,
-      title: title.trim() || undefined,
-      items: rows.map((r) => ({ accountNumber: r.accountNumber, bankUuid: r.bank!.uuid, amountKobo: r.amountKobo!, narration: r.narration })),
-    }
+    const items = apiItems(rows, lookups)
+    const request = { branch: sourceId, title: title.trim() || undefined, items }
     // The same rows sent again keep the key, whatever went wrong (a wrong PIN included); editing the list or the
-    // account gets a new one.
-    const idempotencyKey = idempotency.keyFor(request)
+    // account gets a new one. The names are left out, as the API leaves them out of what it compares a repeat
+    // with: sending again after checking a changed name replays a batch that already went instead of paying twice.
+    const idempotencyKey = idempotency.keyFor({
+      ...request,
+      items: items.map((i) => ({ accountNumber: i.accountNumber, bankUuid: i.bankUuid, amountKobo: i.amountKobo, narration: i.narration })),
+    })
     const count = `${rows.length} ${rows.length === 1 ? "transfer" : "transfers"}`
     const result = await pin.confirm({
       purpose: `send ${formatNaira(totalKobo)} to ${rows.length} ${rows.length === 1 ? "person" : "people"}`,
@@ -278,8 +361,12 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setBusy(false)
     if (!result) return
     if (!result.ok) {
-      setError(result.error)
-      if (result.rows) setServerErrors(Object.fromEntries(result.rows.map((r) => [r.row, r.error])))
+      const renamedRows = result.rows?.filter((r) => r.code === "ACCOUNT_NAME_CHANGED") ?? []
+      const others = result.rows?.filter((r) => r.code !== "ACCOUNT_NAME_CHANGED") ?? []
+      markRenamed(rows, lookups, renamedRows)
+      if (others.length) setServerErrors(Object.fromEntries(others.map((r) => [r.row, r.error])))
+      // Changed names have their own message above the rows.
+      if (!renamedRows.length || others.length) setError(result.error)
       return
     }
     const batch = result.data.batch
@@ -437,23 +524,70 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
               <ReviewRow
                 label="Fees"
                 value={
-                  <span className="grid justify-items-end">
-                    <span className="figure">{formatNaira(feeKobo)}</span>
-                    {stampDutyKobo > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        includes <span className="figure">{formatNaira(stampDutyKobo)}</span> stamp duty
-                      </span>
-                    )}
-                  </span>
+                  current ? (
+                    <span className="grid justify-items-end">
+                      <span className="figure">{formatNaira(current.feeKobo)}</span>
+                      {current.stampDutyKobo > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          includes <span className="figure">{formatNaira(current.stampDutyKobo)}</span> stamp duty
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">Working out</span>
+                  )
                 }
               />
-              <ReviewRow label="Total from the account" value={<span className="type-display text-xl figure">{formatNaira(grandTotalKobo)}</span>} />
+              <ReviewRow
+                label="Total from the account"
+                value={<span className="type-display text-xl figure">{current ? formatNaira(current.totalKobo) : "…"}</span>}
+              />
+              {current && (
+                <ReviewRow
+                  label="Approval"
+                  value={
+                    <span className="grid justify-items-end text-right">
+                      <span className="font-medium">{approvalLine(current.approval)}</span>
+                      {current.approval.needed && current.approval.earlierKobo > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          Counts the <span className="figure">{formatNaira(current.approval.earlierKobo)}</span> you&apos;ve sent from {current.branch.name}{" "}
+                          in the last 24 hours
+                        </span>
+                      )}
+                      {current.approval.needed && <span className="text-xs text-muted-foreground">The money is held until it&apos;s approved</span>}
+                    </span>
+                  }
+                />
+              )}
             </dl>
 
             {short && (
               <p className="text-sm text-destructive">
-                With {formatNaira(feeKobo)} in fees this needs {formatNaira(grandTotalKobo)}. {source!.branch.name} has {formatNaira(spendable!)} available.
+                With {formatNaira(current!.feeKobo)} in fees this needs {formatNaira(current!.totalKobo)}. {source?.branch.name} has{" "}
+                {formatNaira(available ?? 0)} available.
               </p>
+            )}
+            {blockers.map((b) => (
+              <p key={b.code ?? b.error} className="text-sm text-destructive">
+                {b.error}
+              </p>
+            ))}
+
+            {changed > 0 && (
+              <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-warning-subtle px-3 py-2.5 text-sm">
+                <p className="text-warning-foreground">
+                  The bank now gives a different name for {changedAccounts === 1 ? "1 account" : `${changedAccounts} accounts`}. Check the
+                  highlighted {changed === 1 ? "row is" : "rows are"} who you mean to pay before sending.
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setRenamed({})} disabled={busy || checking}>
+                    The new {changedAccounts === 1 ? "name is" : "names are"} right
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={removeRenamed} disabled={busy || checking}>
+                    Remove {changed === 1 ? "it" : "them"}
+                  </Button>
+                </div>
+              </div>
             )}
 
             {failed > 0 && (
@@ -486,7 +620,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
                   </thead>
                   <tbody className="divide-y">
                     {checked.map((r) => (
-                      <tr key={r.line} className={cn(r.problem && "bg-destructive/5")}>
+                      <tr key={r.line} className={cn(r.problem ? "bg-destructive/5" : r.was !== undefined && "bg-warning-subtle/60")}>
                         <td className="px-4 py-2 align-top text-muted-foreground figure">{r.line}</td>
                         <td className="px-2 py-2 align-top">
                           {r.account && <ResolvedName account={r.account} />}
@@ -495,6 +629,10 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
                           </span>
                           {r.problem ? (
                             <span className="block text-xs text-destructive">{r.problem}</span>
+                          ) : r.was !== undefined ? (
+                            <span className="block text-xs text-warning-foreground">
+                              The bank&apos;s name for this account has changed. You checked “{r.was}”.
+                            </span>
                           ) : (
                             r.narration && <span className="block text-xs text-muted-foreground">{r.narration}</span>
                           )}
@@ -510,6 +648,11 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
           </div>
         )}
 
+        {previewing && !progress && (
+          <p role="status" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner /> Working out the fees and who needs to approve
+          </p>
+        )}
         {progress && (
           <div role="status" className="grid gap-2 text-sm">
             <div className="flex items-center justify-between gap-2 text-muted-foreground">
@@ -540,7 +683,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
               <Button variant="outline" onClick={() => setStep("details")} disabled={busy || checking}>
                 Back
               </Button>
-              <Button onClick={send} disabled={busy || checking || failed > 0 || short}>
+              <Button onClick={send} disabled={busy || checking || !current || failed > 0 || changed > 0 || !!short || blockers.length > 0}>
                 {busy ? <Spinner /> : <Send data-icon="inline-start" aria-hidden />}
                 {busy ? "Sending" : `Send ${rows.length} ${rows.length === 1 ? "transfer" : "transfers"}`}
               </Button>

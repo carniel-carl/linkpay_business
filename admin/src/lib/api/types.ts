@@ -146,6 +146,7 @@ export type StaffPermission =
   | "transactions.sync"
   | "users.view"
   | "activity.view"
+  | "activity.view_ips"
   | "compliance.view"
   | "compliance.manage"
   | "compliance.ban"
@@ -321,6 +322,7 @@ export type ComplianceRules = {
   statuses: ComplianceStatus[]
 }
 
+/** Every action in backend/src/models/AuditLog.ts AUDIT_ACTIONS; keep the two in step. */
 export type AuditAction =
   | "kyb.approved"
   | "kyb.changes_requested"
@@ -335,6 +337,11 @@ export type AuditAction =
   | "business.reinstated"
   | "business.banned"
   | "business.unbanned"
+  | "link_report.resolved"
+  | "payment_link.taken_down"
+  | "payment_link.restored"
+  | "donation.hidden"
+  | "donation.shown"
   | "staff.invited"
   | "staff.invite_resent"
   | "staff.invite_revoked"
@@ -343,6 +350,9 @@ export type AuditAction =
   | "staff.enabled"
   | "staff.signed_out"
 
+/** What an entry is about (backend/src/models/AuditLog.ts `target.kind`). A checkout is a donation. */
+export type AuditTargetKind = "business" | "flag" | "staff" | "staff_invite" | "branch" | "payment_link" | "checkout" | "link_report"
+
 /** One audit log entry. On a business's timeline `business` is its id; the audit log expands it. */
 export type AuditEntry<B = string | null> = {
   _id: string
@@ -350,7 +360,7 @@ export type AuditEntry<B = string | null> = {
   summary: string
   actor: { type: "staff" | "system"; _id: string | null; name: string }
   business: B
-  target: { kind: "business" | "flag" | "staff" | "staff_invite" | "branch"; _id: string } | null
+  target: { kind: AuditTargetKind; _id: string } | null
   details: Record<string, unknown>
   createdAt: string
 }
@@ -468,7 +478,8 @@ export type BusinessMembers = {
       emailVerified: boolean
       twoFactor: TwoFactorMethod | null
       lastSignInAt: string | null
-      lastSignInIp: string | null
+      /** Only for staff with `activity.view_ips` (compliance and super admins); absent for everyone else. */
+      lastSignInIp?: string | null
       createdAt: string
     }
     role: string
