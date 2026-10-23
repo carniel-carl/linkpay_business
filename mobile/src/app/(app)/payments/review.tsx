@@ -23,7 +23,7 @@ export default function Review() {
   const draft = useSendDraft((s) => s.draft);
   const accounts = useAccounts(true);
   const kobo = parseNaira(draft.amount);
-  const fee = useFee(kobo);
+  const fee = useFee(kobo, draft.from);
   const pin = useTransactionPin();
   const [error, setError] = useState<string>();
 

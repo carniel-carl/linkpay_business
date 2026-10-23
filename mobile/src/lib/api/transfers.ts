@@ -186,11 +186,12 @@ export function useResolveAccount(accountNumber: string, bankUuid?: string) {
   });
 }
 
-export function useFee(amountKobo: number | undefined) {
+/** With `branch`, whether approval is needed counts what this member sent from it in the last 24 hours, as sending does. */
+export function useFee(amountKobo: number | undefined, branch?: string) {
   const business = useBusinessKey();
   return useQuery({
-    queryKey: [business, "fee", amountKobo],
-    queryFn: () => api<FeeQuote>(`/api/transfers/fee?amountKobo=${amountKobo}`),
+    queryKey: [business, "fee", amountKobo, branch ?? null],
+    queryFn: () => api<FeeQuote>(`/api/transfers/fee?amountKobo=${amountKobo}${branch ? `&branch=${idSegment(branch)}` : ""}`),
     enabled: !!amountKobo && amountKobo >= 100,
     staleTime: 5 * 60_000,
   });

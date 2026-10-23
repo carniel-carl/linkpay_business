@@ -88,7 +88,9 @@ export default function Welcome() {
               <Text className="text-[15px] leading-[22px] text-band-muted">
                 {endedReason === "expired"
                   ? `Your session ended. Sign in with ${bio.label} to carry on as ${profile.email}.`
-                  : `Signed in on this phone as ${profile.email}.`}
+                  : endedReason === "noPasscode"
+                    ? `This phone needs a passcode. Sign in with ${bio.label} to choose one.`
+                    : `Signed in on this phone as ${profile.email}.`}
               </Text>
             </Animated.View>
             <Animated.View entering={rise(1)} className="gap-3">

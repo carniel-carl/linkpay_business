@@ -1,8 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
-import { useState } from "react";
-import { Alert, Linking, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, AppState, Linking, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { CodeForm } from "@/components/auth/code-form";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,51 @@ import { useTheme } from "@/theme/theme";
 const startSetup = (password: string) =>
   api<{ secret: string; otpauthUrl: string }>("/api/auth/2fa/totp/setup", { method: "POST", json: { password } });
 
+/** How long a copied key stays on the clipboard: time to paste it into the authenticator app. */
+const KEY_ON_CLIPBOARD_MS = 60_000;
+
+/**
+ * Copies the key, and takes it off the clipboard after a minute or when this screen closes, but only if it's
+ * still the key there: anything copied since is left alone. Not on going to the background, since that's
+ * where it gets pasted. Android also keeps it out of the clipboard preview; expo-clipboard has no expiring
+ * or this-device-only copy on iOS. `copied` is true while the key may still be on the clipboard.
+ */
+function useCopyKey() {
+  const [copied, setCopied] = useState(false);
+  const onClipboard = useRef<{ key: string; until: number } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const clear = useCallback(async (now = false) => {
+    const c = onClipboard.current;
+    // Android doesn't let an app in the background read the clipboard, so that waits until it's back.
+    if (!c || (!now && Date.now() < c.until) || AppState.currentState !== "active") return;
+    onClipboard.current = null;
+    setCopied(false);
+    if ((await Clipboard.getStringAsync().catch(() => "")) === c.key) await Clipboard.setStringAsync("").catch(() => false);
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void clear();
+    });
+    return () => {
+      sub.remove();
+      clearTimeout(timer.current);
+      void clear(true);
+    };
+  }, [clear]);
+
+  async function copy(key: string) {
+    await Clipboard.setStringAsync(key, { android: { isSensitive: true } });
+    onClipboard.current = { key, until: Date.now() + KEY_ON_CLIPBOARD_MS };
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => void clear(true), KEY_ON_CLIPBOARD_MS);
+  }
+
+  return { copied, copy };
+}
+
 /**
  * Authenticator setup on the phone itself: the authenticator app is usually on this same phone, so instead
  * of a QR code it opens the app with the otpauth link, or shows the key to type in.
@@ -29,7 +74,7 @@ export default function TotpSetup() {
   const setup = useMutation({ mutationFn: startSetup });
   const enable = useEnableTotp();
   const [password, setPassword] = useState("");
-  const [copied, setCopied] = useState(false);
+  const clipboard = useCopyKey();
 
   function start() {
     if (password) setup.mutate(password);
@@ -46,8 +91,7 @@ export default function TotpSetup() {
 
   async function copy() {
     if (!setup.data) return;
-    await Clipboard.setStringAsync(setup.data.secret);
-    setCopied(true);
+    await clipboard.copy(setup.data.secret);
   }
 
   async function submit(code: string) {
@@ -91,8 +135,14 @@ export default function TotpSetup() {
             {grouped}
           </Figure>
           <Button variant="outline" size="sm" className="self-start" onPress={() => void copy()}>
-            {copied ? "Copied" : "Copy key"}
+            {clipboard.copied ? "Copied" : "Copy key"}
           </Button>
+          {clipboard.copied && (
+            <Text className="text-[13px] leading-[18px] text-muted-foreground">
+              Paste it into your authenticator app. For your security, LinkPay clears it from your clipboard after a
+              minute.
+            </Text>
+          )}
         </View>
       </View>
       <View className="gap-4">

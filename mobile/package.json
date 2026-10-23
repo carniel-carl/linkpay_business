@@ -2,6 +2,7 @@
   "name": "mobile",
   "version": "1.0.0",
   "main": "expo-router/entry",
+  "packageManager": "bun@1.4.0",
   "dependencies": {
     "@expo/ui": "~58.0.21",
     "@hookform/resolvers": "^6.0.0",

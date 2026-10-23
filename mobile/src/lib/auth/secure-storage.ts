@@ -19,6 +19,8 @@ export const KEYS = {
   installation: "lp.device.installation",
   /** The business picked in the switcher (X-Business-Id). */
   business: "lp.app.business",
+  /** Sign-outs the server hasn't confirmed yet (see session.ts). Used only to end those sessions, never to sign in. */
+  pendingLogout: "lp.session.pending-logout",
 } as const;
 
 /** What a phone remembers about its user while signed out with biometric sign-in on. */
@@ -41,8 +43,11 @@ export const biometricSet = (key: string, value: string, prompt: string) =>
   SecureStore.setItemAsync(key, value, biometricOptions(prompt));
 export const biometricGet = (key: string, prompt: string) => SecureStore.getItemAsync(key, biometricOptions(prompt));
 
-/** Deletes everything, or everything but the installation id (a sign-out that forgets this phone's user). */
+/**
+ * Deletes everything, or everything but the installation id (a sign-out that forgets this phone's user).
+ * Pending sign-outs stay either way: they can only end sessions on the server, and a wipe must not cancel that.
+ */
 export async function secureWipe({ keepInstallation = false } = {}) {
-  const keys = Object.values(KEYS).filter((k) => !(keepInstallation && k === KEYS.installation));
+  const keys = Object.values(KEYS).filter((k) => k !== KEYS.pendingLogout && !(keepInstallation && k === KEYS.installation));
   await Promise.all(keys.map((k) => secureDelete(k).catch(() => undefined)));
 }
