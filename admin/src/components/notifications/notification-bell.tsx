@@ -8,6 +8,7 @@ import {
   CheckCheck,
   ClipboardCheck,
   Flag,
+  Hourglass,
   ShieldAlert,
   TriangleAlert,
   UserCog,
@@ -31,6 +32,7 @@ import { cn } from "@/lib/utils"
 const ICONS: Record<string, LucideIcon> = {
   "kyb.submitted": ClipboardCheck,
   "account.setup_failed": TriangleAlert,
+  "transfer.stuck": Hourglass,
   "staff.invite_accepted": UserPlus,
   "staff.role_changed": UserCog,
   "compliance.flag_raised": Flag,
@@ -38,7 +40,7 @@ const ICONS: Record<string, LucideIcon> = {
 }
 
 // Needs attention: shown with the destructive tint.
-const ALERT_TYPES = new Set(["account.setup_failed", "compliance.flag_raised", "compliance.business_restricted"])
+const ALERT_TYPES = new Set(["account.setup_failed", "transfer.stuck", "compliance.flag_raised", "compliance.business_restricted"])
 
 // After the stream closes for good (e.g. the server refused it), try again this long after.
 const RETRY_MS = 30_000

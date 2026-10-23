@@ -221,6 +221,7 @@ export type AppNotification = {
   type:
     | "kyb.submitted"
     | "account.setup_failed"
+    | "transfer.stuck"
     | "staff.invite_accepted"
     | "staff.role_changed"
     | "compliance.flag_raised"

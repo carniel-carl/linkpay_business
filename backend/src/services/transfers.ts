@@ -7,6 +7,7 @@ import { BusinessModel } from "../models/Business";
 import type { MembershipDocument } from "../models/Membership";
 import { TransactionModel } from "../models/Transaction";
 import {
+  OPEN_TRANSFER_STATUSES,
   TransferBatchModel,
   TransferModel,
   type TransferDocument,
@@ -15,9 +16,10 @@ import {
 import { UserModel } from "../models/User";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { HttpError } from "../utils/HttpError";
+import { assertSameRequest, isDuplicateClientKey, requestHash } from "../utils/idempotency";
 import { sendTransferAwaitingApprovalEmail, sendTransferFailedEmail, sendTransferRejectedEmail } from "./email";
-import { liquifia, LiquifiaError, newIdempotencyKey, toKobo, toNaira, type LiquifiaBank } from "./liquifia/client";
-import { transferApprovalRequested, transferSettled, transfersDecided } from "./notificationEvents";
+import { liquifia, LiquifiaError, newIdempotencyKey, PAYOUT_STATUSES, toKobo, toNaira, type LiquifiaBank, type LiquifiaPayout } from "./liquifia/client";
+import { transferApprovalRequested, transferSettled, transfersDecided, transferStuck } from "./notificationEvents";
 import { assertMoneyCanMove } from "./compliance";
 import { savedByAccount } from "./savings";
 import {
@@ -167,26 +169,28 @@ export async function quoteFee(amountKobo: number) {
 // ---------------------------------------------------------------------------------------------------------
 
 /**
- * What our side still holds on each account: transfers waiting for approval, and approved ones that
- * Liquifia hasn't accepted yet. Once Liquifia accepts a payout it debits the account itself.
+ * What our side still holds on each account: every transfer that hasn't succeeded or failed yet, whether it's
+ * waiting for approval or already with Liquifia. Once Liquifia has accepted a payout its balance may already
+ * show the debit, so until the payout settles that money is counted twice (and `availableKobo` can go below
+ * zero). That's the safe direction while nobody has confirmed when the debit lands on a live account. If
+ * Liquifia confirms the debit lands as soon as it accepts a payout, this can go back to holding only transfers
+ * without a `provider.payoutId`.
  */
 export async function heldByAccount(accountIds: Types.ObjectId[]) {
   const rows = await TransferModel.aggregate<{ _id: Types.ObjectId; heldKobo: number }>([
-    {
-      $match: {
-        virtualAccount: { $in: accountIds },
-        $or: [{ status: "pending_approval" }, { status: "processing", "provider.payoutId": { $exists: false } }],
-      },
-    },
+    { $match: { virtualAccount: { $in: accountIds }, status: { $in: OPEN_TRANSFER_STATUSES } } },
     { $group: { _id: "$virtualAccount", heldKobo: { $sum: "$totalKobo" } } },
   ]);
   return new Map(rows.map((r) => [String(r._id), r.heldKobo]));
 }
 
-/** What can be spent: Liquifia's balance less transfer holds and money set aside in savings. */
+/** How long the balance check may wait on Liquifia: well inside LOCK_MS, so the lock can't run out while it waits. */
+const BALANCE_TIMEOUT_MS = 10_000;
+
+/** What can be spent: Liquifia's balance less transfer holds and money set aside in savings. Can be below zero. */
 export async function availableBalance(account: { _id: Types.ObjectId; providerAccountId: string }) {
   const [balance, held, saved] = await Promise.all([
-    liquifia.getVirtualAccountBalance(account.providerAccountId),
+    liquifia.getVirtualAccountBalance(account.providerAccountId, { timeoutMs: BALANCE_TIMEOUT_MS }),
     heldByAccount([account._id]),
     savedByAccount([account._id]),
   ]);
@@ -196,26 +200,48 @@ export async function availableBalance(account: { _id: Types.ObjectId; providerA
   return { balanceKobo, heldKobo, savedKobo, availableKobo: balanceKobo - heldKobo - savedKobo };
 }
 
-const LOCK_MS = 15_000;
+const LOCK_MS = 60_000;
+
+const accountBusy = () => new HttpError(409, "Another payment from this account is in progress. Try again in a moment.", "ACCOUNT_BUSY");
+
+export type AccountLock = {
+  /**
+   * Call right before the writes that rely on the balance check. Checks the lock is still ours and extends it;
+   * if it ran out and someone else took it, throws ACCOUNT_BUSY so nothing is written on a stale check.
+   */
+  confirm: () => Promise<void>;
+};
 
 /** Runs `fn` while holding a short lock on the account, so two transfers (or savings moves) can't spend the same money. */
-export async function withAccountLock<T>(accountId: Types.ObjectId, fn: () => Promise<T>): Promise<T> {
+export async function withAccountLock<T>(accountId: Types.ObjectId, fn: (lock: AccountLock) => Promise<T>): Promise<T> {
+  const token = randomBytes(16).toString("hex");
+  const lock: AccountLock = {
+    confirm: async () => {
+      const now = new Date();
+      const ours = await VirtualAccountModel.updateOne(
+        { _id: accountId, lockToken: token, lockedUntil: { $gt: now } },
+        { lockedUntil: new Date(now.getTime() + LOCK_MS) },
+      );
+      if (ours.matchedCount === 0) throw accountBusy();
+    },
+  };
   for (let attempt = 0; attempt < 50; attempt++) {
     const now = new Date();
     const locked = await VirtualAccountModel.findOneAndUpdate(
       { _id: accountId, $or: [{ lockedUntil: { $exists: false } }, { lockedUntil: null }, { lockedUntil: { $lt: now } }] },
-      { lockedUntil: new Date(now.getTime() + LOCK_MS) },
+      { lockedUntil: new Date(now.getTime() + LOCK_MS), lockToken: token },
     );
     if (locked) {
       try {
-        return await fn();
+        return await fn(lock);
       } finally {
-        await VirtualAccountModel.updateOne({ _id: accountId }, { $unset: { lockedUntil: 1 } });
+        // Only our own lock: if ours ran out and someone else holds it now, theirs stays.
+        await VirtualAccountModel.updateOne({ _id: accountId, lockToken: token }, { $unset: { lockedUntil: 1, lockToken: 1 } });
       }
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new HttpError(409, "Another payment from this account is in progress. Try again in a moment.", "ACCOUNT_BUSY");
+  throw accountBusy();
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -259,10 +285,36 @@ export async function createTransfers(opts: {
   const account = await VirtualAccountModel.findOne({ branch: branch._id });
   if (!account) throw new HttpError(409, `${branch.name}'s account isn't ready yet`, "ACCOUNT_NOT_READY");
 
-  if (opts.clientKey) {
-    const replay = await TransferModel.find({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
-    if (replay.length) return { transfers: replay, batch: null, replayed: true };
-  }
+  // What this request asks for, so the same Idempotency-Key with different details is refused. The batch title
+  // is left out: it moves no money, and a payout list's default title carries the date, so a retry after
+  // midnight would be refused (and the client could then send it again under a new key).
+  const hash = opts.clientKey
+    ? requestHash({
+        branch: String(branch._id),
+        payoutList: opts.payoutList ? String(opts.payoutList) : null,
+        rows: requests.map((r) => ({
+          accountNumber: r.recipient.accountNumber,
+          bankUuid: r.recipient.bankUuid,
+          amountKobo: r.amountKobo,
+          narration: r.narration ?? null,
+          beneficiary: r.beneficiary ? String(r.beneficiary) : null,
+        })),
+      })
+    : undefined;
+
+  /** What was created the first time this Idempotency-Key was used, if it was. */
+  const replay = async () => {
+    if (!opts.clientKey) return null;
+    const first = await TransferModel.findOne({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
+    if (!first) return null;
+    assertSameRequest(first.requestHash, hash);
+    if (!first.batch) return { transfers: [first], batch: null, replayed: true };
+    const [transfers, batch] = await Promise.all([TransferModel.find({ batch: first.batch }).sort({ _id: 1 }), TransferBatchModel.findById(first.batch)]);
+    return { transfers, batch, replayed: true };
+  };
+
+  const earlier = await replay();
+  if (earlier) return earlier;
 
   for (const r of requests) {
     if (r.recipient.accountNumber === account.accountNumber) {
@@ -281,14 +333,19 @@ export async function createTransfers(opts: {
   const approval = plan.length > 0;
   await assertPlanReachable(business, branch._id, plan, userId);
 
-  const { transfers, batch } = await withAccountLock(account._id, async () => {
+  const created = await withAccountLock(account._id, async (lock) => {
+    // Again under the lock: a request with the same key that was running alongside this one has finished by now.
+    const replayed = await replay();
+    if (replayed) return replayed;
+
     const { availableKobo } = await availableBalance(account);
     if (totalKobo > availableKobo) {
       throw new HttpError(422, "There isn't enough money in this account for this transfer", "INSUFFICIENT_BALANCE", {
-        availableKobo,
+        availableKobo: Math.max(0, availableKobo),
         requiredKobo: totalKobo,
       });
     }
+    await lock.confirm();
 
     const batch =
       requests.length > 1
@@ -305,41 +362,54 @@ export async function createTransfers(opts: {
           })
         : null;
 
-    const transfers = await TransferModel.insertMany(
-      requests.map((r, i) => {
-        const fee = fees.get(r.amountKobo)!;
-        return {
-          business: business._id,
-          branch: branch._id,
-          virtualAccount: account._id,
-          batch: batch?._id,
-          kind: r.recipient.kind,
-          amountKobo: r.amountKobo,
-          feeKobo: fee.feeKobo,
-          stampDutyKobo: fee.stampDutyKobo,
-          totalKobo: r.amountKobo + fee.feeKobo,
-          recipient: {
-            accountNumber: r.recipient.accountNumber,
-            accountName: r.recipient.accountName,
-            bankName: r.recipient.bankName,
-            bankUuid: r.recipient.bankUuid,
-            business: r.recipient.business,
-            branch: r.recipient.branch,
-            beneficiary: r.beneficiary,
-          },
-          narration: r.narration,
-          reference: newReference(),
-          status: approval ? "pending_approval" : "processing",
-          createdBy: userId,
-          approval: initialApproval(plan),
-          // Only the first transfer carries the key: the unique index is per transfer.
-          clientKey: i === 0 ? opts.clientKey : undefined,
-          provider: { idempotencyKey: newIdempotencyKey() },
-        };
-      }),
-    );
-    return { transfers: transfers as unknown as TransferDocument[], batch };
+    let transfers;
+    try {
+      transfers = await TransferModel.insertMany(
+        requests.map((r, i) => {
+          const fee = fees.get(r.amountKobo)!;
+          return {
+            business: business._id,
+            branch: branch._id,
+            virtualAccount: account._id,
+            batch: batch?._id,
+            kind: r.recipient.kind,
+            amountKobo: r.amountKobo,
+            feeKobo: fee.feeKobo,
+            stampDutyKobo: fee.stampDutyKobo,
+            totalKobo: r.amountKobo + fee.feeKobo,
+            recipient: {
+              accountNumber: r.recipient.accountNumber,
+              accountName: r.recipient.accountName,
+              bankName: r.recipient.bankName,
+              bankUuid: r.recipient.bankUuid,
+              business: r.recipient.business,
+              branch: r.recipient.branch,
+              beneficiary: r.beneficiary,
+            },
+            narration: r.narration,
+            reference: newReference(),
+            status: approval ? "pending_approval" : "processing",
+            createdBy: userId,
+            approval: initialApproval(plan),
+            // Only the first transfer carries the key: the unique index is per transfer.
+            clientKey: i === 0 ? opts.clientKey : undefined,
+            requestHash: i === 0 ? hash : undefined,
+            provider: { idempotencyKey: newIdempotencyKey() },
+          };
+        }),
+      );
+    } catch (err) {
+      // If nothing was saved under the batch, don't leave it behind.
+      if (batch && !(await TransferModel.exists({ batch: batch._id }))) await TransferBatchModel.deleteOne({ _id: batch._id });
+      // A request with the same key got in first (e.g. from another branch's account): answer as its replay.
+      const replayed = isDuplicateClientKey(err) ? await replay() : null;
+      if (replayed) return replayed;
+      throw err;
+    }
+    return { transfers: transfers as unknown as TransferDocument[], batch, replayed: false };
   });
+  if (created.replayed) return created;
+  const { transfers, batch } = created;
 
   const paid = requests.flatMap((r) => (r.beneficiary ? [r.beneficiary] : []));
   if (paid.length) await BeneficiaryModel.updateMany({ _id: { $in: paid } }, { lastPaidAt: new Date() });
@@ -446,7 +516,12 @@ export async function cancelTransfers(transfers: TransferDocument[], userId: str
 
 /** A Liquifia error that means the payout definitely wasn't created (as opposed to a timeout or outage). */
 const isDefinitiveRejection = (err: unknown) =>
-  err instanceof LiquifiaError && err.status >= 400 && err.status < 500 && ![408, 409, 425, 429].includes(err.status);
+  err instanceof LiquifiaError &&
+  err.status >= 400 &&
+  err.status < 500 &&
+  ![408, 409, 425, 429].includes(err.status) &&
+  // An answer about a repeated key or reference means an earlier request may have created it.
+  !/IDEMPOTEN|DUPLICATE|IN_PROGRESS/i.test(err.code);
 
 function failureMessage(err: unknown) {
   if (err instanceof LiquifiaError && err.code === "INSUFFICIENT_BALANCE") return "There wasn't enough money in the account";
@@ -455,8 +530,23 @@ function failureMessage(err: unknown) {
 }
 
 /**
- * Hands an approved transfer to Liquifia. Safe to call again: the same idempotency key means a retry after a
- * timeout returns the payout that was already created instead of paying twice.
+ * How long a caller has to send a transfer before another may try: up to five Liquifia calls (look up, create,
+ * look up again) at 30 s each, with room to spare. A caller that dies holding it only delays the retry.
+ */
+const SUBMIT_LEASE_MS = 5 * 60_000;
+// Staff hear about a transfer Liquifia hasn't accepted an hour after the first try (well inside the 24 hours
+// Liquifia keeps idempotency keys), and about one it accepted that hasn't settled in a day.
+const STUCK_UNSENT_MS = 60 * 60_000;
+const STUCK_UNSETTLED_MS = 24 * 60 * 60_000;
+
+const leaseFree = (now: Date) => ({ $or: [{ "provider.submittingUntil": null }, { "provider.submittingUntil": { $lte: now } }] });
+const reload = async (transfer: TransferDocument) => (await TransferModel.findById(transfer._id)) ?? transfer;
+
+/**
+ * Hands an approved transfer to Liquifia. Safe to call from several places at once (the create request, approvals,
+ * the sweep, webhooks, /refresh): the caller that claims the transfer sends it, the others return it as it is.
+ * Every attempt carries the same idempotency key, and a retry looks the payout up first, so a retry after a
+ * timeout finds the payout already created instead of paying twice.
  */
 export async function submitTransfer(transfer: TransferDocument) {
   if (transfer.status !== "processing" || transfer.provider?.payoutId) return transfer;
@@ -464,18 +554,61 @@ export async function submitTransfer(transfer: TransferDocument) {
   const owner = await BusinessModel.findById(transfer.business).select("compliance.status");
   const restriction = owner?.compliance?.status;
   if (restriction === "suspended" || restriction === "banned") {
-    transfer.set({ "provider.lastCheckedAt": new Date(), "provider.lastError": `Held: the business is ${restriction}` });
-    await transfer.save();
-    return transfer;
+    await TransferModel.updateOne(
+      { _id: transfer._id, status: "processing" },
+      { "provider.lastCheckedAt": new Date(), "provider.lastError": `Held: the business is ${restriction}` },
+    );
+    return reload(transfer);
   }
   const account = await VirtualAccountModel.findById(transfer.virtualAccount);
   if (!account) throw new Error(`Virtual account ${transfer.virtualAccount} not found`);
 
-  transfer.set({ "provider.attempts": (transfer.provider?.attempts ?? 0) + 1, "provider.lastCheckedAt": new Date() });
+  // Claim it first. The lease time doubles as the claim's token, so only this caller can fail or release it.
+  const now = new Date();
+  const lease = new Date(now.getTime() + SUBMIT_LEASE_MS);
+  const claimed = await TransferModel.findOneAndUpdate(
+    { _id: transfer._id, status: "processing", "provider.payoutId": { $exists: false }, ...leaseFree(now) },
+    {
+      $set: { "provider.submittingUntil": lease, "provider.lastCheckedAt": now },
+      $inc: { "provider.attempts": 1 },
+      $min: { "provider.firstAttemptAt": now },
+    },
+    { returnDocument: "after" },
+  );
+  if (!claimed) return reload(transfer);
+
+  const outcome = await sendPayout(claimed, account.providerAccountId);
+  if ("payout" in outcome) return adoptPayout(claimed, outcome.payout);
+  if ("rejected" in outcome) return failSubmission(claimed, lease, outcome.rejected);
+  // Unknown outcome: keep holding the money and retry later (processOpenTransfers), looking it up first.
+  const message = outcome.unknown instanceof Error ? outcome.unknown.message : String(outcome.unknown);
+  await TransferModel.updateOne(
+    { _id: claimed._id, "provider.submittingUntil": lease },
+    { $set: { "provider.lastError": message }, $unset: { "provider.submittingUntil": 1 } },
+  );
+  console.error(`Payout for transfer ${claimed.id} didn't go through yet:`, outcome.unknown);
+  return reload(claimed);
+}
+
+type SendOutcome = { payout: LiquifiaPayout } | { rejected: unknown } | { unknown: unknown };
+
+/** One attempt at getting the payout created. Only the first attempt's refusal means it wasn't. */
+async function sendPayout(transfer: TransferDocument, virtualAccountId: string): Promise<SendOutcome> {
+  // From the second attempt on, an earlier one may have created the payout: look before sending again
+  // (Liquifia keeps idempotency keys for 24 hours only).
+  const retry = (transfer.provider?.attempts ?? 1) > 1;
+  if (retry) {
+    try {
+      const existing = await liquifia.findPayoutByReference(transfer.reference);
+      if (existing) return { payout: existing };
+    } catch (err) {
+      return { unknown: err };
+    }
+  }
   try {
     const payout = await liquifia.createPayout(
       {
-        virtual_account_id: account.providerAccountId,
+        virtual_account_id: virtualAccountId,
         amount: toNaira(transfer.amountKobo),
         destination_account: transfer.recipient!.accountNumber,
         destination_bank_uuid: transfer.recipient!.bankUuid,
@@ -484,38 +617,73 @@ export async function submitTransfer(transfer: TransferDocument) {
       },
       transfer.provider!.idempotencyKey,
     );
-    transfer.set({
-      "provider.payoutId": payout.id,
-      "provider.status": payout.status,
-      "provider.lastError": undefined,
-      "provider.data": payout,
-      submittedAt: transfer.submittedAt ?? new Date(),
-    });
-    await transfer.save();
-    await recordPayoutTransaction(transfer);
-    return applyPayoutStatus(transfer, payout.status, payout);
+    return { payout };
   } catch (err) {
-    if (isDefinitiveRejection(err)) {
-      transfer.set({ status: "failed", failureReason: failureMessage(err), completedAt: new Date(), "provider.lastError": String(err) });
-      await transfer.save();
-      await notifyFailed(transfer).catch((e) => console.error("Couldn't email the failure:", e));
-      return transfer;
+    if (!isDefinitiveRejection(err)) return { unknown: err };
+    if (!retry) return { rejected: err };
+    // A retry refused with a 4xx may only mean an earlier attempt got there: it failed only if there's no payout.
+    try {
+      const existing = await liquifia.findPayoutByReference(transfer.reference);
+      return existing ? { payout: existing } : { rejected: err };
+    } catch (lookupErr) {
+      return { unknown: lookupErr };
     }
-    // Unknown outcome: keep holding the money and retry with the same key (processOpenTransfers).
-    transfer.set({ "provider.lastError": err instanceof Error ? err.message : String(err) });
-    await transfer.save();
-    console.error(`Payout for transfer ${transfer.id} didn't go through yet:`, err);
-    return transfer;
   }
 }
 
-/** The debit on the source account, shown with the business's transactions. */
+/** Saves the payout Liquifia has for this transfer (unless another caller already did), then follows its status. */
+async function adoptPayout(transfer: TransferDocument, payout: LiquifiaPayout) {
+  const saved = await TransferModel.findOneAndUpdate(
+    { _id: transfer._id, status: "processing", "provider.payoutId": { $exists: false } },
+    {
+      $set: {
+        "provider.payoutId": payout.id,
+        "provider.status": payout.status,
+        "provider.data": payout,
+        submittedAt: transfer.submittedAt ?? new Date(),
+      },
+      $unset: { "provider.lastError": 1, "provider.submittingUntil": 1 },
+    },
+    { returnDocument: "after" },
+  );
+  if (!saved) {
+    const current = await reload(transfer);
+    if (current.provider?.payoutId !== payout.id) {
+      const ours = current.provider?.payoutId ?? "none";
+      console.error(`Liquifia has payout ${payout.id} for transfer ${transfer.id}, which is ${current.status} with payout ${ours}`);
+    }
+    return current;
+  }
+  return applyPayoutStatus(saved, payout.status, payout);
+}
+
+/** Fails a transfer Liquifia refused, while this caller still holds the claim (so a later attempt can't be overwritten). */
+async function failSubmission(transfer: TransferDocument, lease: Date, err: unknown) {
+  const now = new Date();
+  const failed = await TransferModel.findOneAndUpdate(
+    { _id: transfer._id, status: "processing", "provider.payoutId": { $exists: false }, "provider.submittingUntil": lease },
+    {
+      $set: { status: "failed", failureReason: failureMessage(err), completedAt: now, "provider.lastError": String(err), "provider.lastCheckedAt": now },
+      $unset: { "provider.submittingUntil": 1 },
+    },
+    { returnDocument: "after" },
+  );
+  if (!failed) return reload(transfer);
+  await notifyFailed(failed).catch((e) => console.error("Couldn't email the failure:", e));
+  return failed;
+}
+
+/**
+ * The debit on the source account, shown with the business's transactions. Created if it's missing, so any
+ * refresh repairs a crash between saving the payout id and writing this. Its status only moves on from pending.
+ */
 async function recordPayoutTransaction(transfer: TransferDocument) {
+  const status = mapTransactionStatus(transfer.status);
   await TransactionModel.updateOne(
     { providerTransactionId: transfer.provider!.payoutId },
     {
-      $set: { status: mapTransactionStatus(transfer.status) },
       $setOnInsert: {
+        status,
         business: transfer.business,
         branch: transfer.branch,
         virtualAccount: transfer.virtualAccount,
@@ -540,29 +708,63 @@ async function recordPayoutTransaction(transfer: TransferDocument) {
     },
     { upsert: true },
   );
+  // Conditional, so a caller that read the transfer before it settled can't move the row back to pending.
+  if (status !== "pending") await TransactionModel.updateOne({ providerTransactionId: transfer.provider!.payoutId, status: "pending" }, { status });
 }
 
 const mapTransactionStatus = (status: string) => (status === "success" ? "success" : status === "failed" ? "failed" : "pending");
 
-/** Moves the transfer to success or failed when Liquifia says so. */
+/** Moves the transfer to success or failed when Liquifia says so, and keeps its debit row in step. */
 async function applyPayoutStatus(transfer: TransferDocument, providerStatus: string, data?: unknown) {
   const status = providerStatus?.toLowerCase();
-  const wasOpen = transfer.status === "processing";
-  transfer.set({ "provider.status": status, "provider.lastCheckedAt": new Date(), ...(data !== undefined && { "provider.data": data }) });
-  if (status === "success" || status === "failed") {
-    transfer.set({
-      status,
-      completedAt: new Date(),
-      ...(status === "failed" && { failureReason: transfer.failureReason ?? "The bank couldn't complete the transfer" }),
-    });
+  const now = new Date();
+  const seen = { "provider.status": status, "provider.lastCheckedAt": now, ...(data !== undefined && { "provider.data": data }) };
+  // Conditional on still processing, so only one caller settles it (and tells people), and a final status stays.
+  const settled =
+    status === "success" || status === "failed"
+      ? await TransferModel.findOneAndUpdate(
+          { _id: transfer._id, status: "processing" },
+          {
+            ...seen,
+            status,
+            completedAt: now,
+            ...(status === "failed" && { failureReason: transfer.failureReason ?? "The bank couldn't complete the transfer" }),
+          },
+          { returnDocument: "after" },
+        )
+      : null;
+  if (!settled) await TransferModel.updateOne({ _id: transfer._id, status: "processing" }, seen);
+  const current = settled ?? (await reload(transfer));
+  if (current.provider?.payoutId) await recordPayoutTransaction(current);
+  if (settled?.status === "failed") await notifyFailed(settled).catch((e) => console.error("Couldn't email the failure:", e));
+  if (settled?.status === "success") await transferSettled(settled);
+  // Liquifia documents only these four. Anything else (a reversal, say) is for a person to judge, not a guess.
+  if (current.status === "processing" && status && !(PAYOUT_STATUSES as readonly string[]).includes(status)) {
+    await flagStuck(current, `is "${status}" at Liquifia, a status LinkPay doesn't know`);
   }
-  await transfer.save();
-  if (transfer.provider?.payoutId) {
-    await TransactionModel.updateOne({ providerTransactionId: transfer.provider.payoutId }, { status: mapTransactionStatus(transfer.status) });
-  }
-  if (wasOpen && transfer.status === "failed") await notifyFailed(transfer).catch((e) => console.error("Couldn't email the failure:", e));
-  if (wasOpen && transfer.status === "success") await transferSettled(transfer);
-  return transfer;
+  return current;
+}
+
+/** Tells staff about a transfer that needs a person, once per transfer, and logs it. */
+async function flagStuck(transfer: TransferDocument, reason: string) {
+  const flagged = await TransferModel.findOneAndUpdate(
+    { _id: transfer._id, status: "processing", "provider.stuckAt": { $exists: false } },
+    { "provider.stuckAt": new Date() },
+    { returnDocument: "after" },
+  );
+  if (!flagged) return;
+  console.error(`Transfer ${transfer.id} (${transfer.reference}) ${reason}.`);
+  await transferStuck(flagged, reason).catch((err) => console.error("Couldn't tell staff about a stuck transfer:", err));
+}
+
+/** Flags a transfer still processing too long: not accepted an hour after the first try, or not settled after a day. */
+async function flagIfStuck(transfer: TransferDocument) {
+  if (transfer.status !== "processing" || transfer.provider?.stuckAt) return;
+  const accepted = !!transfer.provider?.payoutId;
+  const since = accepted ? (transfer.submittedAt ?? transfer.provider?.firstAttemptAt) : transfer.provider?.firstAttemptAt;
+  // Never tried: held for a suspended business, or not reached yet.
+  if (!since || Date.now() - since.getTime() < (accepted ? STUCK_UNSETTLED_MS : STUCK_UNSENT_MS)) return;
+  await flagStuck(transfer, accepted ? "hasn't settled a day after it was sent" : "hasn't been accepted by Liquifia an hour after the first try");
 }
 
 /** Asks Liquifia for the latest on one transfer (or sends it again if Liquifia never accepted it). */
@@ -573,19 +775,35 @@ export async function refreshTransfer(transfer: TransferDocument) {
   return applyPayoutStatus(transfer, payout.status, payout);
 }
 
-/** Follows up every transfer still in progress. Run in the background and when payout webhooks arrive. */
+/**
+ * A payout webhook. The payload only picks which transfer to refresh (our reference or Liquifia's payout id); its
+ * status and amounts aren't trusted. When it names no transfer we know, the usual follow-up runs instead.
+ */
+export async function refreshFromPayoutEvent(payload: unknown) {
+  const body = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const data = body.data && typeof body.data === "object" ? (body.data as Record<string, unknown>) : body;
+  const ids = [data.reference, data.payout_reference, data.id, data.payout_id].filter(
+    (v): v is string => typeof v === "string" && v.length > 0 && v.length <= 100,
+  );
+  const transfer = ids.length ? await TransferModel.findOne({ $or: [{ reference: { $in: ids } }, { "provider.payoutId": { $in: ids } }] }) : null;
+  return transfer ? refreshTransfer(transfer) : followUpOpenTransfers();
+}
+
+/** Follows up every transfer still in progress, except any another caller is sending right now. */
 export async function processOpenTransfers({ minAgeMs = 0 } = {}) {
-  const stale = new Date(Date.now() - minAgeMs);
+  const now = new Date();
+  const stale = new Date(now.getTime() - minAgeMs);
   const open = await TransferModel.find({
     status: "processing",
-    $or: [{ "provider.lastCheckedAt": { $exists: false } }, { "provider.lastCheckedAt": { $lte: stale } }],
+    $and: [{ $or: [{ "provider.lastCheckedAt": { $exists: false } }, { "provider.lastCheckedAt": { $lte: stale } }] }, leaseFree(now)],
   })
     .sort({ "provider.lastCheckedAt": 1 })
     .limit(200);
   const counts = { checked: 0, success: 0, failed: 0, errors: 0 };
   for (const transfer of open) {
+    let after = transfer;
     try {
-      const after = await refreshTransfer(transfer);
+      after = await refreshTransfer(transfer);
       counts.checked++;
       if (after.status === "success") counts.success++;
       if (after.status === "failed") counts.failed++;
@@ -594,22 +812,28 @@ export async function processOpenTransfers({ minAgeMs = 0 } = {}) {
       await TransferModel.updateOne({ _id: transfer._id }, { "provider.lastCheckedAt": new Date(), "provider.lastError": String(err) });
       console.error(`Couldn't check transfer ${transfer.id}:`, err);
     }
+    await flagIfStuck(after).catch((err) => console.error(`Couldn't flag transfer ${transfer.id}:`, err));
   }
   return counts;
 }
 
 let running: Promise<unknown> | null = null;
 
+/** Runs processOpenTransfers unless a run is already going, in which case it returns that run. */
+export function followUpOpenTransfers(minAgeMs = 0) {
+  running ??= processOpenTransfers({ minAgeMs })
+    .catch((err) => console.error("Transfer follow-up failed:", err))
+    .finally(() => {
+      running = null;
+    });
+  return running;
+}
+
 /** Starts following up open transfers in the background (not used in tests). */
 export function startTransferProcessor(intervalMs: number) {
   if (intervalMs <= 0) return () => {};
   const tick = () => {
-    if (running) return;
-    running = processOpenTransfers({ minAgeMs: intervalMs / 2 })
-      .catch((err) => console.error("Transfer follow-up failed:", err))
-      .finally(() => {
-        running = null;
-      });
+    if (!running) void followUpOpenTransfers(intervalMs / 2);
   };
   tick();
   const timer = setInterval(tick, intervalMs);

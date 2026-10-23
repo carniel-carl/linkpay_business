@@ -21,7 +21,7 @@ export type TransferStatus = (typeof TRANSFER_STATUSES)[number];
 export const OPEN_TRANSFER_STATUSES: TransferStatus[] = ["pending_approval", "processing"];
 
 // Money sent out of a branch's account through a Liquifia payout. Liquifia stays the source of truth for
-// balances; a transfer holds its total (amount + fee) on our side until Liquifia has debited the account.
+// balances; a transfer holds its total (amount + fee) on our side until it succeeds or fails (see heldByAccount).
 const transferSchema = new Schema(
   {
     business: { type: Types.ObjectId, ref: "Business", required: true },
@@ -57,6 +57,8 @@ const transferSchema = new Schema(
     createdBy: { type: Types.ObjectId, ref: "User", required: true },
     // Optional key from the client (Idempotency-Key header) so a retried request doesn't send twice.
     clientKey: { type: String },
+    // Hash of what that request asked for, so the same key with different details is refused (utils/idempotency.ts).
+    requestHash: { type: String },
     // The final approval or the rejection.
     decision: {
       by: { type: Types.ObjectId, ref: "User" },
@@ -91,6 +93,12 @@ const transferSchema = new Schema(
       payoutId: { type: String },
       status: { type: String },
       attempts: { type: Number, default: 0 },
+      // When the first create was sent; from the second attempt on, the payout is looked up before sending again.
+      firstAttemptAt: { type: Date },
+      // Set while one caller is sending the payout, so the sweep, webhooks and /refresh can't send it at the same time.
+      submittingUntil: { type: Date },
+      // When staff were told it's taking too long or Liquifia reported a status we don't know (once).
+      stuckAt: { type: Date },
       lastError: { type: String },
       lastCheckedAt: { type: Date },
       data: { type: Schema.Types.Mixed, select: false },
@@ -104,6 +112,7 @@ const transferSchema = new Schema(
       transform: (_doc, ret: Record<string, any>) => {
         delete ret.__v;
         delete ret.clientKey;
+        delete ret.requestHash;
         if (ret.provider) ret.provider = { status: ret.provider.status };
         return ret;
       },
@@ -116,6 +125,8 @@ transferSchema.index({ business: 1, createdAt: -1 });
 transferSchema.index({ createdAt: -1 });
 transferSchema.index({ virtualAccount: 1, status: 1 });
 transferSchema.index({ status: 1, "provider.lastCheckedAt": 1 });
+// Payout webhooks find their transfer by Liquifia's payout id.
+transferSchema.index({ "provider.payoutId": 1 }, { sparse: true });
 transferSchema.index({ batch: 1 });
 transferSchema.index({ "recipient.beneficiary": 1, createdAt: -1 });
 transferSchema.index({ business: 1, status: 1, "approval.waitingOn": 1 });

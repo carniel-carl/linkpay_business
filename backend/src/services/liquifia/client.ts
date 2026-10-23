@@ -96,8 +96,8 @@ export const liquifia = {
   },
   createVirtualAccount: (customerId: string, body: LiquifiaVirtualAccountInput, idempotencyKey: string) =>
     request<LiquifiaVirtualAccount>("POST", `/customers/${customerId}/virtual-accounts`, { body, idempotencyKey }),
-  getVirtualAccountBalance: (virtualAccountId: string) =>
-    request<LiquifiaBalance>("GET", `/virtual-accounts/${virtualAccountId}/balance`),
+  getVirtualAccountBalance: (virtualAccountId: string, opts: { timeoutMs?: number } = {}) =>
+    request<LiquifiaBalance>("GET", `/virtual-accounts/${virtualAccountId}/balance`, { timeoutMs: opts.timeoutMs }),
   listInboundTransfers: (page: { skip: number; take: number }) =>
     request<LiquifiaInboundTransfer[]>("GET", "/inbound-transfers", { query: page }),
 
@@ -110,6 +110,27 @@ export const liquifia = {
   createPayout: (body: LiquifiaPayoutInput, idempotencyKey: string) =>
     request<LiquifiaPayout>("POST", "/payouts", { body: { country: "NG", currency: "NGN", ...body }, idempotencyKey }),
   getPayout: (payoutId: string) => request<LiquifiaPayout>("GET", `/payouts/${payoutId}`),
+  /**
+   * The payout we sent with this reference, or null when Liquifia has none. The settlement trace is the only
+   * lookup by reference in the docs (the list has no reference filter); a 404 there is taken to mean "none".
+   * The payout is then read by id and its reference checked, so a wrong match is never adopted.
+   */
+  findPayoutByReference: async (reference: string) => {
+    let trace: LiquifiaPayoutTrace;
+    try {
+      trace = await request<LiquifiaPayoutTrace>("GET", `/payouts/${encodeURIComponent(reference)}/trace`);
+    } catch (err) {
+      if (err instanceof LiquifiaError && err.status === 404) return null;
+      throw err;
+    }
+    // Status 0: an unexpected answer is an unknown outcome to callers, never a rejection.
+    if (!trace?.id) throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", `Liquifia's trace for payout ${reference} has no id`);
+    const payout = await request<LiquifiaPayout>("GET", `/payouts/${encodeURIComponent(trace.id)}`);
+    if (payout?.reference !== reference) {
+      throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", `Liquifia's payout ${trace.id} has reference ${payout?.reference}, not ${reference}`);
+    }
+    return payout;
+  },
 };
 
 /** Kobo to the naira amount Liquifia's payout endpoints take (two decimal places at most). */
@@ -152,6 +173,16 @@ export type LiquifiaPayout = {
   destination_bank_name?: string;
   is_intra_bank?: boolean;
   created_at?: string;
+  [key: string]: unknown;
+};
+
+/** GET /payouts/:reference/trace (takes our reference or the payout id). Only `id` is relied on. */
+export type LiquifiaPayoutTrace = {
+  id: string;
+  reference?: string;
+  status?: string;
+  transaction_id?: string | null;
+  session_id?: string | null; // the NIBSS session id banks ask for
   [key: string]: unknown;
 };
 

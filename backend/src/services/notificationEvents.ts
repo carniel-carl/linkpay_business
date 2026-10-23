@@ -104,6 +104,18 @@ export async function transferSettled(transfer: TransferDocument) {
   );
 }
 
+/** A transfer hasn't settled in good time, or Liquifia reported a status we don't know: operations look into it. */
+export async function transferStuck(transfer: TransferDocument, reason: string) {
+  const business = await businessRef(transfer.business);
+  await notifyStaff(await staffWith("accounts.provision"), {
+    type: "transfer.stuck",
+    title: "Transfer needs a look",
+    body: `${describeTransfers([transfer])} from ${business?.name ?? "a business"} (${transfer.reference}) ${reason}.`,
+    link: `/businesses/${transfer.business}/activity`,
+    data: { businessId: String(transfer.business), transferId: transfer.id as string },
+  });
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Money in
 // ---------------------------------------------------------------------------------------------------------

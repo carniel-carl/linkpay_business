@@ -5,6 +5,8 @@ type VirtualAccount = { id: string; customer_id: string; account_number: string;
 
 export type MockLiquifia = ReturnType<typeof startMockLiquifia>;
 
+type MockError = { status: number; code: string; message: string };
+
 type Payout = {
   id: string;
   reference: string;
@@ -41,6 +43,7 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
   const balances = new Map<string, number>(); // kobo, like the real API (₦100 is 10000)
   const idempotency = new Map<string, VirtualAccount>();
   const payoutKeys = new Map<string, string>(); // idempotency key -> payout id
+  const payoutsInFlight = new Set<string>(); // idempotency keys of creates still being worked on (see payoutDelayMs)
   const state = {
     customers,
     accounts,
@@ -56,11 +59,22 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
     /** Make the next N payout creates fail with this error (e.g. a 503 or a timeout-like 502). */
     failNextPayouts: 0,
     failPayoutsWith: { status: 503, code: "UNAVAILABLE", message: "Try again later" },
+    /** Payout creates take this long, so a second request can arrive while the first is still being worked on. */
+    payoutDelayMs: 0,
+    /** The answer to a create whose idempotency key is still being worked on. Liquifia's docs say a 409. */
+    duplicatePayoutsWith: { status: 409, code: "IDEMPOTENCY_IN_PROGRESS", message: "A request with this key is already processing" } as MockError,
+    /** The answer to a create whose key was already used. Null replays the payout, as Liquifia's docs say. */
+    replayPayoutsWith: null as MockError | null,
+    /** Create the next N payouts but lose the answer (a 504 from the gateway), so the outcome looks unknown. */
+    loseNextPayoutResponses: 0,
+    /** Make the next N payout lookups by reference (the trace endpoint) fail with this error. */
+    failNextTraces: 0,
+    failTracesWith: { status: 503, code: "UNAVAILABLE", message: "Try again later" } as MockError,
     /**
      * Sets a payout's status (as Liquifia's processing would), refunding the account when it fails. A successful
      * payout to one of the mock's own accounts lands there as an inbound transfer, like a real bank transfer.
      */
-    settlePayout(id: string, status: "success" | "failed" | "processing") {
+    settlePayout(id: string, status: "success" | "failed" | "processing" | (string & {})) {
       const payout = state.payouts.find((p) => p.id === id || p.reference === id);
       if (!payout) throw new Error(`No mock payout ${id}`);
       if (status === "failed" && payout.status !== "failed") {
@@ -169,7 +183,20 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
       if (req.method === "POST" && path === "/payouts") {
         if (!idempotencyKey) return error(400, "IDEMPOTENCY_KEY_REQUIRED", "Missing X-Idempotency-Key");
         const replay = state.payouts.find((p) => p.id === payoutKeys.get(idempotencyKey));
+        if (replay && state.replayPayoutsWith) {
+          const f = state.replayPayoutsWith;
+          return error(f.status, f.code, f.message);
+        }
         if (replay) return json(replay, 201);
+        if (payoutsInFlight.has(idempotencyKey)) {
+          const f = state.duplicatePayoutsWith;
+          return error(f.status, f.code, f.message);
+        }
+        if (state.payoutDelayMs > 0) {
+          payoutsInFlight.add(idempotencyKey);
+          await Bun.sleep(state.payoutDelayMs);
+          payoutsInFlight.delete(idempotencyKey);
+        }
         if (state.failNextPayouts > 0) {
           state.failNextPayouts--;
           const f = state.failPayoutsWith;
@@ -205,7 +232,40 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
         if (opts.autoSettlePayoutsMs) {
           setTimeout(() => payout.status === "pending" && state.settlePayout(payout.id, "success"), opts.autoSettlePayoutsMs);
         }
+        if (state.loseNextPayoutResponses > 0) {
+          state.loseNextPayoutResponses--;
+          return error(504, "GATEWAY_TIMEOUT", "Upstream timed out");
+        }
         return json(payout, 201);
+      }
+
+      // Like the docs: the settlement trace takes our payout reference or Liquifia's payout id.
+      const trace = path.match(/^\/payouts\/([^/]+)\/trace$/);
+      if (req.method === "GET" && trace) {
+        if (state.failNextTraces > 0) {
+          state.failNextTraces--;
+          const f = state.failTracesWith;
+          return error(f.status, f.code, f.message);
+        }
+        const wanted = decodeURIComponent(trace[1]!);
+        const payout = state.payouts.find((p) => p.reference === wanted || p.id === wanted);
+        if (!payout) return error(404, "NOT_FOUND", "Payout not found");
+        return json({
+          id: payout.id,
+          reference: payout.reference,
+          status: payout.status,
+          amount: payout.amount,
+          currency: "NGN",
+          transaction_id: null,
+          session_id: null,
+          beneficiary_account: payout.destination_account,
+          beneficiary_name: payout.recipient_name,
+          beneficiary_bank: payout.destination_bank_name,
+          narration: payout.narration ?? null,
+          provider: "mock",
+          provider_status: payout.status,
+          source: "stored",
+        });
       }
 
       const payoutById = path.match(/^\/payouts\/([^/]+)$/);

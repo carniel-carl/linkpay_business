@@ -117,13 +117,14 @@ export const updateStaff: RequestHandler<IdParams> = async (req, res) => {
   await staff.save();
   if (changed) {
     const actor = await staffActor(req);
-    await staffRoleChanged(staff._id, role, actor.name);
+    // Audited before telling them, so the change is on record whatever happens next.
     await audit(actor, {
       action: "staff.role_changed",
       target: { kind: "staff", id: staff._id },
       summary: `Changed ${staff.name}'s role from ${staffRoleLabel(previous)} to ${staffRoleLabel(role)}`,
       details: { from: previous, to: role },
     });
+    await staffRoleChanged(staff._id, role, actor.name);
   }
   res.json((await serializeStaffList([staff], req.staffId!))[0]);
 };
@@ -190,13 +191,15 @@ export const createStaffInvite: RequestHandler = async (req, res) => {
     if (err?.code === 11000) throw new HttpError(409, "This person already has an open invite. Resend it instead.", "INVITE_EXISTS");
     throw err;
   });
-  await sendInvite(invite, token, req.staffId!);
+  // Audited before sending: the invite exists either way. A failed send still fails the request, since the
+  // email is the only way the link reaches them, and the invite can be resent.
   await audit(await staffActor(req), {
     action: "staff.invited",
     target: { kind: "staff_invite", id: invite._id },
     summary: `Invited ${invite.email} as ${staffRoleLabel(role)}`,
     details: { email: invite.email, role },
   });
+  await sendInvite(invite, token, req.staffId!);
   res.status(201).json((await serializeInvites([invite]))[0]);
 };
 

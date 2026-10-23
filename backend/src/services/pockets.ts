@@ -6,6 +6,7 @@ import { PocketModel, PocketMovementModel, type PocketDocument, type PocketMovem
 import { TransactionModel } from "../models/Transaction";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { HttpError } from "../utils/HttpError";
+import { assertSameRequest, requestHash } from "../utils/idempotency";
 import { pocketTargetReached } from "./notificationEvents";
 import { canAccessBranch } from "./team";
 import { availableBalance, withAccountLock } from "./transfers";
@@ -95,17 +96,33 @@ type Move = {
 /**
  * Moves money between a pocket and its branch's available balance. Runs under the account's lock, so a
  * transfer can't spend money that's being set aside at the same moment. Returns the movement (and
- * `replayed: true` when the Idempotency-Key was seen before).
+ * `replayed: true` when the Idempotency-Key was seen before, or the payment was already auto-saved to this pocket).
  */
 export async function movePocketMoney(move: Move) {
   const { pocket, kind, amountKobo } = move;
   const direction = kind === "deposit" || kind === "auto_save" ? "in" : "out";
+  // What this request asks for (the pocket is already part of the key's scope).
+  const hash = move.clientKey ? requestHash({ kind, amountKobo, note: move.note ?? null }) : undefined;
 
-  const result = await withAccountLock(pocket.virtualAccount, async () => {
+  /** The movement already recorded for this Idempotency-Key, or for this payment's auto-save. */
+  const replay = async () => {
     if (move.clientKey) {
-      const replay = await PocketMovementModel.findOne({ pocket: pocket._id, createdBy: move.userId, clientKey: move.clientKey });
-      if (replay) return { movement: replay, replayed: true };
+      const first = await PocketMovementModel.findOne({ pocket: pocket._id, createdBy: move.userId, clientKey: move.clientKey });
+      if (first) {
+        assertSameRequest(first.requestHash, hash);
+        return { movement: first, replayed: true };
+      }
     }
+    if (move.transactionId) {
+      const saved = await PocketMovementModel.findOne({ pocket: pocket._id, transaction: move.transactionId });
+      if (saved) return { movement: saved, replayed: true };
+    }
+    return null;
+  };
+
+  const result = await withAccountLock(pocket.virtualAccount, async (lock) => {
+    const replayed = await replay();
+    if (replayed) return replayed;
 
     if (direction === "in") {
       const account = await VirtualAccountModel.findById(pocket.virtualAccount);
@@ -118,6 +135,7 @@ export async function movePocketMoney(move: Move) {
         });
       }
     }
+    await lock.confirm();
 
     const updated = await PocketModel.findOneAndUpdate(
       { _id: pocket._id, status: "active", ...(direction === "out" && { balanceKobo: { $gte: amountKobo } }) },
@@ -145,12 +163,16 @@ export async function movePocketMoney(move: Move) {
         transaction: move.transactionId,
         createdBy: move.userId,
         clientKey: move.clientKey,
+        requestHash: hash,
       });
       pocket.balanceKobo = updated.balanceKobo;
       return { movement, replayed: false };
-    } catch (err) {
+    } catch (err: any) {
       // The ledger line couldn't be written (e.g. this payment was already auto-saved): undo the balance.
       await PocketModel.updateOne({ _id: pocket._id }, { $inc: { balanceKobo: direction === "in" ? -amountKobo : amountKobo } });
+      // The same key or payment got in first: answer as its replay.
+      const replayed = err?.code === 11000 ? await replay() : null;
+      if (replayed) return replayed;
       throw err;
     }
   });
@@ -189,9 +211,11 @@ export function autoSaveAmount(rule: { percentBps?: number | null; amountKobo?: 
 
 /**
  * Applies auto-save rules to incoming payments: each successful payment into an account with auto-saving
- * pockets is looked at once (`autoSaveCheckedAt`). Payments between the business's own branches are skipped,
- * and so are payments from before the rule was set. A pocket with a target stops saving once it's reached.
- * Safe to run repeatedly; called after every inbound sync.
+ * pockets is marked done (`autoSaveCheckedAt`) once every pocket has saved its share or had nothing to save.
+ * If a save fails (the account is busy, the balance check times out), the payment is tried again on the next
+ * run; a pocket never saves from the same payment twice (one movement per pocket and payment). Payments
+ * between the business's own branches are skipped, and so are payments from before the rule was set. A pocket
+ * with a target stops saving once it's reached. Safe to run repeatedly; called after every inbound sync.
  */
 export async function applyAutoSaves() {
   const pockets = await PocketModel.find({ status: "active", "autoSave.since": { $exists: true } }).sort({ createdAt: 1 });
@@ -221,14 +245,20 @@ export async function applyAutoSaves() {
     return ownAccounts.get(key)!.has(accountNumber);
   }
 
+  const markChecked = (tx: (typeof payments)[number]) => TransactionModel.updateOne({ _id: tx._id }, { autoSaveCheckedAt: new Date() });
+
   let saved = 0;
   for (const tx of payments) {
-    const claimed = await TransactionModel.findOneAndUpdate({ _id: tx._id, autoSaveCheckedAt: { $exists: false } }, { autoSaveCheckedAt: new Date() });
-    if (!claimed) continue;
-    if (await isOwnBranch(tx.business, tx.counterparty?.accountNumber)) continue;
+    if (await isOwnBranch(tx.business, tx.counterparty?.accountNumber)) {
+      await markChecked(tx);
+      continue;
+    }
 
+    let failed = false;
     for (const pocket of pockets.filter((p) => p.virtualAccount.equals(tx.virtualAccount) && p.autoSave!.since! <= tx.occurredAt)) {
       try {
+        // Already saved from this payment on an earlier run (another pocket failed then).
+        if (await PocketMovementModel.exists({ pocket: pocket._id, transaction: tx._id })) continue;
         const fresh = await PocketModel.findOne({ _id: pocket._id, status: "active", "autoSave.since": { $exists: true } });
         if (!fresh) continue;
         let amount = autoSaveAmount(fresh.autoSave!, tx.netKobo);
@@ -239,12 +269,15 @@ export async function applyAutoSaves() {
         const { availableKobo } = await availableBalance(account);
         amount = Math.min(amount, availableKobo);
         if (amount < 1) continue;
-        await movePocketMoney({ pocket: fresh, kind: "auto_save", amountKobo: amount, transactionId: tx._id });
-        saved++;
+        const { replayed } = await movePocketMoney({ pocket: fresh, kind: "auto_save", amountKobo: amount, transactionId: tx._id });
+        if (!replayed) saved++;
       } catch (err) {
-        console.error(`Couldn't auto-save payment ${tx.id} to pocket ${pocket.id}:`, err);
+        failed = true;
+        console.error(`Couldn't auto-save payment ${tx.id} to pocket ${pocket.id} (will try again):`, err);
       }
     }
+    // Only once every pocket has its share (or had nothing to save), so a failed save is tried again next run.
+    if (!failed) await markChecked(tx);
   }
   return { checked: payments.length, saved };
 }
