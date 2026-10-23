@@ -60,13 +60,13 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | --- | --- |
 | `MONGODB_URI`, `MONGODB_DB_NAME` (default `linkpay_business`), `MONGODB_USERNAME`, `MONGODB_PASSWORD` | Username and password are passed to the driver separately from the URI. |
 | `LIQUIFIA_SECRET_KEY` (required), `LIQUIFIA_PUBLIC_KEY`, `LIQUIFIA_BASE_URL` | ⚠️ The current `.env` has **live** keys (`sk_live_`), so creating anything on Liquifia uses real money. Ask Liquifia for `sk_test_` keys for development. Outside `NODE_ENV=production` the server **refuses to start with an `sk_live_` key** unless `LIQUIFIA_ALLOW_LIVE=1` is set (it then prints a warning). `bun run check` sets that for itself. |
-| `JWT_SECRET`, `JWT_EXPIRES_IN`, `ENCRYPTION_KEY` | Generate secrets with `openssl rand -hex 32`. `ENCRYPTION_KEY` encrypts BVNs. |
+| `JWT_SECRET`, `JWT_EXPIRES_IN`, `ENCRYPTION_KEY` | Generate secrets with `openssl rand -hex 32`. `ENCRYPTION_KEY` encrypts BVNs. `JWT_EXPIRES_IN` (default 7d) is also a web session's maximum age. Every web sign-in is a server-side session (`Session.kind: "web"`) with a 12-hour idle timeout (`WEB_SESSION_IDLE_MS`) and can be signed out from any device. |
 | `STAFF_JWT_SECRET` | Signs staff (admin console) tokens. **Required everywhere except tests**: at least 32 characters and different from `JWT_SECRET`, or the server refuses to start (`openssl rand -hex 32`). `dev:mock` and `dev:seed` set their own. |
 | `UPLOAD_DIR` | Local folder for verification documents (gitignored). |
 | `WEB_URL` | Public web URL used in emailed links (team invites). Default `http://localhost:3000`. |
 | `PUSH_PROVIDER`, `EXPO_ACCESS_TOKEN` | Phone pushes. Unset, they print to the console (`📱 Push to ...`); `expo` sends them through Expo's push service (the access token only if the Expo project requires one). |
 | `ADMIN_APP_URL` | Public URL of the admin console (`admin/`), used in staff invite links (`ADMIN_APP_URL/invite/<token>`). Default `http://localhost:3001`. |
-| `API_URL`, `TRUST_PROXY` | `API_URL`: the API's public URL, shown to businesses in payment-link embed code (where their server confirms a payment). `TRUST_PROXY`: proxies whose `X-Forwarded-For` is believed for rate limits (Express "trust proxy", default `loopback`); set it to the web server's and load balancer's addresses in production, or every payer behind the web shares one limit. |
+| `API_URL`, `TRUST_PROXY` | `API_URL`: the API's public URL, shown to businesses in payment-link embed code (where their server confirms a payment). `TRUST_PROXY`: proxies whose `X-Forwarded-For` is believed for rate limits (Express "trust proxy", default `loopback`). Set it to a comma-separated list of the web and admin servers' addresses, as the API sees them, plus any load balancer in front of the API; otherwise every visitor shares one limit. `true` or a hop count is refused at startup. If the web runs on a host without fixed outgoing IPs (e.g. Vercel), this can't be set yet: that needs static outgoing IPs or a shared-secret header, which isn't built. Auth routes also limit failed requests per account (10 per 15 minutes) across all IPs. |
 | `LIQUIFIA_WEBHOOK_SECRET` | Verifies Liquifia webhooks. Until it's set, `POST /api/webhooks/liquifia` returns 503 and incoming payments arrive through the periodic sync only. |
 | `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia (default 60000; 0 turns it off). |
 
@@ -87,7 +87,7 @@ cd mobile && bunx expo run:ios     # development build on the simulator; or run:
 `mobile/.env.example` lists the `EXPO_PUBLIC_*` settings. Screenshots are blocked in the app unless `EXPO_PUBLIC_ALLOW_SCREEN_CAPTURE=1` (development only).
 
 ### Web
-`web/.env.local` sets `API_URL` (default `http://localhost:4000`) and `NEXT_PUBLIC_SUPPORT_EMAIL`. The auth token lives in an httpOnly cookie (`src/lib/session.ts`). The browser never calls the backend directly; all calls go through server actions and route handlers (`src/lib/api/client.ts`).
+`web/.env.local` sets `API_URL` (default `http://localhost:4000`), `NEXT_PUBLIC_SUPPORT_EMAIL` and **`CLIENT_IP_HEADER`**. The last one also goes in `admin/.env.local`. It names the header the platform in front of the server sets with the visitor's address, replacing anything the browser sent: e.g. `x-real-ip` or `x-forwarded-for` on Vercel, `cf-connecting-ip` behind Cloudflare, or `x-real-ip` from your own nginx. The server forwards it to the API so rate limits count each visitor. Unset, nothing is forwarded, and production logs a warning. The auth token lives in an httpOnly cookie (`src/lib/session.ts`). The browser never calls the backend directly; all calls go through server actions and route handlers (`src/lib/api/client.ts`).
 
 ---
 
@@ -538,3 +538,23 @@ Add a line per session: date, what was done, and anything left half-finished.
   - staff invites and role changes are audited before the email or notification.
 
   Still open from the audit: H1, H11, H12, H13 and the Medium items.
+
+- **2026-10-23 (fix batch 3, before onboarding):** on branch `fix/audit-batch-3`, 388/388 backend tests passing, and web, admin and mobile typecheck, lint and build clean.
+  - **Takeover fix (H1):** sign-ups return an opaque `registrationToken`, and verify-email keeps the password only with it. New `/api/auth/password` routes (reset request, confirm, change). Deleting an account needs the password, and web and mobile got reset and change screens.
+  - **Web sessions and limits (H11, M8):**
+    - Web sign-ins are `Session` documents (`kind: "web"`) with a 12-hour idle timeout. `/logout` accepts the Bearer token, and every token needs a `sid`.
+    - `CLIENT_IP_HEADER` (web and admin) plus `TRUST_PROXY` feed `authLimits()`: per IP, and failed requests per account.
+    - TOTP limits and replay protection (`TotpAttempt`, `totpLastStep`).
+    - Setting up an authenticator needs the password or current code.
+  - **Transaction PIN (H13):** 4-digit, server-checked, sent in `X-Transaction-Pin` on 15 routes. Contract in `docs/briefs/transaction-pin.md`. In the seed, swift@ has PIN 1357 and demo@ has none.
+  - **Payment-link hardening:** see the brief's "Abuse limits" and "Confirm on the server" notes.
+  - **Backend mediums:** see the audit's batch 3 list.
+  - **Other fixes:**
+    - `dev:seed` works again: it settles each seeded payout before the next, because batch 2 holds money until a payout settles.
+    - `next dev` no longer logs server-action arguments (`logging.serverFunctions: false`).
+  - **Before deploying batch 3:**
+    1. Every web user signs in once more, because tokens without a `sid` are refused.
+    2. Remove duplicate `KybDocument` rows per `{business, type, person}` so the new unique index can build: run a `$group` and keep the newest.
+    3. Set `CLIENT_IP_HEADER` on web and admin, and set `TRUST_PROXY` on the API to the web and admin servers' addresses.
+    4. Ship the web and mobile apps together with the backend, because every covered action needs the PIN. Old mobile builds can't send it, so plan a forced update.
+    5. Confirm the 12-hour web idle timeout with the product owner.
