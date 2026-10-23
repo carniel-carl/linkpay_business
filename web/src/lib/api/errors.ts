@@ -119,6 +119,9 @@ const MESSAGES: Record<string, string> = {
   WEAK_TRANSACTION_PIN: WEAK_PIN_MESSAGE,
 }
 
+/** Friendly copy for an error code reported inside a response (a bulk row's), or the server's own message. */
+export const messageForCode = (code: string | undefined, fallback: string) => (code && MESSAGES[code]) || fallback
+
 /** Maps backend errors (some have no `code`) to short, friendly copy. */
 export function friendlyMessage(err: ApiError): string {
   if (err.code === "TRANSACTION_PIN_INVALID") return wrongPinMessage((err.details as { attemptsLeft?: number } | undefined)?.attemptsLeft)

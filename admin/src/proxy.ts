@@ -11,11 +11,59 @@ const AUTH_ROUTES = ["/sign-in"]
 const PUBLIC_ROUTES = ["/invite"]
 const HOME = "/"
 
+const DEV = process.env.NODE_ENV === "development"
+// CSP_REPORT_ONLY=1 reports what the policy would block instead of blocking it, to roll it out safely; next.config.ts
+// keeps frame-ancestors 'none' enforced meanwhile.
+const REPORT_ONLY = process.env.CSP_REPORT_ONLY === "1"
+
+/**
+ * The Content-Security-Policy for a page. Scripts run only with this request's nonce, and what they load from
+ * there ('strict-dynamic'); 'self' is for browsers older than CSP 3. Everything is loaded from this server, and the
+ * browser talks only to it (the API is server-side).
+ */
+function contentSecurityPolicy(nonce: string, https: boolean) {
+  return [
+    "default-src 'self'",
+    // React uses eval for its debugging information in development only.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${DEV ? " 'unsafe-eval'" : ""}`,
+    // React renders style attributes, and Sonner and Radix (its scroll lock) add <style> elements with no nonce.
+    "style-src 'self' 'unsafe-inline'",
+    // The authenticator QR code is a data: URL; KYB images come through /api/files.
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    // KYB PDFs are previewed in a frame from /api/files (components/admin/document-viewer.tsx).
+    "frame-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    // Over HTTPS only (X-Forwarded-Proto behind a proxy): on plain http, as with `next start` locally, browsers
+    // would also upgrade redirects to https and fail them.
+    ...(https ? ["upgrade-insecure-requests"] : []),
+  ].join("; ")
+}
+
+/**
+ * On to the page with a fresh nonce in its policy. The policy also goes on the request: Next reads the nonce from
+ * there for its own scripts, and the root layout reads x-nonce for next-themes.
+ */
+function proceed(request: NextRequest) {
+  const nonce = Buffer.from(crypto.randomUUID()).toString("base64")
+  const policy = contentSecurityPolicy(nonce, request.nextUrl.protocol === "https:")
+  const headers = new Headers(request.headers)
+  headers.set("x-nonce", nonce)
+  headers.set("Content-Security-Policy", policy)
+  const response = NextResponse.next({ request: { headers } })
+  response.headers.set(REPORT_ONLY ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", policy)
+  return response
+}
+
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
   const signedIn = request.cookies.has(SESSION_COOKIE)
   const matches = (r: string) => pathname === r || pathname.startsWith(`${r}/`)
-  if (PUBLIC_ROUTES.some(matches)) return NextResponse.next()
+  if (PUBLIC_ROUTES.some(matches)) return proceed(request)
   const isAuthRoute = AUTH_ROUTES.some(matches)
 
   if (isAuthRoute) {
@@ -23,7 +71,7 @@ export function proxy(request: NextRequest) {
     if (pathname === "/sign-in/two-factor" && !request.cookies.has(CHALLENGE_COOKIE)) {
       return NextResponse.redirect(new URL("/sign-in", request.url))
     }
-    return NextResponse.next()
+    return proceed(request)
   }
 
   if (!signedIn) {
@@ -32,7 +80,7 @@ export function proxy(request: NextRequest) {
     if (next && pathname !== HOME) url.searchParams.set("next", next)
     return NextResponse.redirect(url)
   }
-  return NextResponse.next()
+  return proceed(request)
 }
 
 export const config = {

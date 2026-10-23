@@ -129,8 +129,8 @@ export function formatNairaInput(input: string): string {
   return `${grouped || "0"}.${text.slice(dot + 1).replace(/\./g, "").slice(0, 2)}`
 }
 
-/** Rows per call when a bulk transfer is checked before sending (name enquiries and fees). */
-export const BULK_CHECK_SLICE = 10
+/** Rows per name-enquiry call when a bulk transfer is checked before sending (a few calls, so progress shows). */
+export const BULK_CHECK_SLICE = 50
 
 /** The most one transfer can send (the API's limit per transfer, also per bulk row). */
 export const MAX_TRANSFER_KOBO = 100_000_000_00

@@ -19,7 +19,7 @@ export async function runAction<T>(fn: () => Promise<T>): Promise<ActionResult<T
         redirect("/sign-in?expired=1")
       }
       const details = err.details as
-        | { retryAt?: string; rows?: { row: number; error: string; code?: string }[]; attemptsLeft?: number; lockedUntil?: string }
+        | { retryAt?: string; rows?: { row: number; error: string; code?: string; accountName?: string }[]; attemptsLeft?: number; lockedUntil?: string }
         | undefined
       return {
         ok: false,

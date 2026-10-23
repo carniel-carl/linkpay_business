@@ -9,11 +9,11 @@
  *                  onOpen, onCheckout, onUpdate, onSuccess, onClose })
  *
  * Payments are bank transfers: the checkout shows an exact amount and account details, and tells this page
- * when the money lands. Anyone can call your callbacks with a checkout, so confirm on your server
- * (GET <api>/api/public/checkouts/<token>) before fulfilling, and fulfil only when `status` is "paid",
- * `mode` is "live" (a link in test mode has simulated payments), `link.slug` is your link, `currency` is "NGN",
- * `priceKobo` is the order total (`paidKobo` is at least that) and `clientReference` is your order id; then
- * mark the order paid so the same checkout can't be used twice.
+ * when the money lands. Anyone can call your callbacks with a checkout, so confirm on your server before
+ * fulfilling, with GET <api>/api/public/pay/<your slug>/checkouts/<token> (a 404 for a checkout from any
+ * other link). Fulfil only when `status` is "paid", `mode` is "live" (a link in test mode has simulated
+ * payments), `currency` is "NGN", `priceKobo` is the order total (`paidKobo` is at least that) and
+ * `clientReference` is your order id; then mark the order paid so the same checkout can't be used twice.
  */
 ;(function () {
   "use strict"

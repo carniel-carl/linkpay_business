@@ -1,7 +1,9 @@
 import type { NextConfig } from "next"
 
-// Sent with every response. No Content-Security-Policy beyond frame-ancestors: a strict script policy needs a
-// per-request nonce on every page (Next's own inline scripts included), which this app doesn't render yet.
+// Sent with every response. The Content-Security-Policy is mostly src/proxy.ts's: pages need a fresh script nonce
+// on every request, so the proxy sends the whole policy, frame-ancestors included, in place of the one below.
+// That one is what's left where the proxy sends none: API routes, static files, and pages while CSP_REPORT_ONLY=1
+// has the proxy's policy only report.
 const SECURITY_HEADERS = [
   // Not includeSubDomains: other hosts on the domain aren't ours to commit to HTTPS. Ignored over plain http (dev).
   { key: "Strict-Transport-Security", value: "max-age=31536000" },

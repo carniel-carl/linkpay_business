@@ -1,7 +1,7 @@
 import type { NextConfig } from "next"
 
-// Sent with every response. No Content-Security-Policy beyond frame-ancestors: a strict script policy needs a
-// per-request nonce on every page (Next's own inline scripts included), which this app doesn't render yet.
+// Sent with every response. The Content-Security-Policy is mostly src/proxy.ts's: pages need a fresh script nonce
+// on every request, so the proxy sends the whole policy, frame-ancestors included, in place of the one below.
 const SECURITY_HEADERS = [
   // Not includeSubDomains: other hosts on the domain aren't ours to commit to HTTPS. Ignored over plain http (dev).
   { key: "Strict-Transport-Security", value: "max-age=31536000" },
@@ -12,6 +12,8 @@ const SECURITY_HEADERS = [
 
 // Nothing here may be shown in a frame, except the payment-link pages: src/proxy.ts gives every /pay/ path its
 // own frame-ancestors (the link's allowed websites). /embed.js is a script, so framing rules don't apply to it.
+// This policy is what's left where the proxy sends none: API routes, static files, embed.js, invoice PDFs, and
+// pages other than /pay/ while CSP_REPORT_ONLY=1 has the proxy's policy only report.
 const NO_FRAMING = [
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
   { key: "X-Frame-Options", value: "DENY" },

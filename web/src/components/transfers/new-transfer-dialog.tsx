@@ -123,7 +123,8 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
 
     setBusy(true)
     setError(undefined)
-    const result = await quoteFee(amountKobo!)
+    // With the source branch, so the approval shown counts the member's last 24 hours from it, as sending does.
+    const result = await quoteFee(amountKobo!, sourceId)
     setBusy(false)
     if (!result.ok) return setError(result.error)
     setQuote(result.data)

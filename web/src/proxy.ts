@@ -18,6 +18,58 @@ const HOME = "/dashboard"
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000"
 const PAY_PAGE = /^\/pay\/([a-z0-9-]{6,40})\/?$/
+// Files, not pages, so they keep next.config.ts's headers only: embed.js runs on businesses' websites under their
+// own policy, and an invoice PDF opens in the browser's PDF viewer, with no page scripts for a policy to govern.
+const NOT_PAGES = /^\/(embed\.js|i\/[^/]+\/pdf)$/
+
+const DEV = process.env.NODE_ENV === "development"
+// CSP_REPORT_ONLY=1 reports what the policy would block instead of blocking it, to roll it out safely; next.config.ts
+// keeps frame-ancestors 'none' enforced meanwhile. /pay/* always enforces: its frame-ancestors has to be enforced
+// from here, Next copies this proxy's response headers onto the request, and it reads the nonce from the enforced
+// policy first, so a report-only one there would leave Next's scripts without it.
+const REPORT_ONLY = process.env.CSP_REPORT_ONLY === "1"
+
+/**
+ * The Content-Security-Policy for a page. Scripts run only with this request's nonce, and what they load from
+ * there ('strict-dynamic'); 'self' is for browsers older than CSP 3. Everything is loaded from this server: logos
+ * and link pictures come through its own routes, and the browser talks only to it (the API is server-side).
+ */
+function contentSecurityPolicy(nonce: string, frameAncestors: string, https: boolean) {
+  return [
+    "default-src 'self'",
+    // React uses eval for its debugging information in development only.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${DEV ? " 'unsafe-eval'" : ""}`,
+    // React renders style attributes, and Sonner and Radix (its scroll lock) add <style> elements with no nonce.
+    "style-src 'self' 'unsafe-inline'",
+    // QR codes are data: URLs, and pictures being uploaded are previewed from blob: URLs.
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    `frame-ancestors ${frameAncestors}`,
+    // Over HTTPS only (X-Forwarded-Proto behind a proxy): on plain http, as with `next start` locally, browsers
+    // would also upgrade redirects to https and fail them.
+    ...(https ? ["upgrade-insecure-requests"] : []),
+  ].join("; ")
+}
+
+/**
+ * On to the page with a fresh nonce in its policy. The policy also goes on the request: Next reads the nonce from
+ * there for its own scripts, and the root layout reads x-nonce for next-themes. `pay`: a /pay/ path's frame-ancestors.
+ */
+function proceed(request: NextRequest, pay?: string) {
+  const nonce = Buffer.from(crypto.randomUUID()).toString("base64")
+  const policy = contentSecurityPolicy(nonce, pay ?? "'none'", request.nextUrl.protocol === "https:")
+  const headers = new Headers(request.headers)
+  headers.set("x-nonce", nonce)
+  headers.set("Content-Security-Policy", policy)
+  const response = NextResponse.next({ request: { headers } })
+  response.headers.set(REPORT_ONLY && !pay ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", policy)
+  return response
+}
 
 /**
  * The path as the router sees it: "/pay/%6Dyshop-1" renders the page for "myshop-1", so it gets that link's
@@ -74,14 +126,13 @@ export async function proxy(request: NextRequest) {
   if (decoded.startsWith("/pay/")) {
     const pay = PAY_PAGE.exec(decoded)
     const ancestors = pay ? await frameAncestors(pay[1]!, clientIp(request.headers)) : "'self'"
-    const response = NextResponse.next()
-    response.headers.set("Content-Security-Policy", `frame-ancestors ${ancestors}`)
+    const response = proceed(request, ancestors)
     response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
     return response
   }
 
   if (PUBLIC_ROUTES.includes(pathname) || PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
-    return NextResponse.next()
+    return NOT_PAGES.test(pathname) ? NextResponse.next() : proceed(request)
   }
 
   if (isAuthRoute) {
@@ -89,7 +140,7 @@ export async function proxy(request: NextRequest) {
     if (pathname === "/sign-in/two-factor" && !request.cookies.has(CHALLENGE_COOKIE)) {
       return NextResponse.redirect(new URL("/sign-in", request.url))
     }
-    return NextResponse.next()
+    return proceed(request)
   }
 
   if (!signedIn) {
@@ -98,7 +149,7 @@ export async function proxy(request: NextRequest) {
     if (next && pathname !== HOME) url.searchParams.set("next", next)
     return NextResponse.redirect(url)
   }
-  return NextResponse.next()
+  return proceed(request)
 }
 
 export const config = {
