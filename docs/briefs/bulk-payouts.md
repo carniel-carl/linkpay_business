@@ -60,6 +60,15 @@ Payment history for one beneficiary: `GET /api/transfers?beneficiary=<id>`.
 - `POST /api/transfers`: `recipient` can now be `{ type: "beneficiary", beneficiary: id }`. A bank recipient can send `saveBeneficiary: true` to save it while sending.
 - `POST /api/transfers/bulk`: each row is either `{ beneficiary, amountKobo, narration? }` or (as before) `{ accountNumber, bankUuid, amountKobo, narration? }`, and the two can be mixed. `saveBeneficiaries: true` saves the new accounts. Rows are all-or-nothing as before (`INVALID_ROWS`); an unknown beneficiary is `BENEFICIARY_NOT_FOUND` on its row.
 - Every transfer's `recipient` has `beneficiary: id | null`, and every batch has `payoutList: id | null`.
+- **Name binding (2026-10-23):** a bank row may carry the `accountName` the user reviewed. At send time the server repeats the name check, so a name that has changed (case, accents, spaces and punctuation are ignored) refuses the row with `ACCOUNT_NAME_CHANGED`. That error comes in `INVALID_ROWS` `details.rows[]` and includes the bank's current `accountName`. Nothing is created. Saved-beneficiary rows are checked against the saved name. Names aren't part of the Idempotency-Key request hash, so a retry with re-checked names replays.
+- **`POST /api/transfers/resolve-accounts`** (`transfers.create`, no PIN, 60 calls per member per 15 min): `{ items: [{ accountNumber, bankUuid }] }`, 1–200 rows. It returns `{ items, resolved, failed }` with one result per row: `{ row, accountNumber, bankUuid, accountName, bankName, kind, label }`, or `{ row, …, error, code }`. Row codes: `INVALID_ACCOUNT_NUMBER`, `ACCOUNT_NOT_FOUND`, `INVALID_BANK`, `RECIPIENT_UNAVAILABLE`. Enquiries run 5 at a time, and successful answers are cached in memory for 5 minutes (sending always asks the bank again). A bank outage returns 502.
+- **`POST /api/transfers/bulk/preview`** (same body as `/bulk`; `transfers.create`, no PIN): a dry run. It returns:
+  - totals: `branch`, `count`, `amountKobo`, `feeKobo`, `stampDutyKobo`, `totalKobo`, and `availableKobo` (null if unknown);
+  - `approval: { needed, decidingKobo, earlierKobo, levels }`;
+  - per-row results: `rows[]` (fees, name, `error`/`code`) and `errors[]` in the `INVALID_ROWS` shape;
+  - `blockers[]` (`NO_APPROVER`, `INSUFFICIENT_BALANCE`) and `ready`.
+
+  It creates nothing, takes no holds and doesn't lock the account.
 
 ### `/api/payout-lists`
 

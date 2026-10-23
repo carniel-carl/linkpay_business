@@ -87,7 +87,7 @@ cd mobile && bunx expo run:ios     # development build on the simulator; or run:
 `mobile/.env.example` lists the `EXPO_PUBLIC_*` settings. Screenshots are blocked in the app unless `EXPO_PUBLIC_ALLOW_SCREEN_CAPTURE=1` (development only).
 
 ### Web
-`web/.env.local` sets `API_URL` (default `http://localhost:4000`), `NEXT_PUBLIC_SUPPORT_EMAIL` and **`CLIENT_IP_HEADER`**. The last one also goes in `admin/.env.local`. It names the header the platform in front of the server sets with the visitor's address, replacing anything the browser sent: e.g. `x-real-ip` or `x-forwarded-for` on Vercel, `cf-connecting-ip` behind Cloudflare, or `x-real-ip` from your own nginx. The server forwards it to the API so rate limits count each visitor. Unset, nothing is forwarded, and production logs a warning. The auth token lives in an httpOnly cookie (`src/lib/session.ts`). The browser never calls the backend directly; all calls go through server actions and route handlers (`src/lib/api/client.ts`).
+`web/.env.local` sets `API_URL` (default `http://localhost:4000`), `NEXT_PUBLIC_SUPPORT_EMAIL`, `CSP_REPORT_ONLY` (set it to `1` to send the page CSP report-only while rolling it out; enforcing by default) and **`CLIENT_IP_HEADER`**. The last one also goes in `admin/.env.local`. It names the header the platform in front of the server sets with the visitor's address, replacing anything the browser sent: e.g. `x-real-ip` or `x-forwarded-for` on Vercel, `cf-connecting-ip` behind Cloudflare, or `x-real-ip` from your own nginx. The server forwards it to the API so rate limits count each visitor. Unset, nothing is forwarded, and production logs a warning. The auth token lives in an httpOnly cookie (`src/lib/session.ts`). The browser never calls the backend directly; all calls go through server actions and route handlers (`src/lib/api/client.ts`).
 
 ---
 
@@ -278,8 +278,15 @@ The business statuses are `draft → submitted → approved | rejected`, with `c
   - Renaming a branch doesn't rename its customer or account name on Liquifia.
   - `provisionBranchAccount` refuses to link an account that already belongs to another branch.
   - The mock (`tests/mockLiquifia.ts`) behaves the same way.
-- Liquifia's webhooks can arrive out of order. Always check the `status` field, and ignore duplicate events.
-- **Inbound transfers** (`GET /inbound-transfers?skip=&take=`, a plain array): `amount` and `fee` are **strings in kobo** (a ₦100.00 payment is `"10000"`; the bank's own `raw_payload.amount` says `"100.00"`). Payer details are `payer_name`, `payer_bank_name`, `payer_bank_account`; the status is `latest_status`. The sort order isn't documented, so each sync reads every page (capped at 5,000 transfers); add an incremental cursor once volume grows. Checked against the one live transfer on 2026-09-26 without writing anything: it maps to our account and parses.
+- Liquifia's webhooks can arrive out of order. Always check the `status` field, and ignore duplicate events. A credit webhook that arrives during a running sync queues one more run (`syncAfterNewPayment`), so a payment the running pass has already gone past still gets recorded.
+- **Inbound transfers** (`GET /inbound-transfers?skip=&take=`, a plain array): `amount` and `fee` are **strings in kobo** (a ₦100.00 payment is `"10000"`; the bank's own `raw_payload.amount` says `"100.00"`). Payer details are `payer_name`, `payer_bank_name`, `payer_bank_account`; the status is `latest_status`. The docs list only `skip`/`take` (plus `country`/`currency`), with no sort order or date filter. So each run works out the order from consecutive `created_at` values (at least 90% of steps one way) and saves where it got to in `SyncState`.
+  - **Newest first:** it reads down to the newest recorded row minus 10 minutes.
+  - **Oldest first:** it resumes 100 rows back, after checking that the row there is the one it saw last time. If it isn't, it rereads everything.
+  - **No clear order:** it reads everything and logs a warning once.
+  - **Budget:** at most 100 pages (10,000 rows) per run; the rest carries over to the next run.
+  - **Pending or failed payments:** reread for 24 hours.
+  - **Unused data:** the docs show a `pagination` object, which we don't use (the live API returned a plain array).
+  - **Questions for Liquifia:** the order, `created_at` semantics, how long `latest_status` can change, a `virtual_account_id` filter, and the maximum `take`. Checked against the one live transfer on 2026-09-26 without writing anything: it maps to our account and parses.
 - **Webhook signature (assumed):** hex HMAC-SHA256 of the raw body with the webhook secret, optionally prefixed `sha256=`, in `X-Liquifia-Signature`. Confirm with Liquifia and adjust `verifyLiquifiaSignature()` in `src/controllers/webhooks.ts` if it differs. Webhooks only *trigger* a sync; the recorded data always comes from `GET /inbound-transfers`, so their payload format doesn't matter.
 
 ---
@@ -558,3 +565,20 @@ Add a line per session: date, what was done, and anything left half-finished.
     3. Set `CLIENT_IP_HEADER` on web and admin, and set `TRUST_PROXY` on the API to the web and admin servers' addresses.
     4. Ship the web and mobile apps together with the backend, because every covered action needs the PIN. Old mobile builds can't send it, so plan a forced update.
     5. Confirm the 12-hour web idle timeout with the product owner.
+
+- **2026-10-23 (fix batch 4, remaining audit items):** on branch `fix/audit-batch-4`. Backend: 456/456 tests pass. Web, admin and mobile: typecheck, lint and build are clean.
+  - **What's in it:** see the audit's "Fixed in batch 4" list.
+  - **Product owner's decisions:**
+    - Keep biometric sign-in as it is for now.
+    - Daily approval total per member, per branch.
+    - Sign-in IPs for compliance and super admins only.
+    - Nonce-based CSP on web and admin.
+  - **New scripts** (dry run unless given `--apply`): `bun run migrate:kyb` and `bun run migrate:encryption`.
+  - **`bun run typecheck`** now works in every package on a fresh checkout. Mobile uses a committed `src/types/env.d.ts`.
+  - **Before deploying batch 4**, on top of the batch 3 list, whose KYB step `migrate:kyb` replaces:
+    1. Run `bun run migrate:kyb` as a dry run, then with `--apply`, **before** the new backend builds its indexes. If production stores uploads through `setFileStorage()`, configure that in the script too, or the files of deleted documents are left behind.
+    2. Deploy the backend everywhere, then run `bun run migrate:encryption` as a dry run, then with `--apply`. After that, and as soon as anyone saves a new BVN, older code can't read BVNs, so don't roll the backend back past this point.
+    3. Make sure the new indexes build: the partial index on PocketMovement, `{ createdBy, branch, createdAt }` on Transfer, and `Notification.branch`. Mongoose builds them on startup unless `autoIndex` is off; if it is, run `syncIndexes`.
+    4. Ship the admin app together with the backend, because of the new `activity.view_ips` permission and the audit labels.
+    5. Have the proxy in front of web and admin send `X-Forwarded-Proto: https` (for `upgrade-insecure-requests`). Pages are now rendered per request, so don't cache them on a CDN. Optionally roll the CSP out with `CSP_REPORT_ONLY=1` first.
+  - **Left:** see the audit's batch 4 "Still open" list.

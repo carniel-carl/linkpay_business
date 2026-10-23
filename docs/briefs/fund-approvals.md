@@ -19,6 +19,14 @@ All under `/api/transfers`, approved business.
 
 ### Rule
 
+**Rolling 24-hour total (2026-10-23, audit follow-up):** the amount that decides approval is `max(A, E + A)`. It is computed inside the account lock, and preview, `/fee?branch=` and sending all use it.
+- **A** is this request's amount before fees: the whole batch total for bulk sends and payout-list runs.
+- **E** is the sum of `amountKobo` over transfers with the same creator and branch, created in the last 24 hours, whose status isn't `failed`, `rejected` or `cancelled`.
+- `above_threshold` compares the deciding amount with `thresholdKobo`, and `workflow` picks its tier by it. `never` and `always` are unchanged.
+- It applies to every member. A member without `transfers.approve` always needs approval anyway, but in `workflow` mode their tier is also picked by the total.
+- Splitting ₦5m into five ₦999,999 sends under a ₦1m threshold no longer avoids approval.
+- Index: `{ createdBy, branch, createdAt }` on Transfer.
+
 `GET settings` (`accounts.view`) and `PATCH settings` (`transfers.manage`) → `{ approval }`:
 
 ```jsonc

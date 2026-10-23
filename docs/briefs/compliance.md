@@ -35,6 +35,7 @@ A rule keeps at most **one open flag per business**. After it's resolved, only a
 | Permission | Roles | Allows |
 | --- | --- | --- |
 | `activity.view` | all four | Activity overview, transactions, transfers and team of a business; the platform-wide payments feed |
+| `activity.view_ips` | super admin, compliance | Members' last sign-in IP (`lastSignInIp`) on a business's Team tab. For everyone else the field is left out (2026-10-23) |
 | `compliance.view` | super admin, compliance | Compliance page, flags, a business's compliance tab, the audit log |
 | `compliance.manage` | super admin, compliance | Raise and resolve flags, add notes, suspend, reinstate, run the checks |
 | `compliance.ban` | super admin | Ban and lift a ban |
@@ -50,7 +51,7 @@ Hide what the role can't use, as for the existing actions.
 | `GET /businesses/:id/activity` | `{ business: { _id, name, status, compliance }, moneyIn, moneyOut, daily, transfers, counterparties, accounts, team, lastActivityAt }`. `moneyIn` / `moneyOut`: `{ last24h, last7d, last30d }`, each `{ kobo, count }` (in = successful payments; out = payouts the bank partner accepted). `daily`: `[{ day: "YYYY-MM-DD" (Lagos), inKobo, outKobo }]` for days with activity in the last 30. `transfers.last30d`: `{ <status>: { count, kobo } }` for every transfer status. `counterparties`: `{ payers30d, recipients30d }`. `accounts`: `[{ _id, accountNumber, accountName, bankName, branch: { _id, name, isHeadOffice }, balanceKobo \| null }]` (live, read-only; null if the lookup failed). `team: { members }` |
 | `GET /businesses/:id/transactions?branch=&direction=credit\|debit&status=&from=&to=&minKobo=&q=&skip=&take=` | `{ items, total, skip, take }`; items as in the business API's `/api/transactions` |
 | `GET /businesses/:id/transfers?status=&kind=&branch=&from=&to=&minKobo=&q=&skip=&take=` | `{ items, total, skip, take }`; item: `{ _id, kind, status, amountKobo, feeKobo, totalKobo, branch, batch, recipient: { accountNumber, accountName, bankName, business, branch }, narration, reference, failureReason, awaitingProvider, providerError, createdBy: { _id, name, email }, decision: { by, at, note } \| null, createdAt, submittedAt, completedAt }`. `awaitingProvider` + `providerError: "Held: the business is suspended"` marks held transfers |
-| `GET /businesses/:id/members` | `{ members: [{ user: { _id, name, email, emailVerified, twoFactor: "totp"\|"email"\|null, lastSignInAt, lastSignInIp, createdAt }, role, roleLabel, branches: [{ _id, name }], joinedAt, activeDevices }], invites: [{ _id, email, role, roleLabel, expiresAt, createdAt }] }` |
+| `GET /businesses/:id/members` | `{ members: [{ user: { _id, name, email, emailVerified, twoFactor: "totp"\|"email"\|null, lastSignInAt, lastSignInIp (only with `activity.view_ips`), createdAt }, role, roleLabel, branches: [{ _id, name }], joinedAt, activeDevices }], invites: [{ _id, email, role, roleLabel, expiresAt, createdAt }] }` |
 | `GET /activity/transactions?business=&direction=&status=&from=&to=&minKobo=&q=&skip=&take=` | Every business's payments, newest first: the transaction items plus `business: { _id, name, compliance, openFlags }` |
 
 ### Compliance (`compliance.view` to read; writes as marked)

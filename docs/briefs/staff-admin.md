@@ -72,7 +72,7 @@ All routes are rate limited like `/api/auth` (30 per 15 min per IP; off in tests
   - Print a summary.
 - Replace `scripts/make-admin.ts` with `scripts/staff.ts`: `add <email> "<name>"` (asks for the password with Bun's `prompt()`, or takes `--password` for dev), `disable <email>`, `enable <email>`, `list`, `sign-out <email>` (revokes all sessions).
 - `scripts/dev-seed.ts` (`dev:mock --seed`): also create staff `staff@linkpay.test` / `password123` on email two-step, so the code prints to the console.
-- `package.json` scripts: `migrate:staff`, `staff`.
+- `package.json` scripts: `migrate:staff`, `staff`. The `staff` CLI changes roles and disables accounts through the atomic `changeStaffAccess`, so the last super admin is kept. Batch 4 added `migrate:kyb` (deletes duplicate KYB documents before the unique index is built) and `migrate:encryption` (re-encrypts BVNs into the v2 format bound to their record). Both are dry runs unless given `--apply`.
 
 ### 6. Tests (`tests/staff.test.ts`, and update `tests/admin.test.ts`)
 
