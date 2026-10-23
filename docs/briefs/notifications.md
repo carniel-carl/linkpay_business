@@ -90,6 +90,7 @@ Staff (admin/), in-app only:
 | --- | --- | --- |
 | `kyb.submitted` | staff with `kyb.review` ("New business to review" or "Business resubmitted") | `/businesses/<id>` |
 | `account.setup_failed` | staff with `accounts.provision` | `/businesses/<id>` |
+| `transfer.stuck` | staff with `accounts.provision` | `/businesses/<id>/activity` |
 | `staff.invite_accepted` | the staff member who sent the invite | `/staff` |
 | `staff.role_changed` | the staff member | `/` |
 

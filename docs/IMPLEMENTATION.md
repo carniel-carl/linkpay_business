@@ -257,6 +257,20 @@ The business statuses are `draft → submitted → approved | rejected`, with `c
 - **A BVN isn't required** (confirmed by the product owner, 2026-10-20). The first principal's BVN (a director, owner, partner or trustee) is sent only with the business's own customer (the head office); branch customers are created without one, so a BVN is never sent on several customers.
 - **Payouts:** requests and fee quotes are in naira (`toNaira()`/`toKobo()` in the client). The fee quote (`GET /payouts/fee?amount=`) was checked read-only on the live API: a flat ₦20 plus ₦50 stamp duty from ₦10,000, and `fee` already includes the stamp duty. Payout statuses are `pending`, `processing`, `success`, `failed`. Money amounts in payout *responses* are never read (the docs disagree on their unit). No live payout has been sent yet; the first one will confirm the response shape (`provider.data` keeps it).
 - The virtual account's response fields (`id`, `account_number`, `account_name`, `bank_name`) were taken from the docs and are not yet confirmed against a live response. The raw response is saved in `VirtualAccount.providerData` for checking.
+- **Sending payouts safely (2026-10-23):**
+  - **Claim and lease:** a transfer is claimed with a 5-minute lease (`provider.submittingUntil`) before anything is sent. The create request, approvals, the sweep, webhooks and `/refresh` can all try, but only the caller holding the claim sends. Every status change is conditional on `status: "processing"`.
+  - **Retries:** from the second attempt on, the payout is looked up first with `GET /payouts/{reference}/trace` (`liquifia.findPayoutByReference`, where a 404 means none). After an earlier attempt's outcome was unknown, a 4xx fails the transfer only if that lookup finds no payout. This lookup also covers Liquifia keeping idempotency keys for only 24 hours.
+  - **Webhooks:** they only pick which transfer to refresh, by our reference or the payout id. If neither matches, the guarded follow-up runs.
+  - **Escalation:** a status outside `pending`/`processing`/`success`/`failed` is escalated to staff (`transfer.stuck`), never guessed. Transfers not accepted an hour after the first try, or not settled a day after being sent, are flagged once (`provider.stuckAt`).
+  - **Holds:** a transfer's total is held until it succeeds or fails, even after Liquifia accepts it. This is because nobody has confirmed whether `GET /balance` drops when a payout is accepted or when it settles. While a payout settles, `availableKobo` therefore under-counts, and `GET /api/accounts` clamps it at ₦0. **Once the first live payout shows when the debit lands, relax `heldByAccount` in `src/services/transfers.ts`** if it lands on acceptance.
+  - **To confirm with Liquifia (read-only):**
+    - what trace returns for an unknown reference;
+    - what `POST /payouts` returns for a key still in progress (the docs say 409) and for one already finished;
+    - whether `reference` is unique on their side;
+    - the payout webhook's fields;
+    - whether a payout can be reversed after `success`.
+- **Account lock:** `withAccountLock` holds a 60-second lock with an owner token, and only its owner can release it. Callers run `lock.confirm()` just before the writes that depend on the balance check, and the balance call inside the lock times out after 10 seconds.
+- **Idempotency-Key replays:** for transfers, pocket moves and Safelocks, the key is checked again inside the account lock, so two requests with the same key queue and the second one replays. Reusing a key with different details returns **422 `IDEMPOTENCY_KEY_REUSED`**. That means a client bug: clients shouldn't make up a new key and retry on their own.
 - Creates need `X-Idempotency-Key`. Provisioning stores the key on the **branch** and reuses it on retries. Head offices of businesses approved before branches existed inherit the old key from `business.liquifia`.
 - **One NGN virtual account per customer (seen on the live API; not in the docs).** Asking for a second account, even with a new idempotency key, returns the customer's existing one. So:
   - The head office uses the business's customer (`biz<businessId>`).
@@ -510,3 +524,17 @@ Add a line per session: date, what was done, and anything left half-finished.
   - Web/admin: Next 16.4.2 (no critical advisories left; 9 dev/build-only ones remain via shadcn, postcss and fast-glob); idempotency keys follow the request details instead of being replaced on errors; `safeNext` rejects backslash/control-character/off-site `next` values.
   - Mobile: sign-out wipes the keychain before any network call (the push-token DELETE is gone; ending the session drops the phone's tokens on the server); the 5-wrong-passcode limit is enforced at boot and checks no code once spent; idempotency keys follow the request details; money requests time out after 45s with "may already have gone" copy.
   - Left for the next batches (see the audit's "Suggested order"): payout claim before sending, lock owner token, hold timing (ask Liquifia), password reset and clearing the password on OTP verification, revocable web sessions and client-IP forwarding, embed verification guidance, server-checked step-up. Also found while fixing: a reused idempotency key with different details replays the first result, and two simultaneous requests with one key get a bare 409 "Duplicate key"; `createStaffInvite` emails before auditing.
+
+- **2026-10-23 (fix batch 2, payouts):** on branch `fix/audit-batch-2`, the payout and balance work from the audit, with 301/301 tests passing:
+  - transfers are claimed before sending, and status changes are conditional;
+  - a retry looks the payout up by reference before treating a 4xx as a failure;
+  - webhooks refresh only the transfer they name;
+  - the debit row is repaired after a crash;
+  - stuck or unknown-status transfers are flagged to staff (`transfer.stuck`, shown in the admin bell);
+  - the account lock has an owner token, a 60s lease and a confirmation before writing;
+  - money stays held until a transfer is final (relax this once Liquifia confirms when the debit lands);
+  - Idempotency-Keys replay inside the lock and refuse different details (422 `IDEMPOTENCY_KEY_REUSED`);
+  - a failed auto-save is retried;
+  - staff invites and role changes are audited before the email or notification.
+
+  Still open from the audit: H1, H11, H12, H13 and the Medium items.
