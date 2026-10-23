@@ -8,6 +8,7 @@ import { friendlyMessage } from "@/lib/api/errors";
 import type { SignedInDevice } from "@/lib/api/types";
 import { listDevices, signOutDevice, signOutOtherDevices } from "@/lib/auth/api";
 import { timeAgo } from "@/lib/format";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 const KEY = ["auth", "devices"];
@@ -16,6 +17,7 @@ export default function Devices() {
   const qc = useQueryClient();
   const { shadows } = useTheme();
   const devices = useQuery({ queryKey: KEY, queryFn: listDevices });
+  const pull = usePullToRefresh(() => devices.refetch());
   const one = useMutation({ mutationFn: signOutDevice, onSettled: () => qc.invalidateQueries({ queryKey: KEY }) });
   const others = useMutation({ mutationFn: signOutOtherDevices, onSettled: () => qc.invalidateQueries({ queryKey: KEY }) });
 
@@ -40,7 +42,7 @@ export default function Devices() {
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-5 px-4 pb-12 pt-4"
-      refreshControl={<RefreshControl refreshing={devices.isRefetching} onRefresh={() => void devices.refetch()} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <FocusStatusBar />
       <Text className="px-1 text-[15px] leading-[21px] text-muted-foreground">

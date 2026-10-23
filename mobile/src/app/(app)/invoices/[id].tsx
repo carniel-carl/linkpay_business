@@ -20,6 +20,7 @@ import type { Business, Invoice, InvoicePayment } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { formatAccountNumber, formatDate, formatDateTime, formatNaira } from "@/lib/format";
 import { accentPalette, dueLabel, formatDay, isUnpaid, METHOD_LABELS } from "@/lib/invoices";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** One invoice: what's owed, how to get paid, and what the member can do with it now. */
@@ -57,8 +58,7 @@ export default function InvoiceScreen() {
       inv={inv}
       business={overview?.business}
       manager={can(overview, "invoices.manage")}
-      refetching={invoice.isRefetching}
-      refetch={() => void invoice.refetch()}
+      refetch={invoice.refetch}
     />
   );
 }
@@ -67,15 +67,14 @@ function Detail({
   inv,
   business,
   manager,
-  refetching,
   refetch,
 }: {
   inv: Invoice;
   business?: Business;
   manager: boolean;
-  refetching: boolean;
-  refetch: () => void;
+  refetch: () => Promise<unknown>;
 }) {
+  const pull = usePullToRefresh(refetch);
   const change = useInvoiceChange();
   const branding = useBranding();
   const logo = useLogoSource(branding.data?.logo);
@@ -159,7 +158,7 @@ function Detail({
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
-      refreshControl={<RefreshControl refreshing={refetching} onRefresh={refetch} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <FocusStatusBar />
       <View className="gap-2 px-1">

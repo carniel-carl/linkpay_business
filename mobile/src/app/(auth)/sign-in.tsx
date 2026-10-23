@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { router, useLocalSearchParams } from "expo-router";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { Text, View } from "react-native";
 import type { z } from "zod";
@@ -36,6 +36,13 @@ export default function SignIn() {
     defaultValues: { email: params.email ?? "", password: "" },
   });
   const { isSubmitting, errors } = form.formState;
+
+  // Back from a password reset (dismissTo with the email): this screen is already mounted, so the default
+  // above is long gone. Take the email the new password belongs to.
+  const { setValue } = form;
+  useEffect(() => {
+    if (params.email) setValue("email", params.email);
+  }, [params.email, setValue]);
 
   async function onSubmit(values: Values) {
     try {

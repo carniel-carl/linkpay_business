@@ -18,6 +18,7 @@ import { useRenameSafelock, useSafelock } from "@/lib/api/safelocks";
 import type { Safelock } from "@/lib/api/types";
 import { formatDateTime, formatNaira } from "@/lib/format";
 import { formatDay } from "@/lib/invoices";
+import { usePullToRefresh } from "@/lib/query";
 import { daysLeftLabel } from "@/lib/savings";
 import { useTheme } from "@/theme/theme";
 
@@ -45,10 +46,11 @@ export default function SafelockDetail() {
       </KeyboardAwareScrollView>
     );
   }
-  return <Detail s={lock.data} justCreated={created === "1"} refetching={lock.isRefetching} refetch={() => void lock.refetch()} />;
+  return <Detail s={lock.data} justCreated={created === "1"} refetch={lock.refetch} />;
 }
 
-function Detail({ s, justCreated, refetching, refetch }: { s: Safelock; justCreated: boolean; refetching: boolean; refetch: () => void }) {
+function Detail({ s, justCreated, refetch }: { s: Safelock; justCreated: boolean; refetch: () => Promise<unknown> }) {
+  const pull = usePullToRefresh(refetch);
   const { colors } = useTheme();
   const money = useMoney();
   const rename = useRenameSafelock();
@@ -80,7 +82,7 @@ function Detail({ s, justCreated, refetching, refetch }: { s: Safelock; justCrea
       keyboardShouldPersistTaps="handled"
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
-      refreshControl={<RefreshControl refreshing={refetching} onRefresh={refetch} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <Stack.Screen
         options={{

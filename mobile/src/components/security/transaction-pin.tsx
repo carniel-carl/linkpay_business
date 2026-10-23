@@ -2,7 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import { useState, type ReactNode } from "react";
 import { Modal, Text, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { isWeakPin, WEAK_PIN } from "@/lib/api/transaction-pin";
@@ -15,16 +15,17 @@ import { PasscodeEntry, type EntryResult } from "./passcode-entry";
 /**
  * A native full-screen modal on the navy band, like the passcode confirmation, so it covers the header and tab
  * bar. It hides while the app is locked, so the lock screen is never under it; what it holds comes back after.
+ * The top inset comes from the app's provider: a SafeAreaView inside an iOS Modal measures no inset, which put
+ * the logo under the status bar and Dynamic Island.
  */
 export function PinModal({ children, onRequestClose }: { children: ReactNode; onRequestClose: () => void }) {
   const locked = useAuth((s) => s.status === "locked");
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={!locked} animationType="fade" onRequestClose={onRequestClose} statusBarTranslucent navigationBarTranslucent>
       <View className="flex-1 bg-band">
         <StatusBar style="light" />
-        <SafeAreaView edges={["top"]} style={{ flex: 1, paddingTop: 16 }}>
-          {children}
-        </SafeAreaView>
+        <View style={{ flex: 1, paddingTop: insets.top + 16 }}>{children}</View>
       </View>
     </Modal>
   );
@@ -94,7 +95,10 @@ export function ChoosePin({
   );
 }
 
-/** A full-band message with one main action and a way out: a locked PIN, or an account without a password. */
+/**
+ * A full-band message with one main action and, with `onCancel`, a way out: a locked PIN, an account without a
+ * password, or a PIN saved just before the action failed (that one only moves on).
+ */
 export function PinNotice({
   title,
   body,
@@ -106,7 +110,7 @@ export function PinNotice({
   body: string;
   action: string;
   onAction: () => void;
-  onCancel: () => void;
+  onCancel?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   return (
@@ -131,9 +135,11 @@ export function PinNotice({
         <Button variant="pop" onPress={onAction} className="h-14">
           {action}
         </Button>
-        <Button variant="band" onPress={onCancel} className="h-14">
-          Cancel
-        </Button>
+        {onCancel && (
+          <Button variant="band" onPress={onCancel} className="h-14">
+            Cancel
+          </Button>
+        )}
       </View>
     </View>
   );

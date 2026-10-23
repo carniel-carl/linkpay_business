@@ -8,6 +8,7 @@ import { Display } from "@/components/ui/typography";
 import { useTransaction } from "@/lib/api/banking";
 import { friendlyMessage } from "@/lib/api/errors";
 import { formatAccountNumber, formatDateTime, formatNaira } from "@/lib/format";
+import { usePullToRefresh } from "@/lib/query";
 import { StatusTag } from "./status-tag";
 
 const STATUS_NOTES = {
@@ -19,6 +20,7 @@ const STATUS_NOTES = {
 /** One payment, opened from Home or Payments. */
 export function PaymentDetail({ id }: { id: string }) {
   const tx = useTransaction(id);
+  const pull = usePullToRefresh(() => tx.refetch());
 
   if (!tx.data) {
     return (
@@ -52,7 +54,7 @@ export function PaymentDetail({ id }: { id: string }) {
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
-      refreshControl={<RefreshControl refreshing={tx.isRefetching} onRefresh={() => void tx.refetch()} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <FocusStatusBar />
       <View className="gap-2 px-1">

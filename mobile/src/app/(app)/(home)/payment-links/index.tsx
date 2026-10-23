@@ -18,6 +18,7 @@ import type { LinkCheckout, PaymentLink, PaymentLinkSummary } from "@/lib/api/ty
 import { formatNaira } from "@/lib/format";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
 import { CHECKOUT_TABS, LINK_TABS, type CheckoutTab, type LinkTab } from "@/lib/payment-links";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 const openLink = (link: PaymentLink) => router.push({ pathname: "/payment-links/[id]", params: { id: link._id } });
@@ -42,6 +43,7 @@ export default function PaymentLinks() {
   }, [search]);
 
   const list = view === "links" ? links : checkouts;
+  const pull = usePullToRefresh(() => Promise.all([list.refetch(), summary.refetch()]));
   const items = useMemo(
     () => list.data?.pages.flatMap((p) => p.items as (PaymentLink | LinkCheckout)[]) ?? [],
     [list.data],
@@ -84,10 +86,7 @@ export default function PaymentLinks() {
         {...LIST_PERFORMANCE}
         contentContainerStyle={{ paddingBottom: 48 }}
         refreshControl={
-          <RefreshControl
-            refreshing={list.isRefetching && !list.isFetchingNextPage}
-            onRefresh={() => void Promise.all([list.refetch(), summary.refetch()])}
-          />
+          <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
         }
         onEndReachedThreshold={0.6}
         onEndReached={() => {

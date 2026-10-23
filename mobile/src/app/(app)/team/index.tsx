@@ -18,6 +18,7 @@ import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
 import { initials, timeAgo } from "@/lib/format";
 import { branchSummary, canManage, isOwner, roleLabel } from "@/lib/permissions";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** Members, pending invites and leaving. Needs an approved business; managing needs `team.manage`. */
@@ -28,6 +29,7 @@ export default function Team() {
   const manager = can(overview, "team.manage");
   const members = useMembers(manager);
   const invites = useInvites(manager);
+  const pull = usePullToRefresh(() => Promise.all([members.refetch(), invites.refetch()]));
   const roles = useRoles();
 
   if (!overview?.membership) {
@@ -42,12 +44,11 @@ export default function Team() {
   const membership = overview.membership;
   if (!manager) return <NotAManager overview={overview} membership={membership} roles={roles.data?.roles} />;
 
-  const refreshing = members.isRefetching || invites.isRefetching;
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-7 px-4 pb-12 pt-3"
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void Promise.all([members.refetch(), invites.refetch()])} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <FocusStatusBar />
       <Stack.Screen

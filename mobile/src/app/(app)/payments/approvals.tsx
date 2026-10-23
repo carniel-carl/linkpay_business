@@ -26,6 +26,7 @@ import type { ApprovalRule, Transfer } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { formatNaira } from "@/lib/format";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** Defined once, so memoised rows keep the same handler. */
@@ -52,6 +53,7 @@ export default function FundApprovals() {
   const [search, setSearch] = useState("");
   const [q, setQ] = useState<string>();
   const list = useApprovals(tab, q);
+  const pull = usePullToRefresh(() => list.refetch());
   const pending = usePendingApprovalCount(ready).data ?? 0;
   const awaiting = useAwaitingCount(ready && approver).data ?? 0;
   const rule = useApprovalRule(ready);
@@ -91,7 +93,7 @@ export default function FundApprovals() {
         keyExtractor={keyById}
         {...LIST_PERFORMANCE}
         contentContainerStyle={{ paddingBottom: 48 }}
-        refreshControl={<RefreshControl refreshing={list.isRefetching && !list.isFetchingNextPage} onRefresh={() => void list.refetch()} />}
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
         onEndReachedThreshold={0.6}
         onEndReached={() => {
           if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();

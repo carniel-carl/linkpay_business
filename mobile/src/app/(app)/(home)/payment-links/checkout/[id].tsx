@@ -14,12 +14,14 @@ import type { LinkCheckout, SuggestedPayment } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { formatDate, formatDateTime, formatNaira } from "@/lib/format";
 import { MATCHED_BY_LABELS, originLabel } from "@/lib/payment-links";
+import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /** One payer's checkout: what they were asked to send, what came in, how it matched, and linking by hand. */
 export default function CheckoutScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const checkout = useLinkCheckout(id);
+  const pull = usePullToRefresh(() => checkout.refetch());
   const c = checkout.data;
 
   if (!c) {
@@ -49,7 +51,7 @@ export default function CheckoutScreen() {
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
       contentContainerClassName="gap-6 px-4 pb-12 pt-3"
-      refreshControl={<RefreshControl refreshing={checkout.isRefetching} onRefresh={() => void checkout.refetch()} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
     >
       <FocusStatusBar />
       <View className="gap-2 px-1">

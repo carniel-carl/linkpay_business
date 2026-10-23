@@ -56,7 +56,9 @@ type Step =
   | { kind: "locked"; until: string | null }
   | { kind: "password"; error?: string }
   | { kind: "choose"; password: string }
-  | { kind: "noPassword" };
+  | { kind: "noPassword" }
+  /** A first PIN was saved here, then the action itself failed: say the PIN is kept before the screen shows why. */
+  | { kind: "saved"; err: unknown };
 
 type Job = {
   id: number;
@@ -122,6 +124,8 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
   const [step, setStep] = useState<Step>(job.start);
   const [running, setRunning] = useState(false);
   const [pending, setPending] = useState<string>();
+  // A first PIN chosen on this sheet is saved before the action runs, so it stays saved if the action then fails.
+  const pinSaved = useRef(false);
 
   const refreshStatus = useCallback(() => void qc.invalidateQueries({ queryKey: pinStatusQuery.queryKey }), [qc]);
 
@@ -141,8 +145,16 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     job.succeed(result);
   }
 
+  /** The action's own error goes to the screen once the sheet has closed. */
+  function closeWithError(err: unknown) {
+    onClose();
+    job.fail(err);
+  }
+
   const cancel = () => {
-    if (!running) onClose();
+    if (running) return;
+    if (step.kind === "saved") closeWithError(step.err);
+    else onClose();
   };
 
   function resetPin() {
@@ -171,9 +183,10 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
       setStep({ kind: "password" });
       return "keep";
     }
-    onClose();
-    job.fail(err);
-    // The screen gives the feedback for its own errors.
+    // The screen gives the feedback for its own errors. If a first PIN was just saved, the sheet says so first,
+    // or the error reads as if setting the PIN failed too and they'd try to set it again.
+    if (pinSaved.current) setStep({ kind: "saved", err });
+    else closeWithError(err);
     return "keep";
   }
 
@@ -197,6 +210,7 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     setPending("Saving your PIN…");
     try {
       qc.setQueryData(pinStatusQuery.queryKey, await setTransactionPin(pin, password));
+      pinSaved.current = true;
     } catch (err) {
       setRunning(false);
       setPending(undefined);
@@ -259,6 +273,16 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     );
   } else if (step.kind === "password") {
     body = <PasswordStep error={step.error} onContinue={(password) => setStep({ kind: "choose", password })} onCancel={onClose} />;
+  } else if (step.kind === "saved") {
+    const { err } = step;
+    body = (
+      <PinNotice
+        title="Your PIN is set"
+        body="It works from now on, here and on the web. What you were confirming didn't finish, though. Continue to see why."
+        action="Continue"
+        onAction={() => closeWithError(err)}
+      />
+    );
   } else {
     const { password } = step;
     body = (
