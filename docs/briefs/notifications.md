@@ -27,7 +27,7 @@ A user sees their notifications across all their businesses. Each one names its 
 | `POST /read-all` | `{ business? }` | `{ updated }` |
 | `GET /stream` | header `Last-Event-ID` (or `?lastEventId=`) | SSE, see §3 |
 | `POST /push-tokens` | `{ token: "ExponentPushToken[...]", platform: "ios" \| "android" }` | `204`. Mobile only, after sign-in and whenever the token changes. Tied to the device session; a phone signing in to another account takes the token over |
-| `DELETE /push-tokens` | `{ token }` | `204`. Call before signing out |
+| `DELETE /push-tokens` | `{ token }` | `204`. Optional: ending a session already drops its tokens, so the mobile app no longer calls this at sign-out |
 
 **Notification object**
 
@@ -97,7 +97,7 @@ Staff (admin/), in-app only:
 
 The mobile session's plan and the product owner's decisions for mobile (full-detail pushes, no per-type switches at launch, refreshing on events instead of a live stream) are in [mobile-notifications.md](mobile-notifications.md); that file wins where the notes below differ.
 
-- After sign-in (and on app start while signed in): ask for notification permission at a sensible moment, get the Expo push token (`expo-notifications`, `getExpoPushTokenAsync({ projectId })`), and `POST /api/notifications/push-tokens`. Before signing out: `DELETE` it.
+- After sign-in (and on app start while signed in): ask for notification permission at a sensible moment, get the Expo push token (`expo-notifications`, `getExpoPushTokenAsync({ projectId })`), and `POST /api/notifications/push-tokens`. Signing out needs no `DELETE`: the backend drops the tokens of a session once it ends.
 - Each push carries an Android `channelId`: `payments` (payment.*), `transfers` (transfer.*), `invoices` (invoice.*) or `account` (verification, bank accounts, team, security). Create channels with these ids (`backend/src/config/notifications.ts`, `PUSH_CHANNELS`).
 - Tapping a push: `data` holds `notificationId`, `type`, `businessId`, `link` and the ids from §2. Open the matching screen (switch business first if `businessId` differs), and mark it read.
 - While the app is open: a notifications screen (list, mark read, mark all read) and a badge from `/unread-count`. React Native has no `EventSource`: use the stream through `expo/fetch` streaming (or `react-native-sse`) while in the foreground, close it in the background, and reconnect on `end: token_expired` after refreshing the token.
