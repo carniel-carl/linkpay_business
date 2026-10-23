@@ -193,7 +193,7 @@ Before fulfilling an order, the business's server calls `GET API_URL/api/public/
 
 The merchant then marks the order paid, so the same checkout can't be used twice. The embed snippet and the dashboard's embed card say exactly this.
 
-Proposed, not built yet: `GET /api/public/pay/:slug/checkouts/:token`, which 404s unless the token belongs to that slug, so the binding is enforced by us. Later, signed webhooks (open question 18).
+**Built (batch 4):** `GET /api/public/pay/:slug/checkouts/:token` returns the same response, but it's a 404 (`CHECKOUT_NOT_FOUND`) for a checkout from any other link, so the binding is enforced by us. It has the same limits and format checks as the old route, and a foreign token triggers no sync. The embed snippet, the dashboard's embed card and `verifyUrl` now point at it. The `link.slug` check is only needed on the old `/api/public/checkouts/:token`, which still works. Signed webhooks come later (open question 18).
 
 **Web files:** `web/public/embed.js` (the script), `web/src/app/pay/[slug]/` (the page), `web/src/components/pay/pay-client.tsx` (form, checkout, messages), `web/src/app/api/pay/` (start and poll, forwarding the payer's address), and `web/src/proxy.ts` (`frame-ancestors`).
 
