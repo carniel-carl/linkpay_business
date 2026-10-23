@@ -26,7 +26,7 @@ export const getUser: RequestHandler<IdParams> = async (req, res) => {
 
 export const updateUser: RequestHandler<IdParams> = async (req, res) => {
   assertSelf(req.params.id, req.userId);
-  const body = z.object({ name: z.string().trim().min(1) }).parse(req.body);
+  const body = z.object({ name: z.string().trim().min(1).max(100) }).parse(req.body);
   const user = await UserModel.findByIdAndUpdate(req.params.id, body, {
     returnDocument: "after",
     runValidators: true,

@@ -15,6 +15,8 @@ export const MAX_STREAMS_PER_RECIPIENT = 10;
 const REPLAY_LIMIT = 100;
 
 const openStreams = new Map<string, number>();
+// Timers held by open streams; only tests read it, to check a closed stream leaves none running.
+let liveTimers = 0;
 
 /** Test hook: shorter timers. */
 export const streamTimers = { heartbeatMs: HEARTBEAT_MS, recheckMs: RECHECK_MS };
@@ -78,6 +80,7 @@ export async function serveNotificationStream(
     closed = true;
     unsubscribe();
     timers.forEach((t) => clearInterval(t));
+    liveTimers -= timers.length;
     const left = (openStreams.get(channel) ?? 1) - 1;
     left > 0 ? openStreams.set(channel, left) : openStreams.delete(channel);
     res.end();
@@ -104,6 +107,8 @@ export async function serveNotificationStream(
     console.error("Notification stream failed to start:", err);
     return close();
   }
+  // The client left while we were replaying: close() has already run, so timers started now would never be cleared.
+  if (closed) return;
 
   const msLeft = opts.closeAt.getTime() - Date.now();
   if (msLeft <= 0) return close("token_expired");
@@ -118,7 +123,11 @@ export async function serveNotificationStream(
         .catch((err) => console.error("Notification stream recheck failed:", err));
     }, streamTimers.recheckMs),
   );
+  liveTimers += timers.length;
 }
 
 /** Number of open streams, for tests. */
 export const openStreamCount = (audience: NotificationAudience, recipient: string) => openStreams.get(channelOf(audience, recipient)) ?? 0;
+
+/** Timers held by all open streams, for tests. */
+export const liveStreamTimerCount = () => liveTimers;

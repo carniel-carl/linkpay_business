@@ -1,4 +1,5 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
+import { STATUS_CODES } from "node:http";
 import mongoose from "mongoose";
 import { ZodError } from "zod";
 import { LiquifiaError } from "../services/liquifia/client";
@@ -22,6 +23,10 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   if (err?.name === "MulterError" && err.code === "LIMIT_FILE_SIZE") {
     return res.status(400).json({ error: "File too large", code: "FILE_TOO_LARGE" });
   }
+  // Any other upload problem (unexpected field, too many files) is the client's, and multer's message is safe.
+  if (err?.name === "MulterError") {
+    return res.status(400).json({ error: err.message, code: "UPLOAD_INVALID" });
+  }
   if (err instanceof ZodError) {
     return res.status(400).json({ error: "Validation failed", details: err.issues });
   }
@@ -31,6 +36,17 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   if (err?.code === 11000) {
     return res.status(409).json({ error: "Duplicate key", fields: err.keyValue });
   }
+  // A malformed id that reached a query (e.g. a filter in the query string).
+  if (err instanceof mongoose.Error.CastError) {
+    return res.status(400).json({ error: "Invalid id" });
+  }
+  // Client errors from Express and body-parser (malformed JSON, body too large, a badly encoded URL). Their
+  // message is shown only when http-errors marks it safe with `expose`.
+  const status = Number(err?.status ?? err?.statusCode);
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ error: err.expose === true ? err.message : (STATUS_CODES[status] ?? "Bad request") });
+  }
+  // Anything else is ours: Mongo and internal messages stay in the logs.
   console.error(err);
-  res.status(err.status ?? 500).json({ error: err.message ?? "Internal server error" });
+  res.status(500).json({ error: "Internal server error" });
 };

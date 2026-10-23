@@ -1,7 +1,7 @@
 import type { RequestHandler } from "express";
 import { isValidObjectId } from "mongoose";
 import { z } from "zod";
-import { BUSINESS_STATUSES, BusinessModel } from "../models/Business";
+import { BUSINESS_STATUSES, BusinessModel, type BusinessDocument } from "../models/Business";
 import { KybDocumentModel } from "../models/KybDocument";
 import { UserModel } from "../models/User";
 import {
@@ -28,19 +28,43 @@ async function findBusiness(id: string) {
   return business;
 }
 
-async function findSubmittedBusiness(id: string) {
-  const business = await findBusiness(id);
+function assertReviewable(business: BusinessDocument) {
   if (business.compliance?.status === "banned") {
     throw new HttpError(409, "This business is closed (banned). Lift the ban before reviewing it.", "BUSINESS_BANNED");
   }
   if (business.status !== "submitted") {
     throw new HttpError(409, `Only submitted businesses can be reviewed (current: ${business.status})`, "NOT_REVIEWABLE");
   }
+}
+
+async function findSubmittedBusiness(id: string) {
+  const business = await findBusiness(id);
+  assertReviewable(business);
   return business;
 }
 
-async function ownerEmail(ownerId: unknown) {
-  return (await UserModel.findById(ownerId).select("email"))?.email;
+/**
+ * Records a review decision, atomically, so two reviewers (or a double click) can't both decide the same
+ * submission: only the winner gets the business back, and only the winner should run the side effects.
+ */
+async function decideSubmittedBusiness(id: string, decision: Record<string, unknown>) {
+  if (!isValidObjectId(id)) throw new HttpError(400, "Invalid id");
+  const decided = await BusinessModel.findOneAndUpdate(
+    { _id: id, status: "submitted", "compliance.status": { $ne: "banned" } },
+    decision,
+    { returnDocument: "after" },
+  );
+  if (decided) return decided;
+  // Lost (or never reviewable): re-read for the same precise error as before (404, banned, already decided).
+  assertReviewable(await findBusiness(id));
+  // Only if it was decided and then resubmitted between the update and the re-read.
+  throw new HttpError(409, "This business changed while you were reviewing it. Reload and try again.", "NOT_REVIEWABLE");
+}
+
+/** Emails the owner about a decision. Best-effort: the decision and its audit entry already stand. */
+async function emailOwner(business: BusinessDocument, send: (to: string) => Promise<void>) {
+  const email = (await UserModel.findById(business.owner).select("email"))?.email;
+  if (email) await send(email).catch((err) => console.error(`Couldn't email the decision on business ${business.id}:`, err));
 }
 
 const SORTS = {
@@ -124,18 +148,20 @@ export const downloadBusinessDocument: RequestHandler<DocParams> = async (req, r
 };
 
 export const approveBusiness: RequestHandler<IdParams> = async (req, res) => {
-  const business = await findSubmittedBusiness(req.params.id);
-
-  business.set({ status: "approved", reviewedAt: new Date(), reviewedBy: req.staffId, reviewNote: undefined });
-  await business.save();
-  await KybDocumentModel.updateMany({ business: business._id }, { status: "accepted", $unset: { rejectionReason: 1 } });
-  await kybDecided(business, "approved");
+  const business = await decideSubmittedBusiness(req.params.id, {
+    status: "approved",
+    reviewedAt: new Date(),
+    reviewedBy: req.staffId,
+    $unset: { reviewNote: 1 },
+  });
   await audit(await staffActor(req), {
     action: "kyb.approved",
     business: business._id,
     target: { kind: "business", id: business._id },
     summary: "Verification approved",
   });
+  await KybDocumentModel.updateMany({ business: business._id }, { status: "accepted", $unset: { rejectionReason: 1 } });
+  await kybDecided(business, "approved");
 
   // Approval stands even if Liquifia is down; the failure is recorded on the business and an
   // admin can retry with POST /businesses/:id/provision-account.
@@ -144,8 +170,7 @@ export const approveBusiness: RequestHandler<IdParams> = async (req, res) => {
     return undefined;
   });
 
-  const email = await ownerEmail(business.owner);
-  if (email) await sendBusinessApprovedEmail(email, business.name, account?.accountNumber);
+  await emailOwner(business, (to) => sendBusinessApprovedEmail(to, business.name, account?.accountNumber));
   await sendBusinessOverview(res, (await BusinessModel.findById(business._id))!, { audience: "admin" });
 };
 
@@ -187,22 +212,20 @@ export const requestChanges: RequestHandler<IdParams> = async (req, res) => {
       documents: z.array(z.object({ id: z.string(), reason: z.string().trim().min(1) })).default([]),
     })
     .parse(req.body);
-  const business = await findSubmittedBusiness(req.params.id);
-
-  for (const { id, reason } of body.documents) {
-    const updated = await KybDocumentModel.findOneAndUpdate(
-      { _id: id, business: business._id },
-      { status: "rejected", rejectionReason: reason },
-    );
-    if (!updated) throw new HttpError(400, `Document ${id} does not belong to this business`);
+  const submitted = await findSubmittedBusiness(req.params.id);
+  // Checked before deciding, so a wrong id leaves the review untouched.
+  for (const { id } of body.documents) {
+    if (!(await KybDocumentModel.exists({ _id: id, business: submitted._id }))) {
+      throw new HttpError(400, `Document ${id} does not belong to this business`);
+    }
   }
 
-  business.set({ status: "changes_requested", reviewNote: body.note, reviewedAt: new Date(), reviewedBy: req.staffId });
-  await business.save();
-
-  const email = await ownerEmail(business.owner);
-  if (email) await sendBusinessChangesRequestedEmail(email, business.name, body.note);
-  await kybDecided(business, "changes_requested", body.note);
+  const business = await decideSubmittedBusiness(submitted.id, {
+    status: "changes_requested",
+    reviewNote: body.note,
+    reviewedAt: new Date(),
+    reviewedBy: req.staffId,
+  });
   await audit(await staffActor(req), {
     action: "kyb.changes_requested",
     business: business._id,
@@ -210,19 +233,23 @@ export const requestChanges: RequestHandler<IdParams> = async (req, res) => {
     summary: "Asked for changes to the verification",
     details: { note: body.note, documents: body.documents },
   });
+  for (const { id, reason } of body.documents) {
+    await KybDocumentModel.updateOne({ _id: id, business: business._id }, { status: "rejected", rejectionReason: reason });
+  }
+
+  await kybDecided(business, "changes_requested", body.note);
+  await emailOwner(business, (to) => sendBusinessChangesRequestedEmail(to, business.name, body.note));
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 
 export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ reason: z.string().trim().min(1) }).parse(req.body);
-  const business = await findSubmittedBusiness(req.params.id);
-
-  business.set({ status: "rejected", reviewNote: body.reason, reviewedAt: new Date(), reviewedBy: req.staffId });
-  await business.save();
-
-  const email = await ownerEmail(business.owner);
-  if (email) await sendBusinessRejectedEmail(email, business.name, body.reason);
-  await kybDecided(business, "rejected", body.reason);
+  const business = await decideSubmittedBusiness(req.params.id, {
+    status: "rejected",
+    reviewNote: body.reason,
+    reviewedAt: new Date(),
+    reviewedBy: req.staffId,
+  });
   await audit(await staffActor(req), {
     action: "kyb.rejected",
     business: business._id,
@@ -230,6 +257,9 @@ export const rejectBusiness: RequestHandler<IdParams> = async (req, res) => {
     summary: "Verification rejected",
     details: { reason: body.reason },
   });
+
+  await kybDecided(business, "rejected", body.reason);
+  await emailOwner(business, (to) => sendBusinessRejectedEmail(to, business.name, body.reason));
   await sendBusinessOverview(res, business, { audience: "admin" });
 };
 

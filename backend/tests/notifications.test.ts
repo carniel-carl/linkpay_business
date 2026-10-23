@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { Request } from "express";
 import { SignJWT } from "jose";
 import { Types } from "mongoose";
@@ -14,7 +14,7 @@ import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
 import { notifyStaff, notifyUsers } from "../src/services/notifications";
-import { openStreamCount, streamTimers } from "../src/services/notificationStream";
+import { liveStreamTimerCount, openStreamCount, streamTimers } from "../src/services/notificationStream";
 import { setPushProvider, type PushMessage } from "../src/services/push";
 import { signInResponse } from "../src/services/sessions";
 import { signAccessToken } from "../src/services/tokens";
@@ -444,6 +444,28 @@ describe("the live stream (SSE)", () => {
     streams.forEach((s) => s.close());
     await Bun.sleep(50);
     expect(openStreamCount("user", me.id)).toBe(0);
+  });
+
+  test("a client that leaves while the stream is starting leaves no timers running", async () => {
+    const me = await user("Quick exit");
+    const [seen] = await notifyUsers([me.id], { type: "payment.received", title: "Seen", body: "x" });
+    const timersBefore = liveStreamTimerCount();
+    // Hold up the startup (after the replay) so the client leaves in the middle of it.
+    const unreadCount = spyOn(NotificationModel, "countDocuments").mockImplementation((async () => {
+      await Bun.sleep(300);
+      return 0;
+    }) as unknown as typeof NotificationModel.countDocuments);
+    try {
+      const stream = await openStream("/api/notifications/stream", me.token, { "Last-Event-ID": seen!.id });
+      expect(stream.res.status).toBe(200);
+      stream.close();
+      await Bun.sleep(500);
+      expect(unreadCount).toHaveBeenCalled();
+    } finally {
+      unreadCount.mockRestore();
+    }
+    expect(openStreamCount("user", me.id)).toBe(0);
+    expect(liveStreamTimerCount()).toBe(timersBefore);
   });
 
   test("staff get their own stream, which ends when they're disabled", async () => {

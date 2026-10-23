@@ -3,6 +3,7 @@
 // Emails, including sign-in and verification codes, are printed to this console.
 process.env.NODE_ENV = "development";
 process.env.JWT_SECRET = "dev-secret-for-simulator";
+process.env.STAFF_JWT_SECRET = "dev-staff-secret-for-simulator-not-for-production";
 process.env.ENCRYPTION_KEY = "0".repeat(64);
 process.env.LIQUIFIA_SECRET_KEY = "sk_test_mock";
 process.env.LIQUIFIA_BASE_URL = "http://127.0.0.1:0/unset";

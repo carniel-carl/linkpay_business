@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { BranchModel } from "../src/models/Branch";
 import { BusinessModel } from "../src/models/Business";
+import { NotificationModel } from "../src/models/Notification";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
-import { ensureHeadOffice } from "../src/services/accounts";
+import { ensureHeadOffice, provisionBranchAccount } from "../src/services/accounts";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, type TestEnv } from "./helpers";
@@ -245,6 +246,40 @@ describe("provisioning", () => {
     expect(saved?.liquifia?.accountStatus).toBe("failed");
     expect(saved?.liquifia?.lastError).toContain("already belongs to branch");
     expect(await VirtualAccountModel.countDocuments({ providerAccountId: headVa!.providerAccountId })).toBe(1);
+  });
+
+  test("setting up one branch twice at once: both get the one account and the branch stays active", async () => {
+    const { business } = await approvedBusiness("Race Co");
+    const branch = await BranchModel.create({ business: business._id, name: "Racing" });
+
+    const [a, b] = await Promise.all([provisionBranchAccount(branch._id), provisionBranchAccount(branch._id)]);
+    expect(String(a._id)).toBe(String(b._id));
+    expect(await VirtualAccountModel.countDocuments({ branch: branch._id })).toBe(1);
+    const saved = await BranchModel.findById(branch._id);
+    expect(saved?.liquifia?.accountStatus).toBe("active");
+    expect(saved?.liquifia?.lastError).toBeUndefined();
+    // The loser isn't reported to staff as a failed setup.
+    expect(await NotificationModel.countDocuments({ type: "account.setup_failed", "data.branchId": branch.id })).toBe(0);
+  });
+
+  test("a retry repairs a head office marked failed that already has its account, without calling Liquifia", async () => {
+    const { business } = await approvedBusiness("Repair Co");
+    const head = (await BranchModel.findOne({ business: business._id, isHeadOffice: true }))!;
+    const va = (await VirtualAccountModel.findOne({ branch: head._id }))!;
+    // State left by the old race: the loser marked the branch (and so the business) failed after the winner's account was saved.
+    const failed = { "liquifia.accountStatus": "failed", "liquifia.lastError": "E11000 duplicate key" };
+    await BranchModel.updateOne({ _id: head._id }, failed);
+    await BusinessModel.updateOne({ _id: business._id }, failed);
+
+    const before = t.liquifia.requests.length;
+    const retry = await t.api("POST", `/api/admin/businesses/${business.id}/provision-account`, { token: adminToken });
+    expect(retry.status).toBe(200);
+    expect(retry.body._id).toBe(va.id);
+    expect(t.liquifia.requests.length).toBe(before);
+    for (const doc of [await BranchModel.findById(head._id), await BusinessModel.findById(business._id)]) {
+      expect(doc?.liquifia?.accountStatus).toBe("active");
+      expect(doc?.liquifia?.lastError).toBeUndefined();
+    }
   });
 });
 

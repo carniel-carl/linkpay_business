@@ -26,7 +26,7 @@ type DocParams = { documentId: string };
 const EDITABLE_STATUSES = ["draft", "changes_requested"];
 
 const businessFields = z.object({
-  name: z.string().trim().min(2),
+  name: z.string().trim().min(2).max(100),
   type: z.enum(BUSINESS_TYPES),
   registrationNumber: z.string().trim().min(1),
   tin: z.string().trim().min(1),
@@ -46,7 +46,7 @@ const businessFields = z.object({
 });
 
 const personFields = z.object({
-  fullName: z.string().trim().min(2),
+  fullName: z.string().trim().min(2).max(100),
   roles: z.array(z.enum(PERSON_ROLES)).min(1),
   email: z.email().trim().toLowerCase(),
   phone: z.string().trim().min(7).max(20),

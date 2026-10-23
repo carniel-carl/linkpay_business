@@ -3,12 +3,18 @@ import { connectDB, disconnectDB } from "./src/config/db";
 import { env } from "./src/config/env";
 import { RISK_CHECK_INTERVAL_MS } from "./src/config/compliance";
 import { SAFELOCK_RELEASE_INTERVAL_MS } from "./src/config/safelock";
+import { usingConsoleEmail } from "./src/services/email";
 import { startInvoiceReminders } from "./src/services/invoices";
 import { startRiskChecks } from "./src/services/risk";
 import { startSafelockReleases } from "./src/services/safelocks";
 import { startLinkImageCleanup } from "./src/services/paymentLinkImages";
 import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
+
+// The console provider prints every sign-in code and invite link, which in production means into the logs.
+if (env.nodeEnv === "production" && usingConsoleEmail()) {
+  throw new Error("Refusing to start in production without an email provider: call setEmailProvider() at startup (src/services/email.ts).");
+}
 
 await connectDB();
 
