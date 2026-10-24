@@ -91,7 +91,7 @@ Every transfer now has `approval`:
 - `decision` is still the **final** approval or the rejection, so it stays `null` while a transfer moves between levels.
 - `canApprove` is true only for someone at the current level who hasn't approved an earlier level and didn't create the transfer.
 
-`POST /:id/approve` and `POST batches/:id/approve` clear the **current level**. The transfer stays `pending_approval` until the last level, then becomes `processing` and is sent. Reject at any level is final. New errors:
+`POST /:id/approve` and `POST batches/:id/approve` clear the **current level**. (Batch endpoints: since batch 7 they decide only the rows the caller can decide. See "Batch decisions and the batch list" below.) The transfer stays `pending_approval` until the last level, then becomes `processing` and is sent. Reject at any level is final. New errors:
 - `NOT_YOUR_LEVEL` (403): you're not an approver at the current level.
 - `ALREADY_APPROVED` (403): you approved an earlier level.
 
@@ -110,12 +110,55 @@ These join the existing `CANNOT_APPROVE_OWN` and `TRANSFER_NOT_PENDING`.
 
 At each new level, that level's approvers get `transfer.approval_requested` (email and push), with "Ada approved level 1 of 2." in the body. A batch sends one message, not one per row. The creator gets `transfer.approved` only after the last level, and `transfer.rejected` on a rejection.
 
+## Batch decisions and the batch list (batch 7, 2026-10-24)
+
+**Rows a member can decide** must meet all of these. The same rule backs `?awaiting=me` on the transfers list, so everything agrees.
+- The row is `pending_approval`.
+- Its current level is `any` or names the member.
+- The member isn't the row's creator.
+- The member hasn't approved an earlier level of it.
+- The member has branch access and `transfers.approve`.
+
+**`POST /transfers/batches/:id/approve` and `/reject`**
+- Approve needs the PIN; reject doesn't. Body: `{ note? }`, up to 300 characters.
+- They decide **only the rows the member can decide** and leave the rest. This makes it possible to finish a partly approved, mixed-level batch as a batch.
+- The response is the batch plus `decided` and `skipped`. `skipped` counts rows that were pending but not decided by this call: other levels, the maker rule, or someone else deciding at the same moment.
+- Errors, in this order:
+  1. PIN errors (approve only)
+  2. 404
+  3. 409 `TRANSFER_NOT_PENDING`
+  4. 403 `CANNOT_APPROVE_OWN`
+  5. 409 `NOTHING_TO_DECIDE` with `details.pending`
+- `NOT_YOUR_LEVEL` and `ALREADY_APPROVED` now apply only to single transfers.
+
+**`GET /transfers/batches`** (`accounts.view`)
+- Query: `branch`, `approval=pending|approved|rejected`, `awaiting=me`, `skip`, `take` (1–100, default 20).
+- Returns `{ items, total, skip, take }`, branch-scoped and newest first. Each item has:
+  - `_id`, `title`, `payoutList`, `branch`, `createdBy`, `createdAt`;
+  - `count`, `amountKobo`, `feeKobo`, `totalKobo`;
+  - `statusCounts`;
+  - `awaitingMe`;
+  - `levels: [{ level, of, waiting, awaitingMe }]` (waiting rows only).
+- Built with one aggregation, using the indexes `{batch, status}` and `{business, createdAt}`.
+
+**Every batch object** (GET, bulk, run, approve, reject and cancel) now includes `awaitingMe`.
+
 ## 3. Client notes
+
+- **Web (batch 7):**
+  - **Batch banner:** "Approve N waiting for you" (PIN) and "Reject N" (confirmation and an optional note) whenever `awaitingMe > 0`, even for mixed-level batches. Level lines read "Level 1 of 2 · 2 waiting for you". A toast reports `decided` and `skipped`.
+  - **`NOTHING_TO_DECIDE`:** the page refreshes. The message is generic, because `runAction` doesn't pass `details` through.
+  - **Fund approvals page:** a "Bulk transfers waiting for you" section (`GET /batches?awaiting=me&take=10`, filtered to the branch switcher) with the same buttons.
 
 - **Mobile (2026-10-23):**
   - Fund approvals and Transfers › Needs your approval show each batch as one row: name, count, total, level and "Needs you".
   - The batch screen has "Approve all" (PIN), "Reject all" (note plus confirmation, no PIN) and, for the person who created it, "Cancel bulk transfer".
-  - "Approve all" only shows when every waiting row is at the member's level. The batch endpoints refuse the whole batch if any row is at another level, so a batch that has been partly approved one by one has to be finished one transfer at a time.
+  - **Since batch 7:**
+    - Batch rows come from `GET /batches`. "Needs you" comes from `awaitingMe`, and the level text from `levels` (for example "Level 1 of 2 · 3 waiting for you").
+    - They're merged newest first with single transfers.
+    - A search lists transfers one by one.
+    - "Approve N waiting for you" and "Reject N" show whenever `awaitingMe > 0`, including mixed levels. The result message uses `decided` and `skipped`.
+    - `NOTHING_TO_DECIDE` refreshes the screen and shows an alert.
 
 - Web: a **Fund approvals** page (Pending / Approved / Declined, search, period, "Total pending" count) and a workflow editor behind a "Set up approvals" call to action (tiers with amount inputs, levels with a people picker from `GET approvers`). The transfer sheet shows the levels as a timeline. The existing approval rule dialog should offer the workflow as a fourth option.
 - Mobile: the transfer detail shows the level timeline, and approve/reject behave as before. Editing workflows can stay web-only at first, but show `mode: "workflow"` in the approval rule line ("Approval workflow, 2 tiers") rather than treating it as unknown.

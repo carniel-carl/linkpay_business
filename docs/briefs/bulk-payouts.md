@@ -128,11 +128,19 @@ Running a list can also return everything `POST /transfers/bulk` does: `INSUFFIC
   - The replay is checked first, so a retry gets the original result even after the list was edited or deleted.
   - Rows accept an optional `accountName`. A mismatch with the saved name returns `ACCOUNT_NAME_CHANGED` inside `INVALID_ROWS`.
 - **Payout lists** gain `lastTransfer: id | null`. A run sets exactly one of `lastBatch` (several people) or `lastTransfer` (one person).
-- **Batch objects** gain `branch: { _id, name, isHeadOffice } | null` and `createdBy: { _id, name } | null`.
+- **Batch objects** gain `branch: { _id, name, isHeadOffice } | null` and `createdBy: { _id, name } | null`, and (batch 7) `awaitingMe`, the number of rows the caller can decide now. See fund-approvals.md for the batch list and the batch decisions that act on part of a batch.
 - **Web (done):**
   - Payout lists: index, create and edit, pay with a review and the PIN, delete, and save a bulk transfer as a list.
   - A minimal Beneficiaries page: search, add with a name check, nickname, delete.
-  - Still to build on web: the beneficiary picker in Send money, beneficiary rows and `saveBeneficiaries` in Bulk transfer, CSV import, and a beneficiary detail page with history.
+  - **Batch 7 (done):**
+    - the beneficiary picker in Send money ("Saved", plus "Save to beneficiaries");
+    - beneficiary rows and `saveBeneficiaries` in Bulk transfer;
+    - CSV import on /beneficiaries (shared parser in `web/src/lib/bulk-csv.ts`);
+    - `/beneficiaries/[id]` with nickname, Pay, payout lists and payment history.
+- **Import during a bank outage (batch 7):** a row whose name check hits an outage comes back as `NAME_CHECK_UNAVAILABLE` on its own row, and the rest carries on. After 5 such rows in a row the remaining rows are marked without calling the bank. Already-saved rows are still reported. The response shape is unchanged: `{ created, failed, rows }`.
+- **Branch scoping (batch 7):**
+  - `GET /beneficiaries/:id` lists only the payout lists the member can see (their branches plus lists with no branch).
+  - `BENEFICIARY_IN_USE` details are `{ count, payoutLists }`: `count` covers every list, and the names are only the visible ones.
 - **Mobile (done):** bulk transfer by paste, file, saved beneficiaries or by hand, with the same review (name checks, preview, approval line, name-change handling), the PIN, and a batch screen. Saving new recipients and payout lists are still web only.
 
 ## 3. Suggested screens
