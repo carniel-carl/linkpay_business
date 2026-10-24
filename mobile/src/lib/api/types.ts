@@ -417,19 +417,41 @@ export type BulkPreview = {
   ready: boolean;
 };
 
-/** GET /api/transfers/batches/:id: a bulk transfer and every transfer in it. */
-export type TransferBatch = {
+/** What every batch answer has, in the batch list and on its own: its totals and where its transfers stand. */
+type TransferBatchHead = {
   _id: string;
   title: string | null;
   payoutList: string | null;
+  /** The account it's paid from. */
+  branch: BranchRef | null;
+  createdBy: { _id: string; name: string } | null;
   count: number;
   amountKobo: number;
   feeKobo: number;
   totalKobo: number;
   createdAt: string;
   statusCounts: Record<TransferStatus, number>;
-  items: Transfer[];
+  /** Transfers the member can approve or reject now: at a level that names them, not their own, no earlier level of theirs. */
+  awaitingMe: number;
 };
+
+/** GET /api/transfers/batches/:id: a bulk transfer and every transfer in it. */
+export type TransferBatch = TransferBatchHead & { items: Transfer[] };
+
+/** Where a batch's waiting transfers are: how many wait at each 1-based `level` of `of`, and how many of those for the member. */
+export type BatchLevel = { level: number; of: number; waiting: number; awaitingMe: number };
+
+/** GET /api/transfers/batches items. `levels` holds only waiting transfers, lowest level first; `[]` when none waits. */
+export type TransferBatchSummary = TransferBatchHead & { levels: BatchLevel[] };
+
+export type TransferBatchList = { items: TransferBatchSummary[]; total: number; skip: number; take: number };
+
+/**
+ * POST /api/transfers/batches/:id/approve and /reject: the batch now, `decided` (transfers this request approved a
+ * level of, or rejected) and `skipped` (waiting ones it left: other levels or approvers, or decided by someone else
+ * at the same moment).
+ */
+export type TransferBatchDecision = TransferBatch & { decided: number; skipped: number };
 
 /** POST /api/transfers/bulk: the batch, or a plain transfer when a single row went (`batch: null`). */
 export type BulkResult = { batch: TransferBatch; items?: undefined } | { batch: null; items: Transfer[] };

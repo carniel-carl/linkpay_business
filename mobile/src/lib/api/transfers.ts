@@ -9,6 +9,7 @@ import type {
   ApprovalRule,
   ApprovalTier,
   Bank,
+  BatchLevel,
   BulkPreview,
   BulkRequest,
   BulkResult,
@@ -18,6 +19,8 @@ import type {
   ResolvedRow,
   Transfer,
   TransferBatch,
+  TransferBatchDecision,
+  TransferBatchList,
   TransferList,
   TransferStatus,
 } from "./types";
@@ -277,14 +280,70 @@ export function invalidRowsOf(err: unknown): BulkRowError[] {
   return Array.isArray(rows) ? rows.filter((r): r is BulkRowError => typeof r?.row === "number" && typeof r?.error === "string") : [];
 }
 
-/** A bulk transfer and every transfer in it. `poll`: check again every 10 s while any is in progress. */
-export function useTransferBatch(id: string, { poll = true }: { poll?: boolean } = {}) {
+/** A bulk transfer and every transfer in it. Checks again every 10 s while any is in progress. */
+export function useTransferBatch(id: string) {
   const business = useBusinessKey();
   return useQuery({
     queryKey: [business, "batch", id],
     queryFn: () => api<TransferBatch>(`/api/transfers/batches/${idSegment(id)}`),
-    refetchInterval: (q) => (poll && q.state.data?.items.some((t) => t.status === "processing") ? 10_000 : false),
+    refetchInterval: (q) => (q.state.data?.items.some((t) => t.status === "processing") ? 10_000 : false),
   });
+}
+
+/** Which bulk transfers a list shows: a Fund approvals tab, or "Needs your approval" (`awaiting`). */
+export type BatchScope = ApprovalTab | "awaiting";
+
+/**
+ * Bulk transfers, newest first, each with its counts and where its waiting transfers are, without their rows
+ * (GET batches). Under "transfers", so whatever refreshes the transfer lists refreshes these too.
+ */
+export function useTransferBatches(scope: BatchScope, enabled = true) {
+  const business = useBusinessKey();
+  return useInfiniteQuery({
+    queryKey: [business, "transfers", "batches", scope],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams({ skip: String(pageParam), take: "30" });
+      if (scope === "awaiting") params.set("awaiting", "me");
+      else params.set("approval", scope);
+      return api<TransferBatchList>(`/api/transfers/batches?${params}`, { signal });
+    },
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.skip + last.items.length < last.total ? last.skip + last.items.length : undefined),
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+/** A batch's waiting transfers by their current level, lowest first, as GET batches gives them (`levels`). */
+export function waitingLevels(items: Transfer[]): BatchLevel[] {
+  const at = new Map<string, BatchLevel>();
+  for (const t of items) {
+    if (t.status !== "pending_approval") continue;
+    const level = t.approval?.current ?? 1;
+    const of = Math.max(t.approval?.levels.length ?? 0, 1);
+    const entry = at.get(`${level}/${of}`) ?? { level, of, waiting: 0, awaitingMe: 0 };
+    entry.waiting += 1;
+    if (t.canApprove) entry.awaitingMe += 1;
+    at.set(`${level}/${of}`, entry);
+  }
+  return [...at.values()].sort((x, y) => x.level - y.level || x.of - y.of);
+}
+
+/**
+ * Where a batch's waiting transfers are: "Level 1 of 2 · 3 waiting for you", "Levels 1 to 2 of 2 · 5 waiting,
+ * 2 for you", or "3 waiting" with one level. Empty when nothing waits.
+ */
+export function batchLevelLine(levels: BatchLevel[]) {
+  if (!levels.length) return "";
+  const of = Math.max(...levels.map((l) => l.of));
+  const low = Math.min(...levels.map((l) => l.level));
+  const high = Math.max(...levels.map((l) => l.level));
+  const waiting = levels.reduce((s, l) => s + l.waiting, 0);
+  const mine = levels.reduce((s, l) => s + l.awaitingMe, 0);
+  const where = of <= 1 ? "" : low === high ? `Level ${low} of ${of}` : `Levels ${low} to ${high} of ${of}`;
+  // No-break spaces keep "2 for you" together when the line wraps.
+  const who = mine === 0 ? `${waiting} waiting` : mine === waiting ? `${mine} waiting for you` : `${waiting} waiting, ${mine}\u00a0for\u00a0you`;
+  return [where, who].filter(Boolean).join(" · ");
 }
 
 /** After a batch changes: the answer replaces the cached batch and its transfers, and money and lists refresh. */
@@ -298,12 +357,16 @@ export function useBatchChanged() {
   };
 }
 
-/** Reject or cancel everything in a batch that's still waiting. Neither moves money, so neither needs the PIN. */
+/**
+ * Reject the transfers in a batch waiting for the member (and leave the rest for their approvers), or, for its
+ * creator, cancel everything still waiting. Neither moves money, so neither needs the PIN. Rejecting answers
+ * with `decided` and `skipped` too.
+ */
 export function useBatchAction() {
   const changed = useBatchChanged();
   return useMutation({
     mutationFn: ({ id, action, note }: { id: string; action: "reject" | "cancel"; note?: string }) =>
-      api<TransferBatch>(`/api/transfers/batches/${idSegment(id)}/${action}`, {
+      api<TransferBatch & Partial<Pick<TransferBatchDecision, "decided" | "skipped">>>(`/api/transfers/batches/${idSegment(id)}/${action}`, {
         method: "POST",
         json: action === "reject" ? { note: note || undefined } : {},
         timeoutMs: MONEY_TIMEOUT_MS,
@@ -313,11 +376,12 @@ export function useBatchAction() {
 }
 
 /**
- * Approves the current level of everything in a batch that's waiting; the last level sends the payouts. A plain
- * call, not a mutation, so the PIN stays out of react-query's state.
+ * Approves the current level of the transfers in a batch waiting for the member, and leaves the rest for their
+ * approvers; a last level sends those payouts. A plain call, not a mutation, so the PIN stays out of
+ * react-query's state.
  */
 export const approveBatch = (id: string, note: string | undefined, pin: string) =>
-  api<TransferBatch>(`/api/transfers/batches/${idSegment(id)}/approve`, {
+  api<TransferBatchDecision>(`/api/transfers/batches/${idSegment(id)}/approve`, {
     method: "POST",
     json: { note: note || undefined },
     headers: pinHeader(pin),

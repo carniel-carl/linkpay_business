@@ -159,12 +159,16 @@ export type PinReset = ReturnType<typeof usePinReset>;
 
 /**
  * A forgotten or locked PIN: a code by email, then the code, the password and a new PIN. Ends a lock too. The
- * state lives in the caller, not the form, so it outlasts the keypad: after a wrong code or password the form
- * comes back with the rest kept. `save` sends the new PIN; the caller says what happens next.
+ * state lives in the caller, not the form, so it outlasts the keypad: after a wrong code or password, or Cancel
+ * on the keypad, the form comes back with the rest kept, and "Resend in" counting from when the code went out.
+ * `save` sends the new PIN; the caller says what happens next.
  */
 export function usePinReset(email?: string) {
   const qc = useQueryClient();
   const [sentTo, setSentTo] = useState<string>();
+  // When the last code went out (ms), for the resend countdown. A refusal to send another (OTP_COOLDOWN) counts
+  // from when it came: the code went out less than a minute before, so the countdown ends no sooner than the server's.
+  const [sentAt, setSentAt] = useState<number>();
   // A code went out less than a minute ago, so the server won't send another yet.
   const [recent, setRecent] = useState(false);
   const [requesting, setRequesting] = useState(false);
@@ -180,16 +184,29 @@ export function usePinReset(email?: string) {
     setErrors({});
     try {
       setSentTo((await requestTransactionPinReset()).sentTo);
+      setSentAt(Date.now());
     } catch (err) {
       if (isApiCode(err, "OTP_COOLDOWN")) {
         setRecent(true);
         setSentTo(email ?? "your email");
+        setSentAt(Date.now());
       } else {
         if (isApiCode(err, "TRANSACTION_PIN_REQUIRED")) refreshStatus();
         setErrors({ form: friendlyMessage(err) });
       }
     } finally {
       setRequesting(false);
+    }
+  }
+
+  /** "Resend code": another code, and its countdown kept here. Errors are the button's to show. */
+  async function resend() {
+    try {
+      await requestTransactionPinReset();
+      setSentAt(Date.now());
+    } catch (err) {
+      if (isApiCode(err, "OTP_COOLDOWN")) setSentAt(Date.now());
+      throw err;
     }
   }
 
@@ -218,7 +235,7 @@ export function usePinReset(email?: string) {
     ? `We'll email a 6-digit code to ${email ?? "you"}. With the code and your password, you choose a new PIN. Resetting also ends a lock.`
     : `${recent ? `We sent a code to ${sentTo} less than a minute ago.` : `Enter the code we sent to ${sentTo}.`} It expires in 10 minutes.`;
 
-  return { intro, sentTo, requesting, code, password, errors, wrongCodes, setCode, setPassword, setErrors, request, save };
+  return { intro, sentTo, sentAt, requesting, code, password, errors, wrongCodes, setCode, setPassword, setErrors, request, resend, save };
 }
 
 /**
@@ -283,7 +300,7 @@ export function ResetPinForm({ reset, onChoose, cancel }: { reset: PinReset; onC
         <Button disabled={!ready} onPress={start}>
           Choose a new PIN
         </Button>
-        <ResendCode onResend={requestTransactionPinReset} />
+        <ResendCode onResend={reset.resend} sentAt={reset.sentAt} />
         {cancel}
       </View>
     </>

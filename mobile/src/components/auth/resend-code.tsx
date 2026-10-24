@@ -5,9 +5,24 @@ import { ApiError, friendlyMessage } from "@/lib/api/errors";
 
 const COOLDOWN = 60;
 
-/** "Resend code" with the backend's 60-second cooldown, as on the web. Feedback stays inline. */
-export function ResendCode({ onResend, startCoolingDown = true }: { onResend: () => Promise<unknown>; startCoolingDown?: boolean }) {
-  const [secondsLeft, setSecondsLeft] = useState(startCoolingDown ? COOLDOWN : 0);
+/** Seconds left of the cooldown for a code sent at `sentAt` (ms). */
+const cooldownLeft = (sentAt: number) => Math.min(COOLDOWN, Math.max(0, Math.ceil((sentAt + COOLDOWN * 1000 - Date.now()) / 1000)));
+
+/**
+ * "Resend code" with the backend's 60-second cooldown, as on the web. Feedback stays inline. `sentAt` (ms) is when
+ * the code went out, for a button that can go and come back while the cooldown runs: it counts down from then
+ * rather than starting again. The caller keeps it up to date when `onResend` sends another.
+ */
+export function ResendCode({
+  onResend,
+  startCoolingDown = true,
+  sentAt,
+}: {
+  onResend: () => Promise<unknown>;
+  startCoolingDown?: boolean;
+  sentAt?: number;
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(() => (sentAt !== undefined ? cooldownLeft(sentAt) : startCoolingDown ? COOLDOWN : 0));
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<{ tone: "ok" | "error"; text: string }>();
 

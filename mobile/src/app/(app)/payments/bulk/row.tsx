@@ -31,6 +31,7 @@ export default function BulkRowEditor() {
   const rows = useBulkDraft((s) => s.rows);
   const serverErrors = useBulkDraft((s) => s.serverErrors);
   const [submitted, setSubmitted] = useState(false);
+  const [accountBlurred, setAccountBlurred] = useState(false);
   const { updateForm, editRow, saveRow, addRows, removeRows, setNames } = useBulkDraft.getState();
 
   const index = form.id ? rows.findIndex((r) => r.id === form.id) : -1;
@@ -47,11 +48,21 @@ export default function BulkRowEditor() {
   const resolveCode = resolve.error instanceof ApiError ? resolve.error.code : undefined;
   const errors = {
     bank: !saved && !form.bank ? (form.bankError ?? "Choose the recipient's bank.") : undefined,
-    accountNumber: !saved && !/^\d{10}$/.test(form.accountNumber) ? "Enter the 10-digit account number." : undefined,
+    accountNumber: saved
+      ? undefined
+      : !form.accountNumber
+        ? "Enter the 10-digit account number."
+        : !/^\d{10}$/.test(form.accountNumber)
+          ? "Account numbers are 10 digits."
+          : undefined,
     amount: amountProblem(kobo),
   };
   const valid = !Object.values(errors).some(Boolean) && (!!saved || !!resolve.data) && !full;
   const show = (e?: string) => (submitted ? e : undefined);
+  // A wrong number shows as it's typed, not only on Save: once the field is left, once it has more than 10
+  // digits, or straight away on a row opened from the list with the number it was marked for.
+  const accountShown =
+    submitted || (!!form.accountNumber && (accountBlurred || form.accountNumber.length > 10 || form.accountNumber === existing?.accountNumber));
 
   function save(then: "back" | "next" | "another") {
     setSubmitted(true);
@@ -71,6 +82,7 @@ export default function BulkRowEditor() {
     if (existing) saveRow({ ...row, id: existing.id });
     else addRows([row]);
     setSubmitted(false);
+    setAccountBlurred(false);
     if (then === "next" && next) editRow(next.id);
     else if (then === "another") editRow();
     else router.back();
@@ -143,10 +155,10 @@ export default function BulkRowEditor() {
           <TextField
             label="Account number"
             value={form.accountNumber}
-            onChangeText={(v) => updateForm({ accountNumber: v.replace(/\D/g, "").slice(0, 10) })}
+            onChangeText={(v) => updateForm({ accountNumber: v.replace(/\D/g, "") })}
+            onBlur={() => setAccountBlurred(true)}
             keyboardType="number-pad"
-            maxLength={10}
-            error={show(errors.accountNumber) ?? (resolve.isError ? friendlyMessage(resolve.error) : undefined)}
+            error={(accountShown ? errors.accountNumber : undefined) ?? (resolve.isError ? friendlyMessage(resolve.error) : undefined)}
             autoComplete="off"
             textContentType="none"
           />

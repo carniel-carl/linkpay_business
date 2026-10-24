@@ -3,7 +3,7 @@ import { router } from "expo-router";
 import { type ReactElement } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { PaymentRowSkeleton } from "@/components/payments/payment-row";
-import { BatchRow, isBatchGroup, useBatchGroups } from "@/components/transfers/batch-row";
+import { BatchRow, isBatchEntry, useTransfersWithBatches } from "@/components/transfers/batch-row";
 import { TransferRow } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -15,6 +15,7 @@ import {
   TRANSFER_TABS,
   useApprovalRule,
   usePendingApprovalCount,
+  useTransferBatches,
   useTransfers,
   type TransferTab,
 } from "@/lib/api/transfers";
@@ -40,7 +41,8 @@ const openBulk = () => {
 /**
  * Every transfer the member can see, by status, with "Needs your approval" for approvers. Lives under the
  * Payments tab's "Transfers" view; `header` is the view switch, drawn above the status chips. In "Needs your
- * approval", a bulk transfer is one row that opens it, to approve or reject it all at once.
+ * approval", bulk transfers come from the batch list, one row each that opens it, to approve or reject what
+ * waits for the member at once (a search lists the matching transfers one by one instead).
  */
 export function TransfersList({
   overview,
@@ -62,17 +64,20 @@ export function TransfersList({
   const sender = can(overview, "transfers.create");
   const tabs = TRANSFER_TABS.filter((t) => t.key !== "awaiting" || approver);
   const tab: TransferTab = wanted && tabs.some((t) => t.key === wanted) ? wanted : "all";
-  const list = useTransfers(tab, { q });
+  const transfers = useTransfers(tab, { q });
+  const grouped = tab === "awaiting" && !q;
+  const batches = useTransferBatches("awaiting", grouped);
+  const list = useTransfersWithBatches(transfers, grouped ? batches : undefined);
+  const items = list.entries;
   const qc = useQueryClient();
   const business = useBusinessContext((s) => s.businessId ?? "default");
-  // The list, the counts and approval rule above it, and bulk transfers' own counts (their rows in "Needs your
-  // approval"): everything under "transfers" for the business, so a rule or approval changed elsewhere shows too.
+  // The lists (bulk transfers' too), the counts and approval rule above them: everything under "transfers" for the
+  // business, so a rule or approval changed elsewhere shows too. And bulk transfers opened before.
   const pull = usePullToRefresh(() =>
     Promise.all([qc.invalidateQueries({ queryKey: [business, "transfers"] }), qc.invalidateQueries({ queryKey: [business, "batch"] })]),
   );
   const rule = useApprovalRule();
   const pending = usePendingApprovalCount().data ?? 0;
-  const items = useBatchGroups(list, tab === "awaiting");
 
   return (
     <FlatList
@@ -85,9 +90,7 @@ export function TransfersList({
         <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />
       }
       onEndReachedThreshold={0.6}
-      onEndReached={() => {
-        if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
-      }}
+      onEndReached={list.more}
       ListHeaderComponent={
         <View className="gap-4 pb-3 pt-2">
           {header}
@@ -171,8 +174,8 @@ export function TransfersList({
           )}
         >
           {index > 0 && <View className="ml-[66px] h-px bg-border" />}
-          {isBatchGroup(item) ? (
-            <BatchRow group={item} scope="awaiting" onPress={openBatch} />
+          {isBatchEntry(item) ? (
+            <BatchRow batch={item.batch} scope="awaiting" onPress={openBatch} />
           ) : (
             <TransferRow
               transfer={item}

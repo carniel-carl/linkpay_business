@@ -28,6 +28,9 @@ export function TransferStatusTag({ status }: { status: TransferStatus }) {
 /** "−₦1,000.00": money out, with a true minus sign, as on the web. */
 export const moneyOut = (kobo: number) => `−${formatNaira(kobo)}`;
 
+/** Failed, rejected or cancelled: no money left the account (a failed transfer's came back). Its amount is struck through, without the minus. */
+export const notSent = (status: TransferStatus) => status === "failed" || status === "rejected" || status === "cancelled";
+
 export function recipientName(t: Transfer) {
   return t.kind === "internal" && t.recipient.branch ? t.recipient.branch.name : t.recipient.accountName;
 }
@@ -49,7 +52,7 @@ export const TransferRow = memo(function TransferRow({
   const meta = approvals
     ? `${approvalProgress(t)} · ${timeAgo(t.createdAt)}`
     : [t.branch?.name, t.createdBy?.name && `by ${t.createdBy.name}`, timeAgo(t.createdAt)].filter(Boolean).join(" · ");
-  const dead = t.status === "failed" || t.status === "rejected" || t.status === "cancelled";
+  const dead = notSent(t.status);
   return (
     <Pressable
       accessibilityRole="button"
@@ -80,7 +83,7 @@ export const TransferRow = memo(function TransferRow({
         )}
       </View>
       <Figure size={16} className={dead ? "text-muted-foreground" : "text-foreground"} style={dead ? { textDecorationLine: "line-through" } : undefined}>
-        {moneyOut(t.amountKobo)}
+        {dead ? formatNaira(t.amountKobo) : moneyOut(t.amountKobo)}
       </Figure>
     </Pressable>
   );

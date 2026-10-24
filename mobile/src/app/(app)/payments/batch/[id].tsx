@@ -11,8 +11,16 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { Display } from "@/components/ui/typography";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { approvalProgress, approveBatch, useBatchAction, useBatchChanged, useTransferBatch } from "@/lib/api/transfers";
-import type { Transfer, TransferBatch } from "@/lib/api/types";
+import {
+  approvalProgress,
+  approveBatch,
+  batchLevelLine,
+  useBatchAction,
+  useBatchChanged,
+  useTransferBatch,
+  waitingLevels,
+} from "@/lib/api/transfers";
+import type { Transfer, TransferBatch, TransferBatchDecision } from "@/lib/api/types";
 import { formatDateTime, formatNaira, formatNairaShort } from "@/lib/format";
 import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
@@ -24,13 +32,18 @@ const FIRST_ROWS = 25;
 const openTransfer = (t: Transfer) => router.push({ pathname: "/payments/transfer/[id]", params: { id: t._id } });
 
 const sum = (items: Transfer[]) => items.reduce((s, t) => s + t.amountKobo, 0);
+/** Where each transfer stands: its status, and its level while it waits. */
+const progressOf = (b: TransferBatch) => b.items.map((t) => `${t.status}:${t.approval?.current ?? ""}`).join();
 const transfers = (n: number) => `${n} ${n === 1 ? "transfer" : "transfers"}`;
+/** At its last level, so approving it sends the money. */
+const lastLevel = (t: Transfer) => (t.approval?.current ?? 1) >= (t.approval?.levels.length ?? 1);
 
 /**
- * A bulk transfer: its totals, where its transfers stand, and what the member can do with everything still
- * waiting. "Approve all" takes the transaction PIN and clears the member's level for every waiting transfer
- * (the last level sends them); "Reject all" and the creator's "Cancel" move no money, so they take a
- * confirmation instead. Single transfers still open on their own screen, to approve one at a time.
+ * A bulk transfer: its totals, where its transfers stand, and what the member can do with the ones waiting for
+ * them. "Approve N waiting for you" takes the transaction PIN and clears the member's level for those (a last
+ * level sends them); "Reject N" and the creator's "Cancel" move no money, so they take a confirmation instead.
+ * Either leaves the transfers waiting for someone else (another level or approver) as they are, so a batch
+ * with transfers at different levels is still decided here. Single transfers still open on their own screen.
  */
 export default function BatchDetail() {
   const { id, sent } = useLocalSearchParams<{ id: string; sent?: string }>();
@@ -71,31 +84,40 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
   const [error, setError] = useState<string>();
   const [showAll, setShowAll] = useState(false);
 
-  // The page checks again by itself while transfers are in progress. When one settles, the transfer lists and
-  // balances behind it refresh too, or going back shows them still "In progress" next to a batch that says sent.
-  const statuses = b.items.map((t) => t.status).join();
-  const seen = useRef(statuses);
+  // The page checks again by itself while transfers are in progress. When one settles, or someone else moves
+  // them on a level (seen on a refresh), the transfer lists, counts and balances behind it refresh too, or going
+  // back shows them still "In progress", or still waiting for the member, next to a batch that says otherwise.
+  // The member's own decisions refresh them already, so they note what they got back here first.
+  const progress = progressOf(b);
+  const seen = useRef(progress);
   useEffect(() => {
-    if (seen.current === statuses) return;
-    seen.current = statuses;
+    if (seen.current === progress) return;
+    seen.current = progress;
     changed(b);
-  }, [statuses, b, changed]);
+  }, [progress, b, changed]);
 
   const waiting = b.items.filter((t) => t.status === "pending_approval");
   // What the server says the member can decide: at their level, not their own, not a level they cleared before.
-  const approvable = b.items.filter((t) => t.canApprove);
+  // The batch endpoints decide exactly these and leave the rest.
+  const mine = b.items.filter((t) => t.canApprove);
+  const n = b.awaitingMe;
   const cancellable = b.items.filter((t) => t.canCancel);
-  // The batch endpoints act on every waiting transfer, so they're offered only when all of them are at the member's level.
-  const allMine = approvable.length > 0 && approvable.length === waiting.length;
+  const atLevels = waitingLevels(b.items);
   const first = waiting[0];
   const levels = first?.approval?.levels.length ?? 0;
   const current = first?.approval?.current ?? null;
-  const finalApproval = !current || current >= levels;
-  const waitingKobo = sum(waiting);
+  // Approving these sends the ones at their last level and moves the rest on. The member is at one level of a
+  // workflow, so theirs are normally all at the same one, which isn't necessarily the first waiting transfer's.
+  const sends = mine.filter(lastLevel).length;
+  const myLevel = mine[0]?.approval?.current ?? null;
+  const myLevels = mine[0]?.approval?.levels.length ?? 0;
+  const mineKobo = sum(mine);
   const counts = b.statusCounts;
   const notSent = counts.failed + counts.rejected + counts.cancelled;
-  const prepared = b.items[0]?.createdBy?.name;
-  const branch = b.items[0]?.branch?.name;
+  // Every transfer failed, was rejected or was cancelled: no money left the account.
+  const noneSent = notSent === b.count;
+  const prepared = b.createdBy?.name ?? b.items[0]?.createdBy?.name;
+  const branch = b.branch?.name ?? b.items[0]?.branch?.name;
   const busy = pin.busy || action.isPending;
 
   const summary = [
@@ -117,29 +139,39 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
           ? "Sent. Everyone has been paid."
           : undefined);
 
+  // A refusal because the batch moved on since it loaded (nothing waits, or nothing for this member) refreshes it.
+  // Nothing left for the member isn't a mistake on their part, so it's said in a note rather than as an error.
+  function failed(err: unknown, kind: "approve" | "reject" | "cancel") {
+    const code = err instanceof ApiError ? err.code : undefined;
+    if (code === "NOTHING_TO_DECIDE" || code === "TRANSFER_NOT_PENDING") void refetch();
+    if (code === "NOTHING_TO_DECIDE") Alert.alert("Nothing waiting for you", batchError(err, kind));
+    else setError(batchError(err, kind));
+  }
+
   // Approving can send money, so the transaction PIN confirms it, on this request only.
   function approve() {
     action.reset();
     setError(undefined);
-    const n = waiting.length;
-    const amount = formatNairaShort(waitingKobo);
+    const amount = formatNairaShort(mineKobo);
     const trimmed = note.trim() || undefined;
+    const ids = new Set(mine.map((t) => t._id));
     void pin.ask({
       title: `Approve ${amount}?`,
-      subtitle: finalApproval
-        ? `Enter your transaction PIN to send ${transfers(n)}, ${amount} in all.`
-        : `Enter your transaction PIN to approve level ${current} of ${levels} for ${transfers(n)}.`,
-      pending: finalApproval ? "Sending…" : "Approving…",
+      subtitle:
+        sends === mine.length
+          ? `Enter your transaction PIN to send ${transfers(n)}, ${amount} in all.`
+          : sends === 0 && myLevel && mine.every((t) => t.approval?.current === myLevel)
+            ? `Enter your transaction PIN to approve level ${myLevel} of ${myLevels} for ${transfers(n)}.`
+            : `Enter your transaction PIN to approve ${transfers(n)}. ${sends} of them are sent straight away.`,
+      pending: sends === mine.length ? "Sending…" : "Approving…",
       run: (entered) => approveBatch(b._id, trimmed, entered),
       onSuccess: (next) => {
+        seen.current = progressOf(next);
         changed(next);
         setNote("");
-        const still = next.statusCounts.pending_approval;
-        if (still > 0 && !finalApproval) {
-          Alert.alert("Approved", `Level ${current} of ${levels} is done for ${transfers(n)}. They go to the level ${(current ?? 1) + 1} approvers next.`);
-        } else Alert.alert("Approved", `${transfers(n)}, ${formatNaira(waitingKobo)} in all, ${n === 1 ? "is" : "are"} on the way.`);
+        Alert.alert("Approved", decidedMessage("approve", next, next.items.filter((t) => ids.has(t._id))));
       },
-      onError: (err) => setError(batchError(err, "approve")),
+      onError: (err) => failed(err, "approve"),
     });
   }
 
@@ -149,11 +181,13 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
     action.mutate(
       { id: b._id, action: kind, note: note.trim() || undefined },
       {
-        onSuccess: () => {
+        onSuccess: (next) => {
+          seen.current = progressOf(next);
           setNote("");
-          Alert.alert(kind === "reject" ? "Rejected" : "Bulk transfer cancelled", "The money is available again.");
+          if (kind === "reject") Alert.alert("Rejected", decidedMessage("reject", { decided: next.decided ?? n, skipped: next.skipped ?? 0 }, []));
+          else Alert.alert("Bulk transfer cancelled", "The money is available again.");
         },
-        onError: (err) => setError(batchError(err, kind)),
+        onError: (err) => failed(err, kind),
       },
     );
   }
@@ -172,8 +206,14 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
         <FocusStatusBar />
         <View className="gap-2 px-1">
           <Text className="text-[13px] text-muted-foreground">{b.title ? `Bulk transfer, ${b.title}` : "Bulk transfer"}</Text>
-          <Display size={36} accessibilityLabel={`${formatNaira(b.amountKobo)} out`}>
-            {moneyOut(b.amountKobo)}
+          {/* None of it left, or it came back: no minus sign, muted and struck through like the list's row. */}
+          <Display
+            size={36}
+            className={noneSent ? "text-muted-foreground" : undefined}
+            style={noneSent ? { textDecorationLine: "line-through" } : undefined}
+            accessibilityLabel={`${formatNaira(b.amountKobo)}${noneSent ? ", not sent" : " out"}`}
+          >
+            {noneSent ? formatNaira(b.amountKobo) : moneyOut(b.amountKobo)}
           </Display>
           <Text className="text-[15px] text-muted-foreground">
             {transfers(b.count)} · {formatDateTime(b.createdAt)}
@@ -190,7 +230,7 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
         <DetailList>
           {branch ? <DetailRow label="From" value={branch} /> : null}
           {prepared ? <DetailRow label="Prepared by" value={prepared} /> : null}
-          {first ? <DetailRow label="Approval" value={approvalProgress(first)} /> : null}
+          {first ? <DetailRow label="Approval" value={atLevels.length > 1 ? batchLevelLine(atLevels) : approvalProgress(first)} /> : null}
           <DetailRow label="Amount" value={formatNaira(b.amountKobo)} />
           <DetailRow label="Fees" value={formatNaira(b.feeKobo)} />
           <DetailRow label="Total from the account" value={formatNaira(b.totalKobo)} />
@@ -198,11 +238,17 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
 
         <FormError message={error} />
 
-        {allMine && (
+        {n > 0 && (
           <View className="gap-3">
+            {n < waiting.length && (
+              <Text className="px-1 text-[14px] leading-5 text-muted-foreground">
+                {n} of the {waiting.length} waiting {n === 1 ? "is" : "are"} for you. The rest wait for someone else, and stay as they are when you
+                decide yours.
+              </Text>
+            )}
             <TextField label="Note (optional)" value={note} onChangeText={(v) => setNote(v.slice(0, 300))} hint="The person who prepared it sees this." maxLength={300} />
             <Button loading={pin.busy} disabled={action.isPending} onPress={approve}>
-              {finalApproval ? `Approve and send all ${waiting.length}` : `Approve level ${current} for all ${waiting.length}`}
+              {`Approve ${n} waiting for you`}
             </Button>
             <Button
               variant="destructive"
@@ -210,24 +256,20 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
               disabled={busy}
               onPress={() =>
                 Alert.alert(
-                  "Reject this bulk transfer?",
-                  `${transfers(waiting.length)}, ${formatNaira(waitingKobo)} in all, won't be sent, and the money is available again.`,
+                  n === waiting.length ? "Reject this bulk transfer?" : `Reject ${transfers(n)}?`,
+                  `${transfers(n)}, ${formatNaira(mineKobo)} in all, won't be sent, and the money is available again.${
+                    n < waiting.length ? ` The other ${waiting.length - n} stay waiting for someone else.` : ""
+                  }`,
                   [
                     { text: "Keep them", style: "cancel" },
-                    { text: "Reject all", style: "destructive", onPress: () => decide("reject") },
+                    { text: `Reject ${n}`, style: "destructive", onPress: () => decide("reject") },
                   ],
                 )
               }
             >
-              {`Reject all ${waiting.length}`}
+              {`Reject ${n}`}
             </Button>
           </View>
-        )}
-        {approvable.length > 0 && !allMine && (
-          <Text className="px-1 text-[14px] leading-5 text-muted-foreground">
-            {approvable.length} of the {waiting.length} waiting {approvable.length === 1 ? "is" : "are"} at your level; the rest wait for a different level.
-            Approve or reject them one at a time below.
-          </Text>
         )}
         {cancellable.length > 0 && (
           <Button
@@ -248,11 +290,13 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
             Cancel bulk transfer
           </Button>
         )}
-        {waiting.length > 0 && approvable.length === 0 && cancellable.length === 0 && (
+        {waiting.length > 0 && n === 0 && cancellable.length === 0 && (
           <Text className="px-1 text-[14px] leading-5 text-muted-foreground">
-            {levels > 1 && current
-              ? `Waiting for the level ${current} approvers to approve or reject it.`
-              : "Waiting for someone with approval rights to approve or reject it."}
+            {atLevels.length > 1
+              ? "Nothing here is waiting for you. It's waiting for approvers at other levels to approve or reject it."
+              : levels > 1 && current
+                ? `Nothing here is waiting for you. It's waiting for the level ${current} approvers to approve or reject it.`
+                : "Waiting for someone with approval rights to approve or reject it."}
           </Text>
         )}
 
@@ -279,8 +323,30 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
 }
 
 /**
- * The server's refusals, worded for a whole bulk transfer. Nobody approves their own, or two levels of one; a
- * decision that timed out may still have gone through (the last approval sends the money), so look first.
+ * What a decision did, from the server's `decided` and `skipped`: "Approved 2. They go to the level 2 approvers
+ * next. 1 is waiting for someone else." `mine` is the approved transfers as they are now (sent, or at a next level).
+ */
+function decidedMessage(kind: "approve" | "reject", { decided, skipped }: Pick<TransferBatchDecision, "decided" | "skipped">, mine: Transfer[]) {
+  const others = skipped > 0 ? ` ${skipped} ${skipped === 1 ? "is" : "are"} waiting for someone else.` : "";
+  if (decided === 0) return `Someone else decided these at the same moment, so nothing changed here.${others}`;
+  if (kind === "reject") return `Rejected ${decided}. The money for ${decided === 1 ? "it" : "them"} is available again.${others}`;
+  const moved = mine.filter((t) => t.status === "pending_approval");
+  const out = mine.filter((t) => t.status === "processing" || t.status === "success" || t.status === "failed");
+  const sent = out.length;
+  const level = moved[0]?.approval?.current;
+  const what =
+    moved.length === 0
+      ? `${decided === 1 ? "It's" : "They're"} on the way, ${formatNaira(sum(out))} in all.`
+      : sent === 0
+        ? `${decided === 1 ? "It goes" : "They go"} to the level ${level} approvers next.`
+        : `${sent} ${sent === 1 ? "is" : "are"} on the way; ${moved.length} ${moved.length === 1 ? "goes" : "go"} to the next level's approvers.`;
+  return `Approved ${decided}. ${what}${others}`;
+}
+
+/**
+ * The server's refusals, worded for a bulk transfer. Nobody approves their own; NOTHING_TO_DECIDE means what's
+ * still waiting is someone else's (another level, or just decided), and the screen has refreshed. A decision
+ * that timed out may still have gone through (the last approval sends the money), so look first.
  */
 function batchError(err: unknown, kind: "approve" | "reject" | "cancel") {
   if (!(err instanceof ApiError)) return friendlyMessage(err);
@@ -291,12 +357,13 @@ function batchError(err: unknown, kind: "approve" | "reject" | "cancel") {
         : "That took too long. Pull down to refresh to see whether it went through.";
     case "CANNOT_APPROVE_OWN":
       return "Someone else has to approve a bulk transfer you created.";
-    case "NOT_YOUR_LEVEL":
-      return "Some of these transfers are waiting for someone at a different approval level. Pull down to refresh, then approve the ones at your level one at a time.";
-    case "ALREADY_APPROVED":
-      return "You approved an earlier level of this bulk transfer, so someone else has to approve this level.";
+    case "NOTHING_TO_DECIDE": {
+      const pending = (err.details as { pending?: unknown } | undefined)?.pending;
+      const left = typeof pending === "number" && pending > 0 ? ` ${transfers(pending)} ${pending === 1 ? "is" : "are"} waiting for someone else.` : "";
+      return `Nothing in this bulk transfer is waiting for you now.${left} It's up to date below.`;
+    }
     case "TRANSFER_NOT_PENDING":
-      return "Nothing in this bulk transfer is waiting for approval any more. Pull down to refresh.";
+      return "Nothing in this bulk transfer is waiting for approval any more. It's up to date below.";
     default:
       return friendlyMessage(err);
   }
