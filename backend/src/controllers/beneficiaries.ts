@@ -5,8 +5,11 @@ import { BeneficiaryModel, type BeneficiaryDocument } from "../models/Beneficiar
 import { PayoutListModel } from "../models/PayoutList";
 import { UserModel } from "../models/User";
 import { findBeneficiary, saveBeneficiary } from "../services/beneficiaries";
-import { resolveBankRecipient } from "../services/transfers";
+import { LiquifiaError } from "../services/liquifia/client";
+import { nameCheckUnavailable, resolveBankRecipient } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
+import { inPool } from "../utils/pool";
+import { visibleListsFilter } from "./payoutLists";
 
 type IdParams = { id: string };
 
@@ -14,6 +17,12 @@ const accountNumber = z.string().trim().regex(/^\d{10}$/, "Account numbers are 1
 const bankUuid = z.string().trim().min(1);
 const nickname = z.string().trim().max(60);
 const MAX_IMPORT = 200;
+/**
+ * An import stops asking the bank once this many rows in a row (as their answers come back) find its name check
+ * down: the rest come back NAME_CHECK_UNAVAILABLE without a call, so a full outage costs a handful of slow
+ * calls, not 200.
+ */
+const OUTAGE_STREAK = 5;
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -37,9 +46,9 @@ async function serialize(beneficiaries: BeneficiaryDocument[]) {
   });
 }
 
-/** The payout lists a beneficiary is in. */
-const listsUsing = (req: Request, id: Types.ObjectId) =>
-  PayoutListModel.find({ business: req.business!._id, "items.beneficiary": id }).select("title");
+/** The payout lists a beneficiary is in that the member can see (their branches', and lists with no branch). */
+const visibleListsUsing = (req: Request, id: Types.ObjectId) =>
+  PayoutListModel.find({ business: req.business!._id, "items.beneficiary": id, ...visibleListsFilter(req) }).select("title");
 
 // ---------------------------------------------------------------------------------------------------------
 
@@ -66,7 +75,7 @@ export const listBeneficiaries: RequestHandler = async (req, res) => {
 
 export const getBeneficiary: RequestHandler<IdParams> = async (req, res) => {
   const beneficiary = await findBeneficiary(req.business!, req.params.id);
-  const lists = await listsUsing(req, beneficiary._id);
+  const lists = await visibleListsUsing(req, beneficiary._id);
   res.json({ ...(await serialize([beneficiary]))[0], payoutLists: lists.map((l) => ({ _id: l.id, title: l.title })) });
 };
 
@@ -83,47 +92,55 @@ export const createBeneficiary: RequestHandler = async (req, res) => {
   res.status(201).json((await serialize([beneficiary]))[0]);
 };
 
+/** A name check that failed because the bank's service didn't answer (timeout, 5xx, throttled, no name), not because of the row. */
+const isOutage = (err: unknown) => err instanceof LiquifiaError || (err instanceof HttpError && err.code === "NAME_CHECK_UNAVAILABLE");
+
+type ImportRow = { row: number; beneficiary: BeneficiaryDocument; created: boolean } | { row: number; error: string; code: string | null };
+
 /**
  * Saves many at once (e.g. from a payroll spreadsheet). Unlike bulk transfers, good rows are saved even when
- * others fail: each row comes back with its beneficiary, whether it was new, or its error.
+ * others fail: each row comes back with its beneficiary, whether it was new, or its error. A bank outage is a row
+ * error too (NAME_CHECK_UNAVAILABLE, to check again later), so what was saved is always reported; after
+ * OUTAGE_STREAK of them in a row the remaining rows aren't sent to the bank. Already saved rows need no name check.
  */
 export const importBeneficiaries: RequestHandler = async (req, res) => {
   const body = z
     .object({ items: z.array(z.object({ accountNumber, bankUuid, nickname: nickname.optional() })).min(1).max(MAX_IMPORT) })
     .parse(req.body);
   const business = req.business!;
-  const results: { row: number; beneficiary?: BeneficiaryDocument; created?: boolean; error?: string; code?: string }[] = [];
-  let next = 0;
-  // A few name enquiries at a time.
-  await Promise.all(
-    Array.from({ length: 5 }, async () => {
-      while (next < body.items.length) {
-        const i = next++;
-        const item = body.items[i]!;
-        try {
-          const existing = await BeneficiaryModel.findOne({ business: business._id, accountNumber: item.accountNumber, bankUuid: item.bankUuid });
-          if (existing) {
-            results.push({ row: i, beneficiary: existing, created: false });
-            continue;
-          }
-          const recipient = await resolveBankRecipient(business, item.accountNumber, item.bankUuid);
-          results.push({ row: i, ...(await saveBeneficiary(business, req.userId!, recipient, item.nickname)) });
-        } catch (err) {
-          if (!(err instanceof HttpError)) throw err;
-          results.push({ row: i, error: err.message, code: err.code });
-        }
+  // Rows in a row whose name check found the service down. Any answer from the bank starts the count again.
+  let unavailable = 0;
+  const results = await inPool(body.items, 5, async (item, row): Promise<ImportRow> => {
+    const existing = await BeneficiaryModel.findOne({ business: business._id, accountNumber: item.accountNumber, bankUuid: item.bankUuid });
+    if (existing) return { row, beneficiary: existing, created: false };
+    if (unavailable >= OUTAGE_STREAK) {
+      const err = nameCheckUnavailable();
+      return { row, error: err.message, code: err.code ?? null };
+    }
+    try {
+      const recipient = await resolveBankRecipient(business, item.accountNumber, item.bankUuid);
+      unavailable = 0;
+      return { row, ...(await saveBeneficiary(business, req.userId!, recipient, item.nickname)) };
+    } catch (err) {
+      if (isOutage(err)) {
+        if (err instanceof LiquifiaError) console.error(`Beneficiary import: name check failed: ${err.status} ${err.code}: ${err.message}`);
+        if (++unavailable === OUTAGE_STREAK) console.error(`Beneficiary import: the bank's name check is down; not asking for the remaining rows`);
+        const outage = nameCheckUnavailable();
+        return { row, error: outage.message, code: outage.code ?? null };
       }
-    }),
-  );
-  results.sort((a, b) => a.row - b.row);
-  const serialized = await serialize(results.flatMap((r) => (r.beneficiary ? [r.beneficiary] : [])));
+      if (!(err instanceof HttpError)) throw err;
+      if (err.code === "ACCOUNT_NOT_FOUND") unavailable = 0;
+      return { row, error: err.message, code: err.code ?? null };
+    }
+  });
+  const serialized = await serialize(results.flatMap((r) => ("beneficiary" in r ? [r.beneficiary] : [])));
   res.json({
-    created: results.filter((r) => r.created).length,
-    failed: results.filter((r) => r.error).length,
+    created: results.filter((r) => "created" in r && r.created).length,
+    failed: results.filter((r) => "error" in r).length,
     rows: results.map((r) =>
-      r.beneficiary
-        ? { row: r.row, created: r.created, beneficiary: serialized.find((s) => s._id === r.beneficiary!.id) }
-        : { row: r.row, error: r.error, code: r.code ?? null },
+      "beneficiary" in r
+        ? { row: r.row, created: r.created, beneficiary: serialized.find((s) => s._id === r.beneficiary.id) }
+        : { row: r.row, error: r.error, code: r.code },
     ),
   });
 };
@@ -137,13 +154,21 @@ export const updateBeneficiary: RequestHandler<IdParams> = async (req, res) => {
   res.json((await serialize([beneficiary]))[0]);
 };
 
-/** Removes a beneficiary. Past transfers keep their recipient. Refused while a payout list uses it. */
+/**
+ * Removes a beneficiary. Past transfers keep their recipient. Refused while any payout list uses it, including
+ * lists for branches the member can't see: `details.count` counts them all, `details.payoutLists` names only the
+ * ones they can.
+ */
 export const deleteBeneficiary: RequestHandler<IdParams> = async (req, res) => {
   const beneficiary = await findBeneficiary(req.business!, req.params.id);
-  const lists = await listsUsing(req, beneficiary._id);
-  if (lists.length) {
+  const [count, visible] = await Promise.all([
+    PayoutListModel.countDocuments({ business: req.business!._id, "items.beneficiary": beneficiary._id }),
+    visibleListsUsing(req, beneficiary._id),
+  ]);
+  if (count) {
     throw new HttpError(409, "Remove this beneficiary from your payout lists first", "BENEFICIARY_IN_USE", {
-      payoutLists: lists.map((l) => ({ _id: l.id, title: l.title })),
+      count,
+      payoutLists: visible.map((l) => ({ _id: l.id, title: l.title })),
     });
   }
   await beneficiary.deleteOne();

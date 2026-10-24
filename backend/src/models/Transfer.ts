@@ -127,7 +127,8 @@ transferSchema.index({ virtualAccount: 1, status: 1 });
 transferSchema.index({ status: 1, "provider.lastCheckedAt": 1 });
 // Payout webhooks find their transfer by Liquifia's payout id.
 transferSchema.index({ "provider.payoutId": 1 }, { sparse: true });
-transferSchema.index({ batch: 1 });
+// A batch's rows, and (with status) whether a batch has a row in a Fund approvals tab or waiting for someone.
+transferSchema.index({ batch: 1, status: 1 });
 transferSchema.index({ "recipient.beneficiary": 1, createdAt: -1 });
 transferSchema.index({ business: 1, status: 1, "approval.waitingOn": 1 });
 // A member's 24-hour total from a branch, which decides whether their next transfer needs approval.
@@ -144,7 +145,7 @@ export const TransferModel = model("Transfer", transferSchema);
 // Several transfers from one account, created, approved and rejected together.
 const transferBatchSchema = new Schema(
   {
-    business: { type: Types.ObjectId, ref: "Business", required: true, index: true },
+    business: { type: Types.ObjectId, ref: "Business", required: true },
     branch: { type: Types.ObjectId, ref: "Branch", required: true },
     title: { type: String, trim: true },
     // The saved payout list it was run from, if any.
@@ -165,6 +166,9 @@ const transferBatchSchema = new Schema(
     },
   },
 );
+
+// The batch list, newest first.
+transferBatchSchema.index({ business: 1, createdAt: -1 });
 
 export type TransferBatch = InferSchemaType<typeof transferBatchSchema>;
 export const TransferBatchModel = model("TransferBatch", transferBatchSchema);

@@ -9,6 +9,8 @@ import { UserModel } from "../models/User";
 import {
   approvalBlocker,
   approvalPlan,
+  awaitingFilter,
+  canDecide,
   currentLevel,
   levelsOf,
   MAX_APPROVERS_PER_LEVEL,
@@ -20,6 +22,7 @@ import { branchScope, canAccessBranch, ensureOwnerMembership, hasPermission } fr
 import {
   cancelTransfers,
   createTransfers,
+  decideBatchTransfers,
   decideTransfers,
   keyedBranchRow,
   listBanks,
@@ -152,6 +155,37 @@ async function findBatch(req: Request, id: string) {
   return { batch, transfers };
 }
 
+type BatchFields = {
+  _id: Types.ObjectId;
+  title?: string | null;
+  payoutList?: Types.ObjectId | null;
+  count: number;
+  amountKobo: number;
+  feeKobo: number;
+  totalKobo: number;
+  createdAt: Date;
+};
+type NamedBranch = { id: string; name: string; isHeadOffice: boolean } | null | undefined;
+type NamedUser = { id: string; name: string } | null | undefined;
+
+/** The fields a batch has both in the batch list and on its own. */
+function batchHead(batch: BatchFields, branch: NamedBranch, creator: NamedUser) {
+  return {
+    _id: String(batch._id),
+    title: batch.title ?? null,
+    payoutList: batch.payoutList ? String(batch.payoutList) : null,
+    // The account it's paid from and who sent it, in the same shapes as on each transfer, so a client needn't
+    // read them from the first row.
+    branch: branch ? { _id: branch.id, name: branch.name, isHeadOffice: branch.isHeadOffice } : null,
+    createdBy: creator ? { _id: creator.id, name: creator.name } : null,
+    count: batch.count,
+    amountKobo: batch.amountKobo,
+    feeKobo: batch.feeKobo,
+    totalKobo: batch.totalKobo,
+    createdAt: batch.createdAt,
+  };
+}
+
 async function serializeBatch(req: Request, batch: InstanceType<typeof TransferBatchModel>, transfers: TransferDocument[]) {
   const [items, branch, creator] = await Promise.all([
     serialize(req, transfers),
@@ -160,19 +194,10 @@ async function serializeBatch(req: Request, batch: InstanceType<typeof TransferB
   ]);
   const counts = Object.fromEntries(TRANSFER_STATUSES.map((s) => [s, items.filter((i) => i.status === s).length]));
   return {
-    _id: batch.id,
-    title: batch.title ?? null,
-    payoutList: batch.payoutList ? String(batch.payoutList) : null,
-    // The account it's paid from and who sent it, in the same shapes as on each transfer, so a client needn't
-    // read them from the first row.
-    branch: branch ? { _id: branch.id as string, name: branch.name, isHeadOffice: branch.isHeadOffice } : null,
-    createdBy: creator ? { _id: creator.id as string, name: creator.name } : null,
-    count: batch.count,
-    amountKobo: batch.amountKobo,
-    feeKobo: batch.feeKobo,
-    totalKobo: batch.totalKobo,
-    createdAt: batch.get("createdAt"),
+    ...batchHead(batch.toObject() as BatchFields, branch, creator),
     statusCounts: counts,
+    // Rows this member can approve or reject now, for "Approve N waiting for you".
+    awaitingMe: transfers.filter((t) => canDecide(t, req.membership!, req.userId!)).length,
     items,
   };
 }
@@ -410,13 +435,7 @@ export const listTransfers: RequestHandler = async (req, res) => {
     if (!hasPermission(req.membership!, "transfers.approve")) {
       return void res.json({ items: [], total: 0, skip: f.skip, take: f.take });
     }
-    const me = new Types.ObjectId(req.userId);
-    filter.status = "pending_approval";
-    filter.createdBy = { $ne: me };
-    filter["approval.levels.approvedBy"] = { $ne: me };
-    filter.$and = [
-      { $or: [{ "approval.waitingOn": me }, { "approval.waitingOnAny": true }, { "approval.levels.0": { $exists: false } }] },
-    ];
+    Object.assign(filter, awaitingFilter(req.userId!));
   }
   if (f.approval === "pending") filter.status = "pending_approval";
   if (f.approval === "rejected") filter.status = "rejected";
@@ -612,20 +631,146 @@ export const refreshTransferStatus: RequestHandler<IdParams> = async (req, res) 
 // Batches
 // ---------------------------------------------------------------------------------------------------------
 
+const batchFilters = z.object({
+  branch: objectId.optional(),
+  // "me": batches with at least one row the signed-in member can approve or reject now.
+  awaiting: z.literal("me").optional(),
+  // Fund approvals tabs: batches with at least one row in the tab, as on the transfers list.
+  approval: z.enum(["pending", "approved", "rejected"]).optional(),
+  skip: z.coerce.number().int().min(0).default(0),
+  take: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+/** What a row must match for its batch to be in a Fund approvals tab (the same meanings as `GET /?approval=`). */
+const APPROVAL_TABS = {
+  pending: { status: "pending_approval" },
+  approved: { "decision.by": { $exists: true }, status: { $in: ["processing", "success", "failed"] } },
+  rejected: { status: "rejected" },
+};
+
+// A waiting row's 1-based level and how many levels it has (transfers from before levels had one); null otherwise.
+const isWaiting = { $eq: ["$status", "pending_approval"] };
+const waitingLevel = {
+  level: { $cond: [isWaiting, { $add: [{ $ifNull: ["$approval.current", 0] }, 1] }, null] },
+  of: { $cond: [isWaiting, { $max: [{ $size: { $ifNull: ["$approval.levels", []] } }, 1] }, null] },
+};
+
+type BatchSummaryRow = BatchFields & {
+  branch: Types.ObjectId;
+  createdBy: Types.ObjectId;
+  rows: { _id: { status: string; level: number | null; of: number | null }; n: number }[];
+  mine?: { _id: { level: number; of: number }; n: number }[];
+};
+
+/**
+ * Batches, newest first, each with its totals, row counts by status, how many rows wait for the signed-in
+ * member, and the levels its waiting rows are at. `?branch=&approval=&awaiting=me&skip=&take=`
+ */
+export const listBatches: RequestHandler = async (req, res) => {
+  const f = batchFilters.parse(req.query);
+  const membership = req.membership!;
+  if (f.branch && !canAccessBranch(membership, f.branch)) throw new HttpError(404, "Branch not found");
+  const canApprove = hasPermission(membership, "transfers.approve");
+  if (f.awaiting && !canApprove) return void res.json({ items: [], total: 0, skip: f.skip, take: f.take });
+  const scope = branchScope(membership);
+  const match: Record<string, unknown> = { business: req.business!._id };
+  if (f.branch) match.branch = new Types.ObjectId(f.branch);
+  else if (scope) match.branch = { $in: scope };
+
+  const transfers = TransferModel.collection.collectionName;
+  const mine = awaitingFilter(req.userId!);
+  // Keeps the batches with at least one row matching `rows`; each lookup stops at the first such row.
+  const having = (rows: Record<string, unknown>, as: string) => [
+    { $lookup: { from: transfers, localField: "_id", foreignField: "batch", pipeline: [{ $match: rows }, { $limit: 1 }, { $project: { _id: 1 } }], as } },
+    { $match: { [`${as}.0`]: { $exists: true } } },
+  ];
+
+  // One aggregation: filter and page the batches, then count the rows of only the page's batches.
+  const [result] = await TransferBatchModel.aggregate<{ total: { n: number }[]; items: BatchSummaryRow[] }>([
+    { $match: match },
+    { $sort: { createdAt: -1, _id: -1 } },
+    ...(f.approval ? having(APPROVAL_TABS[f.approval], "inTab") : []),
+    ...(f.awaiting ? having(mine, "forMe") : []),
+    {
+      $facet: {
+        total: [{ $count: "n" }],
+        items: [
+          { $skip: f.skip },
+          { $limit: f.take },
+          {
+            $lookup: {
+              from: transfers,
+              localField: "_id",
+              foreignField: "batch",
+              pipeline: [{ $group: { _id: { status: "$status", ...waitingLevel }, n: { $sum: 1 } } }],
+              as: "rows",
+            },
+          },
+          // Nothing waits for someone who can't approve, so their count needs no lookup.
+          ...(canApprove
+            ? [
+                {
+                  $lookup: {
+                    from: transfers,
+                    localField: "_id",
+                    foreignField: "batch",
+                    pipeline: [{ $match: mine }, { $group: { _id: waitingLevel, n: { $sum: 1 } } }],
+                    as: "mine",
+                  },
+                },
+              ]
+            : []),
+          { $project: { inTab: 0, forMe: 0 } },
+        ],
+      },
+    },
+  ]);
+  const rows = result?.items ?? [];
+
+  const [branches, users] = await Promise.all([
+    BranchModel.find({ _id: { $in: rows.map((b) => b.branch) } }).select("name isHeadOffice"),
+    UserModel.find({ _id: { $in: rows.map((b) => b.createdBy) } }).select("name"),
+  ]);
+  const items = rows.map((b) => {
+    const statusCounts: Record<string, number> = Object.fromEntries(TRANSFER_STATUSES.map((s) => [s, 0]));
+    for (const g of b.rows) statusCounts[g._id.status] = (statusCounts[g._id.status] ?? 0) + g.n;
+    const mineAt = (level: number, of: number) => (b.mine ?? []).find((m) => m._id.level === level && m._id.of === of)?.n ?? 0;
+    return {
+      ...batchHead(
+        b,
+        branches.find((x) => x._id.equals(b.branch)),
+        users.find((x) => x._id.equals(b.createdBy)),
+      ),
+      statusCounts,
+      awaitingMe: (b.mine ?? []).reduce((sum, m) => sum + m.n, 0),
+      // Where the waiting rows are, lowest level first: enough for "Level 1 of 2 · 3 waiting for you".
+      levels: b.rows
+        .filter((g) => g._id.level !== null)
+        .map((g) => ({ level: g._id.level!, of: g._id.of!, waiting: g.n, awaitingMe: mineAt(g._id.level!, g._id.of!) }))
+        .sort((x, y) => x.level - y.level || x.of - y.of),
+    };
+  });
+  res.json({ items, total: result?.total[0]?.n ?? 0, skip: f.skip, take: f.take });
+};
+
 export const getBatch: RequestHandler<IdParams> = async (req, res) => {
   const { batch, transfers } = await findBatch(req, req.params.id);
   res.json(await serializeBatch(req, batch, transfers));
 };
 
+/**
+ * Approves or rejects the rows waiting for the signed-in member and leaves the rest. Answers with the batch plus
+ * `decided` (rows this request approved a level of, or rejected) and `skipped` (rows that were waiting but
+ * weren't decided here: other levels or approvers, or decided by someone else at the same moment).
+ */
 const decideBatch =
   (decision: "approve" | "reject"): RequestHandler<IdParams> =>
   async (req, res) => {
     const { note: text } = note.parse(req.body ?? {});
     const { batch, transfers } = await findBatch(req, req.params.id);
-    const pending = transfers.filter((t) => t.status === "pending_approval");
-    if (!pending.length) throw new HttpError(409, "Nothing in this batch is waiting for approval", "TRANSFER_NOT_PENDING");
-    await decideTransfers({ transfers: pending, membership: req.membership!, userId: req.userId!, decision, note: text });
-    res.json(await serializeBatch(req, batch, await TransferModel.find({ batch: batch._id }).sort({ _id: 1 })));
+    const { decided, skipped } = await decideBatchTransfers({ transfers, membership: req.membership!, userId: req.userId!, decision, note: text });
+    const batchNow = await serializeBatch(req, batch, await TransferModel.find({ batch: batch._id }).sort({ _id: 1 }));
+    res.json({ ...batchNow, decided, skipped });
   };
 
 export const approveBatch = decideBatch("approve");
