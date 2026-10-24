@@ -664,3 +664,40 @@ Add a line per session: date, what was done, and anything left half-finished.
     - There's no batch summary endpoint: mobile loads each visible batch in full.
     - On the web, Send money and Bulk transfer have no beneficiary picker, and there's no CSV import.
     - In the PIN sheet's reset step, the resend timer restarts when you go back.
+
+- **2026-10-24 (batch 7, batch approvals, saved recipients, mobile polish):** on branch `fix/audit-batch-7`. Backend: 510/510 tests pass. Web, admin and mobile: typecheck, lint and build are clean.
+  - **Backend:**
+    - **Batch approve and reject** decide only the rows the caller can decide, and return `decided` and `skipped`. The new 409 `NOTHING_TO_DECIDE` covers a batch with nothing waiting for the caller.
+    - **`GET /transfers/batches`** returns batch summaries: `awaitingMe`, `levels`, `statusCounts`.
+    - Every batch object now includes `awaitingMe`.
+    - **One rule for who can decide:** `canDecide()` and `awaitingFilter()` in `services/approvals.ts`, which also back `?awaiting=me`.
+    - **Indexes:** Transfer `{batch, status}` replaces `{batch}`, and TransferBatch `{business, createdAt}` replaces `{business}`. Drop the old `batch_1` and `transferbatches.business_1` by hand after deploy.
+    - **Beneficiary import:** outage rows are per-row, with an early stop after 5.
+    - **Beneficiary detail and delete:** both are branch-scoped.
+  - **Web:**
+    - **Batch banner:** "Approve N waiting for you" and "Reject N" (confirmation and note), level lines, and a toast with `decided`/`skipped`.
+    - **Fund approvals:** a "Bulk transfers waiting for you" section.
+    - **Saved recipients:**
+      - Send money: a "Saved" picker and "Save to beneficiaries".
+      - Bulk transfer: beneficiary rows and `saveBeneficiaries`.
+      - /beneficiaries: CSV import and `/beneficiaries/[id]`.
+    - **Phone widths:** page-header actions wrap. Phone-only icon buttons use `max-sm:w-9 max-sm:px-0!` with `max-sm:sr-only` labels.
+    - **Help:** new FAQ entries (beneficiaries and payout lists, bulk check, bulk approval, over-limit payments, transaction PIN).
+  - **Mobile:**
+    - The transfer screen refreshes lists, counts and balances when its status changes.
+    - Amounts that never left (failed, rejected, cancelled) are muted and struck through, with no minus sign.
+    - Bulk rows check the account number inline.
+    - The PIN-reset resend countdown keeps running when you go back.
+    - **Batch lists:** batches now come from `GET /batches`. "Approve N waiting for you" works on mixed levels.
+    - List rows drop the minus sign on amounts that never left, matching the detail screens.
+    - The Help FAQ mirrors the web's new entries in app wording: bulk transfer, its check, beneficiaries and payout lists, bulk approval, over-limit payments.
+  - **QA:**
+    - Web, in the browser against `dev:seed`: a mixed-level batch across two approvers, reject with a note, `NOTHING_TO_DECIDE` on a stale page; the saved-recipients flows (pay, save while sending, mixed bulk with a deleted beneficiary, import covering every outcome); 375px.
+    - Mobile, on the iOS simulator (iPhone 17 Pro): approvals from `GET /batches` with paging, a mixed-level batch end to end, `NOTHING_TO_DECIDE`, and the four mobile fixes. All passed after fixing:
+      - the PIN prompt naming the wrong level;
+      - lists not refreshing on level changes;
+      - a cut-off level line;
+      - code boxes emptying after a cancel (`components/ui/code-field.tsx`).
+  - **Left:**
+    - The transfers list has no `?batch=none` filter (mobile drops batch rows itself).
+    - Mobile has no payout lists.
