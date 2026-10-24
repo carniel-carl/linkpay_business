@@ -326,7 +326,14 @@ export type Transfer = {
   currency: "NGN"
   branch: BranchRef | null
   batch: string | null
-  recipient: { accountNumber: string; accountName: string; bankName: string | null; branch: BranchRef | null }
+  recipient: {
+    accountNumber: string
+    accountName: string
+    bankName: string | null
+    branch: BranchRef | null
+    /** The saved beneficiary paid, if any (docs/briefs/bulk-payouts.md). */
+    beneficiary?: string | null
+  }
   narration: string | null
   reference: string
   failureReason: string | null
@@ -363,17 +370,43 @@ export type TransferApproval = { current: number | null; levels: TransferApprova
 
 export type TransferList = { items: Transfer[]; total: number; skip: number; take: number }
 
-export type TransferBatch = {
+/** The fields a bulk transfer has both on its own (GET /api/transfers/batches/:id) and in GET /api/transfers/batches. */
+export type TransferBatchHead = {
   _id: string
   title: string | null
+  /** The payout list it was run from, if any. */
+  payoutList?: string | null
+  branch: BranchRef | null
+  createdBy: { _id: string; name: string } | null
   count: number
   amountKobo: number
   feeKobo: number
   totalKobo: number
   createdAt: string
   statusCounts: Record<TransferStatus, number>
-  items: Transfer[]
+  /**
+   * Rows the signed-in member can approve or reject now: waiting at a level that's open to anyone or names them,
+   * not their own, no earlier level of it approved by them, from one of their branches.
+   */
+  awaitingMe: number
 }
+
+export type TransferBatch = TransferBatchHead & { items: Transfer[] }
+
+/**
+ * POST /api/transfers/batches/:id/approve | reject: the batch now, plus `decided` (rows this request approved a
+ * level of, or rejected) and `skipped` (rows that were waiting but weren't decided: at other levels, for other
+ * approvers, or decided by someone else at the same moment).
+ */
+export type TransferBatchDecision = TransferBatch & { decided: number; skipped: number }
+
+/** Where a bulk transfer's waiting rows are: `waiting` rows at 1-based `level` of `of`, `awaitingMe` of them for the member. */
+export type TransferBatchLevel = { level: number; of: number; waiting: number; awaitingMe: number }
+
+/** GET /api/transfers/batches: newest first, without rows. `levels` covers waiting rows only, lowest level first. */
+export type TransferBatchSummary = TransferBatchHead & { levels: TransferBatchLevel[] }
+
+export type TransferBatchList = { items: TransferBatchSummary[]; total: number; skip: number; take: number }
 
 export type Bank = { uuid: string; name: string; code: string | null }
 
@@ -1053,6 +1086,20 @@ export type BeneficiaryList = { items: Beneficiary[]; total: number; skip: numbe
 
 /** A payout list that uses a beneficiary (GET /api/beneficiaries/:id, BENEFICIARY_IN_USE `details.payoutLists`). */
 export type PayoutListRef = { _id: string; title: string }
+
+/** GET /api/beneficiaries/:id: the beneficiary and the payout lists that pay it, of those the member's branches can see. */
+export type BeneficiaryDetail = Beneficiary & { payoutLists: PayoutListRef[] }
+
+/** One row of POST /api/beneficiaries/import, by its index in the request. `created: false` was already saved. */
+export type BeneficiaryImportRow =
+  | { row: number; created: boolean; beneficiary: Beneficiary }
+  | { row: number; error: string; code: string | null }
+
+/**
+ * POST /api/beneficiaries/import: good rows are saved even when others fail. A bank outage comes back on the
+ * rows it hit as NAME_CHECK_UNAVAILABLE (and on the rest once several in a row have), to check again later.
+ */
+export type BeneficiaryImportResult = { created: number; failed: number; rows: BeneficiaryImportRow[] }
 
 /** A row of a payout list. `beneficiary` is null if the saved beneficiary has gone. */
 export type PayoutListItem = {

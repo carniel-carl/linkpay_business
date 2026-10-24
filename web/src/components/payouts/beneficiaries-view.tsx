@@ -201,11 +201,14 @@ export function BeneficiariesView({
   )
 }
 
+/** The bank's name (a link to the beneficiary's page), the "On LinkPay" tag and the nickname. */
 function NameCell({ beneficiary: b }: { beneficiary: Beneficiary }) {
   return (
     <span className="grid min-w-0 gap-0.5">
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-medium break-words">{b.accountName}</span>
+        <Link href={`/beneficiaries/${b._id}`} className="font-medium break-words underline-offset-4 hover:text-primary hover:underline">
+          {b.accountName}
+        </Link>
         {b.onLinkPay && <span className="rounded-md bg-brand-subtle px-1.5 py-0.5 text-[11px] font-medium text-primary">On LinkPay</span>}
       </span>
       {b.nickname && <span className="truncate text-xs text-muted-foreground">{b.nickname}</span>}
@@ -222,6 +225,12 @@ function RowMenu({ beneficiary, onAct }: { beneficiary: Beneficiary; onAct: (p: 
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem asChild>
+          <Link href={`/beneficiaries/${beneficiary._id}`}>
+            <BookUser aria-hidden />
+            View details
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onAct({ kind: "rename", beneficiary })}>
           <Pencil aria-hidden />
           {beneficiary.nickname ? "Change nickname" : "Add a nickname"}
@@ -244,7 +253,7 @@ function useLast(beneficiary: Beneficiary | null) {
 }
 
 /** Only the nickname can change: the account and its name are what the bank confirmed. */
-function RenameDialog({ beneficiary, onClose }: { beneficiary: Beneficiary | null; onClose: () => void }) {
+export function RenameDialog({ beneficiary, onClose }: { beneficiary: Beneficiary | null; onClose: () => void }) {
   const shown = useLast(beneficiary)
   return (
     <Dialog open={!!beneficiary} onOpenChange={(open) => !open && onClose()}>
@@ -318,19 +327,39 @@ function RenameForm({ beneficiary, onClose }: { beneficiary: Beneficiary; onClos
   )
 }
 
-/** Asks first. A beneficiary a payout list still pays can't be deleted: the dialog then names the lists. */
-function DeleteDialog({ beneficiary, onClose }: { beneficiary: Beneficiary | null; onClose: () => void }) {
+/**
+ * Asks first. A beneficiary a payout list still pays can't be deleted: the dialog then names the lists.
+ * `onDeleted` runs once it's gone (the beneficiary's own page leaves for the list).
+ */
+export function DeleteDialog({ beneficiary, onClose, onDeleted }: { beneficiary: Beneficiary | null; onClose: () => void; onDeleted?: () => void }) {
   const shown = useLast(beneficiary)
   return (
     <AlertDialog open={!!beneficiary} onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>{shown && <DeleteBody key={shown._id} beneficiary={shown} onClose={onClose} />}</AlertDialogContent>
+      <AlertDialogContent>{shown && <DeleteBody key={shown._id} beneficiary={shown} onClose={onClose} onDeleted={onDeleted} />}</AlertDialogContent>
     </AlertDialog>
   )
 }
 
-function DeleteBody({ beneficiary, onClose }: { beneficiary: Beneficiary; onClose: () => void }) {
+/**
+ * Why a beneficiary can't be deleted yet: `shown` lists the member can open and edit, out of `count` that pay
+ * them (the others are for branches the member can't see, so they aren't named).
+ */
+function inUseMessage(shown: number, count: number) {
+  const hidden = count - shown
+  if (!hidden) {
+    return `${count === 1 ? "A payout list still pays them" : `${count} payout lists still pay them`}. Edit ${count === 1 ? "it" : "each one"} to take them off, then delete them here.`
+  }
+  const elsewhere = `for ${hidden === 1 ? "a branch" : "branches"} you can't see`
+  if (!shown) {
+    return `${hidden === 1 ? `A payout list ${elsewhere} still pays them` : `${hidden} payout lists ${elsewhere} still pay them`}. Ask someone with access to take them off, then delete them here.`
+  }
+  return `${count} payout lists still pay them. Edit ${shown === 1 ? "the one below" : "the ones below"} to take them off. ${hidden === 1 ? "The other one is" : `The other ${hidden} are`} ${elsewhere}: ask someone with access to take them off.`
+}
+
+function DeleteBody({ beneficiary, onClose, onDeleted }: { beneficiary: Beneficiary; onClose: () => void; onDeleted?: () => void }) {
   const [busy, setBusy] = useState(false)
-  const [inUse, setInUse] = useState<PayoutListRef[] | null>(null)
+  // The lists the member can see, and how many lists pay them in all (some may be for branches they can't see).
+  const [inUse, setInUse] = useState<{ lists: PayoutListRef[]; count: number } | null>(null)
   const [error, setError] = useState<string>()
   const name = beneficiary.nickname ?? beneficiary.accountName
 
@@ -340,23 +369,22 @@ function DeleteBody({ beneficiary, onClose }: { beneficiary: Beneficiary; onClos
     const result = await deleteBeneficiary(beneficiary._id)
     setBusy(false)
     if (!result.ok) return setError(result.error)
-    if (!result.data.deleted) return setInUse(result.data.inUse)
+    if (!result.data.deleted) return setInUse({ lists: result.data.inUse, count: result.data.count })
     toast.success(`${name} is deleted. Past payments to them stay in Transfers.`)
+    onDeleted?.()
     onClose()
   }
 
   if (inUse) {
+    const { lists } = inUse
     return (
       <>
         <AlertDialogHeader>
           <AlertDialogTitle>Take {name} off your payout lists first</AlertDialogTitle>
-          <AlertDialogDescription>
-            {inUse.length === 1 ? "A payout list still pays them." : `${inUse.length} payout lists still pay them.`} Edit{" "}
-            {inUse.length === 1 ? "it" : "each one"} to take them off, then delete them here.
-          </AlertDialogDescription>
+          <AlertDialogDescription>{inUseMessage(lists.length, inUse.count)}</AlertDialogDescription>
         </AlertDialogHeader>
-        <ul className="grid gap-1.5 text-sm">
-          {inUse.map((l) => (
+        <ul className="grid gap-1.5 text-sm empty:hidden">
+          {lists.map((l) => (
             <li key={l._id}>
               <Link href={`/payout-lists/${l._id}/edit`} className="font-medium underline underline-offset-4 hover:text-primary">
                 {l.title}

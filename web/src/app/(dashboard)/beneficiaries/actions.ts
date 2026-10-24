@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
-import { ApiError } from "@/lib/api/errors"
-import type { Beneficiary, BeneficiaryList, PayoutListRef } from "@/lib/api/types"
+import { ApiError, messageForCode } from "@/lib/api/errors"
+import type { Beneficiary, BeneficiaryImportResult, BeneficiaryList, PayoutListRef } from "@/lib/api/types"
+import { MAX_CSV_ROWS } from "@/lib/bulk-csv"
 import { MAX_NICKNAME } from "@/lib/payouts"
 
 // Saved beneficiaries (docs/briefs/bulk-payouts.md). Saving, renaming and deleting need `transfers.create` but
@@ -17,9 +18,9 @@ const nickname = z.string().trim().max(MAX_NICKNAME)
 
 const path = (beneficiaryId: string) => `/api/beneficiaries/${encodeURIComponent(id.parse(beneficiaryId))}`
 
-/** The address book and the payout list editors that show its names. */
+/** The address book (and each beneficiary's page) and the payout list editors that show its names. */
 const refresh = () => {
-  revalidatePath("/beneficiaries")
+  revalidatePath("/beneficiaries", "layout")
   revalidatePath("/payout-lists", "layout")
 }
 
@@ -60,6 +61,25 @@ export async function createBeneficiary(input: { accountNumber: string; bankUuid
   return result
 }
 
+/**
+ * Saves up to 200 accounts at once (a CSV on the Beneficiaries page). Each is checked with its bank; good rows are
+ * saved even when others fail, and every row comes back: saved, already saved (`created: false`), or its error.
+ */
+export async function importBeneficiaries(input: { accountNumber: string; bankUuid: string; nickname?: string }[]) {
+  const items = z
+    .array(z.object({ accountNumber, bankUuid: z.string().min(1).max(100), nickname: nickname.optional() }))
+    .min(1)
+    .max(MAX_CSV_ROWS)
+    .parse(input)
+    .map((i) => ({ accountNumber: i.accountNumber, bankUuid: i.bankUuid, nickname: i.nickname || undefined }))
+  const result = await runAction(async () => {
+    const res = await api<BeneficiaryImportResult>("/api/beneficiaries/import", { method: "POST", json: { items } })
+    return { ...res, rows: res.rows.map((r) => ("error" in r ? { ...r, error: messageForCode(r.code ?? undefined, r.error) } : r)) }
+  })
+  if (result.ok && result.data.created > 0) refresh()
+  return result
+}
+
 /** Changes the nickname; null or an empty one removes it. The account details can't change. */
 export async function renameBeneficiary(beneficiaryId: string, value: string | null) {
   const next = value === null ? null : nickname.parse(value) || null
@@ -70,20 +90,23 @@ export async function renameBeneficiary(beneficiaryId: string, value: string | n
 
 /**
  * Deletes a beneficiary (past transfers keep their recipient). One that a payout list still pays isn't deleted:
- * the answer is then `{ deleted: false, inUse }` with the lists (BENEFICIARY_IN_USE).
+ * the answer is then `{ deleted: false, inUse, count }` (BENEFICIARY_IN_USE). `inUse` names only the lists the
+ * member can see; `count` also counts those for branches they can't.
  */
 export async function deleteBeneficiary(beneficiaryId: string) {
   const result = await runAction(async () => {
     try {
       await api<void>(path(beneficiaryId), { method: "DELETE" })
-      return { deleted: true as const, inUse: [] as PayoutListRef[] }
+      return { deleted: true as const, inUse: [] as PayoutListRef[], count: 0 }
     } catch (err) {
       if (!(err instanceof ApiError) || err.code !== "BENEFICIARY_IN_USE") throw err
-      const lists = (err.details as { payoutLists?: unknown })?.payoutLists
+      const details = err.details as { payoutLists?: unknown; count?: unknown } | undefined
+      const lists = details?.payoutLists
       const inUse = (Array.isArray(lists) ? lists : []).flatMap((l): PayoutListRef[] =>
         l && typeof l._id === "string" && typeof l.title === "string" ? [{ _id: l._id, title: l.title }] : [],
       )
-      return { deleted: false as const, inUse }
+      const total = typeof details?.count === "number" && Number.isInteger(details.count) ? details.count : 0
+      return { deleted: false as const, inUse, count: Math.max(total, inUse.length, 1) }
     }
   })
   if (result.ok && result.data.deleted) refresh()

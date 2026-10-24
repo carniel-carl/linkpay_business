@@ -75,11 +75,41 @@ export const FAQ: FaqTopic[] = [
       },
       {
         q: "Can I pay many people at once?",
-        a: "Yes. Use a bulk transfer on the web: upload a CSV file or paste up to 200 rows of account numbers, banks and amounts, check them, then send them together.",
+        a: "Yes. Use Bulk transfer to pay up to 200 people from one account: pick saved beneficiaries, upload or paste a CSV of account numbers, banks and amounts, or both. You check them on one screen, then send them together.",
+      },
+      {
+        q: "What does the bulk transfer check show?",
+        a: "Before anything is sent, we check every new account with its bank and show the name it gives, then the fees, the total from the account and whether it needs approval. If any row has a problem, nothing is sent until it's fixed or removed. If an account's name changes between your check and sending, nothing is sent either: we show the new name so you can accept it or remove that row. You confirm with your transaction PIN.",
       },
       {
         q: "Why is my transfer waiting?",
         a: "Your business has an approval rule, so someone else has to approve it before it's sent. The transfer shows who it's waiting for, and the money stays held until it's approved or declined.",
+      },
+    ],
+  },
+  {
+    id: "payouts",
+    title: "Beneficiaries and payout lists",
+    questions: [
+      {
+        q: "What is a beneficiary?",
+        a: "Someone you pay often, saved once for your whole team. We check the account with its bank when you save it and keep the name it gives, so paying them later needs no new check. Choose them in Send money or Bulk transfer, or tick Save to beneficiaries when you send to a new account. A business can save up to 2,000.",
+      },
+      {
+        q: "Can I change or delete a beneficiary?",
+        a: "You can change the nickname. To pay a different account, save it as a new beneficiary. Deleting one keeps past payments to them in Transfers, but you can't delete someone a payout list still pays: take them off the list first.",
+      },
+      {
+        q: "Can I add many beneficiaries at once?",
+        a: "Yes. On Beneficiaries, choose Import and upload or paste a CSV of up to 200 accounts: account number, bank and an optional nickname. Each account is checked with its bank and saved, and every line shows what happened. If the bank can't check some of them just then, the others are still saved, and you can check those again a few minutes later.",
+      },
+      {
+        q: "What is a payout list?",
+        a: "A saved bulk payment, like Monthly salaries: beneficiaries with an amount and an optional narration each, and the account it's usually paid from. Paying it makes an ordinary bulk transfer, with the same check, PIN and approval rules. You can change the amounts for one payment only, or save them to the list. You can also save a past bulk transfer as a list. A business can keep up to 100 lists of up to 200 people.",
+      },
+      {
+        q: "Who can see and pay payout lists?",
+        a: "Anyone who can see balances sees the lists, and members who can prepare transfers create, edit and pay them. Someone limited to certain branches sees only the lists for those branches and lists with no account set.",
       },
     ],
   },
@@ -102,6 +132,10 @@ export const FAQ: FaqTopic[] = [
       {
         q: "Where do I see what's waiting for me?",
         a: "Open Fund approvals. It shows everything pending, marks the ones waiting for you and lets you approve or decline with a note.",
+      },
+      {
+        q: "How do I approve a bulk transfer?",
+        a: "Find it in Fund approvals, under Bulk transfers waiting for you, or open it in Transfers. Approve, which shows how many of its transfers are waiting for you, approves them all with your PIN. Reject declines the same ones, with an optional note. Any at another approval level, or that you prepared, are left for the right person.",
       },
     ],
   },
@@ -178,6 +212,10 @@ export const FAQ: FaqTopic[] = [
         a: "Yes. Each link's page has code for a pay button that opens the checkout over your page, for the checkout shown in your page, or for opening it from your own JavaScript with your order number. You can limit a link to your own websites. Before handing over goods, check the payment from your server with the token the page gives you.",
       },
       {
+        q: "What if someone pays after a link's limit is reached?",
+        a: "The payment is still recorded, because the money has arrived, and it's marked Over limit. We tell your team so you can refund it or honour it. The payer's receipt still says paid.",
+      },
+      {
         q: "Can I change or delete a link?",
         a: "You can edit it at any time; changes apply to new payments, and anyone already paying keeps their amount. Turn a link off to stop new payments. A link can only be deleted if nobody has started paying through it.",
       },
@@ -212,6 +250,14 @@ export const FAQ: FaqTopic[] = [
       {
         q: "How do I turn on two-step verification?",
         a: "Go to Settings, Security and choose an authenticator app or a code sent to your email. You'll then confirm each sign-in with a code.",
+      },
+      {
+        q: "What is the transaction PIN?",
+        a: "Four digits, separate from your password, that confirm money leaving and security changes: transfers, bulk transfers, payout lists, approvals, a new Safelock, taking money out of or closing a pocket, the approval rule and team changes. You set it with your password the first time you need it, or in Settings, Security. It's the same in every business you're part of.",
+      },
+      {
+        q: "I forgot my PIN, or it's locked. What do I do?",
+        a: "After 5 wrong PINs in a row it's locked for 30 minutes, and we email you. To reset it, go to Settings, Security and choose Forgot your PIN? or Reset PIN. We email you a 6-digit code, and you enter it with your password and a new PIN. Resetting also ends the lock.",
       },
       {
         q: "I forgot my password. What do I do?",

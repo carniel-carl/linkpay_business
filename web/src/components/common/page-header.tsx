@@ -47,7 +47,8 @@ export function PageHeader({
           </div>
         )}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {/* Wraps rather than running off a narrow screen; pages with several actions also show icons only on phones. */}
+      {actions && <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div>}
     </header>
   )
 }

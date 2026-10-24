@@ -5,12 +5,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { createColumnHelper, useTable, type PaginationState, type Updater } from "@tanstack/react-table"
 import { ArrowUpRight, RotateCw, SearchX, X } from "lucide-react"
 import { toast } from "sonner"
-import { actOnBatch, approveBatch } from "@/app/(dashboard)/transfers/actions"
+import { cancelBatch } from "@/app/(dashboard)/transfers/actions"
 import { DataTable, dataTableFeatures, type DataTableFeatures } from "@/components/data-table/data-table"
 import { DataTablePagination } from "@/components/data-table/data-table-pagination"
 import { SearchBox } from "@/components/data-table/search-box"
 import { RowsSkeleton } from "@/components/transactions/skeletons"
-import { useTransactionPin } from "@/components/transaction-pin/use-transaction-pin"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Spinner } from "@/components/ui/spinner"
@@ -18,6 +17,7 @@ import type { Transfer, TransferBatch, TransferList } from "@/lib/api/types"
 import { formatDate, formatNaira, formatShortDate, formatTime } from "@/lib/format"
 import { DEFAULT_PAGE_SIZE, PAGE_SIZES, parseTransferQuery, TAB_LABELS, TABS, type TransferQuery, type TransferTab } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
+import { BatchDecisionButtons, levelText, waitingLevels } from "./batch-decision"
 import { KindIcon, recipientBank, recipientName, TransferAmount, TransferStatusBadge } from "./parts"
 import { TransferSheet } from "./transfer-sheet"
 
@@ -299,38 +299,25 @@ export function TransfersView({ data, query, canApprove, awaitingCount, showBran
   )
 }
 
-/** A bulk transfer: totals, progress and approve or reject everything still waiting. */
+/**
+ * A bulk transfer: totals, progress, where its waiting rows are, and approve or reject the ones waiting for the
+ * member (rows at other levels stay for their approvers).
+ */
 function BatchBanner({ batch, extra, onClear }: { batch: TransferBatch; extra?: React.ReactNode; onClear: () => void }) {
-  const [busy, setBusy] = useState<"approve" | "reject" | "cancel" | null>(null)
-  const pin = useTransactionPin()
+  const [cancelling, setCancelling] = useState(false)
   const waiting = batch.statusCounts.pending_approval
-  const approvable = batch.items.filter((i) => i.canApprove).length
+  const levels = waitingLevels(batch.items)
   const cancellable = batch.items.filter((i) => i.canCancel).length
+  const sending = batch.statusCounts.processing
   const sent = batch.statusCounts.success
   const failed = batch.statusCounts.failed + batch.statusCounts.rejected + batch.statusCounts.cancelled
 
-  async function act(action: "approve" | "reject" | "cancel") {
-    setBusy(action)
-    // Approving takes the transaction PIN; rejecting and cancelling don't.
-    const result =
-      action === "approve"
-        ? await pin.confirm({
-            purpose: `approve ${approvable === 1 ? "the transfer" : `all ${approvable} transfers`} waiting for you in this bulk transfer`,
-            confirmLabel: approvable === 1 ? "Approve" : `Approve all ${approvable}`,
-            run: (transactionPin) => approveBatch(batch._id, transactionPin),
-          })
-        : await actOnBatch(batch._id, action)
-    setBusy(null)
-    if (!result) return
+  async function cancel() {
+    setCancelling(true)
+    const result = await cancelBatch(batch._id)
+    setCancelling(false)
     if (!result.ok) return toast.error(result.error)
-    const stillWaiting = result.data.statusCounts.pending_approval
-    toast.success(
-      action === "approve"
-        ? stillWaiting > 0
-          ? `Approved at your level. ${stillWaiting} transfers now go to the next approver.`
-          : `Approved. ${waiting} transfers are on the way.`
-        : action === "reject" ? "Rejected. The money is available again." : "Bulk transfer cancelled.",
-    )
+    toast.success("Bulk transfer cancelled.")
   }
 
   return (
@@ -348,35 +335,34 @@ function BatchBanner({ batch, extra, onClear }: { batch: TransferBatch; extra?: 
           <X data-icon="inline-end" aria-hidden />
         </Button>
       </div>
-      <p className="text-sm">
-        {waiting > 0 && `${waiting} waiting for approval. `}
-        {sent > 0 && `${sent} sent. `}
-        {failed > 0 && `${failed} not sent.`}
-      </p>
-      {(approvable > 0 || cancellable > 0 || extra) && (
+      <div className="grid gap-1 text-sm">
+        <p>
+          {waiting > 0 && `${waiting} waiting for approval. `}
+          {sending > 0 && `${sending} on the way. `}
+          {sent > 0 && `${sent} sent. `}
+          {failed > 0 && `${failed} not sent.`}
+        </p>
+        {/* Only worth spelling out with levels, or when some of what's waiting isn't for this member. */}
+        {levels.some((l) => l.of > 1 || l.awaitingMe !== l.waiting) && (
+          <ul className="grid gap-0.5 text-muted-foreground">
+            {levels.map((l) => (
+              <li key={`${l.level}/${l.of}`}>{levelText(l)}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {(batch.awaitingMe > 0 || cancellable > 0 || extra) && (
         <div className="flex flex-wrap gap-2">
-          {approvable > 0 && (
-            <>
-              <Button disabled={!!busy} onClick={() => act("approve")}>
-                {busy === "approve" && <Spinner />}
-                Approve all {approvable}
-              </Button>
-              <Button variant="outline" disabled={!!busy} onClick={() => act("reject")}>
-                {busy === "reject" && <Spinner />}
-                Reject all
-              </Button>
-            </>
-          )}
+          <BatchDecisionButtons batchId={batch._id} awaitingMe={batch.awaitingMe} />
           {cancellable > 0 && (
-            <Button variant="outline" disabled={!!busy} onClick={() => act("cancel")}>
-              {busy === "cancel" && <Spinner />}
+            <Button variant="outline" disabled={cancelling} onClick={cancel}>
+              {cancelling && <Spinner />}
               Cancel bulk transfer
             </Button>
           )}
           {extra}
         </div>
       )}
-      {pin.dialog}
     </section>
   )
 }

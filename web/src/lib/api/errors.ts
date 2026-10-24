@@ -72,6 +72,9 @@ const MESSAGES: Record<string, string> = {
   CANNOT_APPROVE_OWN: "Someone else has to approve a transfer you created.",
   NOT_YOUR_LEVEL: "This transfer is waiting for someone at a different approval level.",
   ALREADY_APPROVED: "You approved an earlier level of this transfer, so someone else has to approve this one.",
+  // Bulk transfers: nothing left in it waits for this member (other levels, or someone else just decided it).
+  NOTHING_TO_DECIDE:
+    "Nothing in this bulk transfer is waiting for you now. What's still waiting is for someone at another approval level, or someone else has just decided it.",
   INVALID_APPROVER: "One of the approvers can no longer approve transfers. Remove them and save again.",
   DUPLICATE_APPROVER: "The same person can't be at two levels of one amount band.",
   INVALID_APPROVAL_RULE: "Two amount bands start at the same amount. Change one of them.",

@@ -83,9 +83,10 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="outline">
+        {/* An icon only on phones, beside Transfers' other header buttons. */}
+        <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
           <ShieldCheck data-icon="inline-start" aria-hidden />
-          Approval rule
+          <span className="max-sm:sr-only">Approval rule</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
