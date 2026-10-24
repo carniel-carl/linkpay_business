@@ -136,3 +136,27 @@ export function assertCanDecide(transfer: TransferDocument, membership: Membersh
   const blocker = approvalBlocker(transfer, membership, userId);
   if (blocker) throw new HttpError(blocker.status, blocker.message, blocker.code);
 }
+
+/**
+ * Whether this member can approve or reject the transfer right now: it's waiting, at a level they're an
+ * approver of, they didn't create it, they haven't approved an earlier level, and it's from one of their branches.
+ */
+export function canDecide(transfer: TransferDocument, membership: MembershipDocument, userId: string) {
+  return canAccessBranch(membership, transfer.branch) && approvalBlocker(transfer, membership, userId) === null;
+}
+
+/**
+ * The same rule as `canDecide`, as a query, for lists and counts ("waiting for me"). The caller checks the
+ * approve permission and limits the query to the member's branches.
+ */
+export function awaitingFilter(userId: string | Types.ObjectId) {
+  const me = new Types.ObjectId(String(userId));
+  return {
+    status: "pending_approval",
+    createdBy: { $ne: me },
+    // Only earlier levels have an approver while a transfer waits.
+    "approval.levels.approvedBy": { $ne: me },
+    // Named at the current level, or a level anyone can clear (also transfers from before levels).
+    $and: [{ $or: [{ "approval.waitingOn": me }, { "approval.waitingOnAny": true }, { "approval.levels.0": { $exists: false } }] }],
+  };
+}

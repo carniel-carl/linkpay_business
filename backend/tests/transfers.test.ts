@@ -504,7 +504,8 @@ describe("approval workflows", () => {
     });
     const batch = res.body.batch;
     expect(batch.items.every((i: any) => i.approval.levels.length === 2)).toBe(true);
-    expect((await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token })).body.code).toBe("NOT_YOUR_LEVEL");
+    // The owner is level 2: nothing in the batch is theirs to decide yet.
+    expect((await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token })).body.code).toBe("NOTHING_TO_DECIDE");
 
     const one = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: second.token });
     expect(one.body.statusCounts).toMatchObject({ pending_approval: 2 });

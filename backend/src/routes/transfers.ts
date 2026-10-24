@@ -12,6 +12,7 @@ import {
   getTransfer,
   getTransferSettings,
   listApprovers,
+  listBatches,
   listTransfers,
   previewBulkTransfer,
   refreshTransferStatus,
@@ -50,6 +51,7 @@ transfersRouter.get("/approvers", requirePermission("transfers.manage"), listApp
 
 transfersRouter.post("/bulk/preview", create, reviewLimit("transfers:bulk-preview"), previewBulkTransfer);
 transfersRouter.post("/bulk", create, pin, createBulkTransfer);
+transfersRouter.get("/batches", view, listBatches);
 transfersRouter.get("/batches/:id", view, getBatch);
 transfersRouter.post("/batches/:id/approve", approve, pin, approveBatch);
 transfersRouter.post("/batches/:id/reject", approve, rejectBatch);

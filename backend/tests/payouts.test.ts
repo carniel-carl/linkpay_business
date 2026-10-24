@@ -6,6 +6,7 @@ import { TransferBatchModel, TransferModel } from "../src/models/Transfer";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
+import { liquifia, LiquifiaError } from "../src/services/liquifia/client";
 import { signAccessToken } from "../src/services/tokens";
 import { processOpenTransfers } from "../src/services/transfers";
 import { encrypt } from "../src/utils/crypto";
@@ -127,6 +128,73 @@ describe("beneficiaries", () => {
       [3, null, "INVALID_BANK"],
     ]);
     expect(res.body.rows[1].beneficiary).toMatchObject({ accountName: "TUNDE BELLO", nickname: "Tunde" });
+  });
+
+  test("a bank outage during an import is a row error: the other rows are saved and reported", async () => {
+    const { owner, save } = await setup();
+    await save("1111111111");
+    // Timed out, down, throttled, and answered without a name: each about the service, not the account.
+    const original = liquifia.validateAccount;
+    const outages: Record<string, LiquifiaError> = {
+      "3000000001": new LiquifiaError(0, "TIMEOUT", "Timed out"),
+      "3000000002": new LiquifiaError(503, "UNAVAILABLE", "Down"),
+      "3000000003": new LiquifiaError(429, "SLOW_DOWN", "Try again later"),
+      "3000000004": new LiquifiaError(0, "UNEXPECTED_RESPONSE", "No name"),
+    };
+    liquifia.validateAccount = async (accountNumber, bankUuid) => {
+      if (outages[accountNumber]) throw outages[accountNumber];
+      return original(accountNumber, bankUuid);
+    };
+    const items = ["1111111111", "2222222222", ...Object.keys(outages), "0001112223", "4000000001"].map((accountNumber) => ({ accountNumber, bankUuid: "BANK-GTB" }));
+    let res;
+    try {
+      res = await t.api("POST", "/api/beneficiaries/import", { token: owner.token, body: { items } });
+    } finally {
+      liquifia.validateAccount = original;
+    }
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 2, failed: 5 });
+    expect(res.body.rows.map((r: any) => [r.row, r.created ?? null, r.code ?? null])).toEqual([
+      [0, false, null],
+      [1, true, null],
+      [2, null, "NAME_CHECK_UNAVAILABLE"],
+      [3, null, "NAME_CHECK_UNAVAILABLE"],
+      [4, null, "NAME_CHECK_UNAVAILABLE"],
+      [5, null, "NAME_CHECK_UNAVAILABLE"],
+      [6, null, "ACCOUNT_NOT_FOUND"],
+      [7, true, null],
+    ]);
+    expect(res.body.rows[2].error).toContain("Try again");
+
+    // Checking those rows again once the bank answers saves them.
+    const again = await t.api("POST", "/api/beneficiaries/import", { token: owner.token, body: { items: items.slice(2, 6) } });
+    expect(again.body).toMatchObject({ created: 4, failed: 0 });
+  });
+
+  test("a full outage stops asking the bank after five rows in a row, and still reports the saved rows", async () => {
+    const { owner, save } = await setup();
+    await save("1111111111");
+    const fresh = Array.from({ length: 20 }, (_, i) => ({ accountNumber: String(5000000000 + i), bankUuid: "BANK-GTB" }));
+    const items = [{ accountNumber: "1111111111", bankUuid: "BANK-GTB" }, ...fresh];
+    const before = enquiries();
+    t.liquifia.down = true;
+    let res;
+    try {
+      res = await t.api("POST", "/api/beneficiaries/import", { token: owner.token, body: { items } });
+    } finally {
+      t.liquifia.down = false;
+    }
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 0, failed: 20 });
+    expect(res.body.rows[0]).toMatchObject({ row: 0, created: false, beneficiary: { accountName: "AMAKA OBI" } });
+    expect(res.body.rows.slice(1).every((r: any) => r.code === "NAME_CHECK_UNAVAILABLE")).toBe(true);
+    // Five failures, plus at most the four other enquiries already under way when the fifth came back.
+    const asked = enquiries() - before;
+    expect(asked).toBeGreaterThanOrEqual(5);
+    expect(asked).toBeLessThan(10);
+
+    const later = await t.api("POST", "/api/beneficiaries/import", { token: owner.token, body: { items } });
+    expect(later.body).toMatchObject({ created: 20, failed: 0 });
   });
 
   test("paying a beneficiary needs no new name enquiry, and sending can save a new one", async () => {
@@ -459,6 +527,39 @@ describe("payout lists", () => {
 
     expect((await t.api("DELETE", `/api/payout-lists/${list._id}`, { token: owner.token })).status).toBe(204);
     expect((await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token })).body.code).toBe("PAYOUT_LIST_NOT_FOUND");
+  });
+
+  test("a beneficiary's lists, and the refusal to delete it, only name lists the member's branches can see", async () => {
+    const { owner, list, amaka, kanoId, member } = await withList();
+    const create = (title: string, branch?: string) =>
+      t.api("POST", "/api/payout-lists", { token: owner.token, body: { title, branch, items: [{ beneficiary: amaka._id, amountKobo: 5_000_00 }] } });
+    const kanoList = (await create("Kano drivers", kanoId)).body;
+    const anyBranch = (await create("Everyone")).body;
+    const kanoFinance = await member("finance", [kanoId]);
+    const titles = (body: any) => body.payoutLists.map((l: any) => l.title).sort();
+
+    expect(titles((await t.api("GET", `/api/beneficiaries/${amaka._id}`, { token: owner.token })).body)).toEqual(["Everyone", "Kano drivers", "Monthly salaries"]);
+    // The head office list isn't theirs: lists for their branch and lists with no branch, as on the lists page.
+    const seen = (await t.api("GET", `/api/beneficiaries/${amaka._id}`, { token: kanoFinance.token })).body;
+    expect(titles(seen)).toEqual(["Everyone", "Kano drivers"]);
+    expect(seen.payoutLists.map((l: any) => l._id).sort()).toEqual([anyBranch._id, kanoList._id].sort());
+
+    // Every list still blocks the delete; only the ones they can see are named.
+    const blocked = await t.api("DELETE", `/api/beneficiaries/${amaka._id}`, { token: kanoFinance.token });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe("BENEFICIARY_IN_USE");
+    expect(blocked.body.details.count).toBe(3);
+    expect(titles(blocked.body.details)).toEqual(["Everyone", "Kano drivers"]);
+
+    await t.api("DELETE", `/api/payout-lists/${kanoList._id}`, { token: owner.token });
+    await t.api("DELETE", `/api/payout-lists/${anyBranch._id}`, { token: owner.token });
+    expect((await t.api("GET", `/api/beneficiaries/${amaka._id}`, { token: kanoFinance.token })).body.payoutLists).toEqual([]);
+    const hidden = await t.api("DELETE", `/api/beneficiaries/${amaka._id}`, { token: kanoFinance.token });
+    expect(hidden.body).toMatchObject({ code: "BENEFICIARY_IN_USE", details: { count: 1, payoutLists: [] } });
+    expect((await t.api("DELETE", `/api/beneficiaries/${amaka._id}`, { token: owner.token })).body.details).toEqual({
+      count: 1,
+      payoutLists: [{ _id: list._id, title: "Monthly salaries" }],
+    });
   });
 
   test("members limited to a branch only see and run lists for it", async () => {

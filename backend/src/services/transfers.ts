@@ -29,6 +29,7 @@ import {
   approversForBranch,
   assertCanDecide,
   assertPlanReachable,
+  canDecide,
   currentLevel,
   initialApproval,
   levelApprovers,
@@ -102,6 +103,10 @@ const TRY_AGAIN_STATUSES = [408, 425, 429];
 /** Empties the name-enquiry cache (tests). */
 export const clearNameCache = () => nameCache.clear();
 
+/** The bank's name check gave no answer just now: an outage, not "no such account", so it's worth asking again. */
+export const nameCheckUnavailable = () =>
+  new HttpError(502, "We couldn't check this account with the bank right now. Try again in a moment.", "NAME_CHECK_UNAVAILABLE");
+
 /** Looks the account up with the bank (name enquiry) and notes when it's an account on LinkPay. */
 export async function resolveBankRecipient(
   business: BusinessDocument,
@@ -124,7 +129,7 @@ export async function resolveBankRecipient(
       // (a bulk row shows it and the rest go on), and asking again may work, so it isn't cached.
       if (err instanceof LiquifiaError && err.code === "UNEXPECTED_RESPONSE") {
         console.error(`Name enquiry failed: ${err.message}`);
-        throw new HttpError(502, "We couldn't check this account with the bank right now. Try again in a moment.", "NAME_CHECK_UNAVAILABLE");
+        throw nameCheckUnavailable();
       }
       // Throttled or timed out: the service, not the account, like a 5xx (the whole bulk call fails, to be retried).
       if (err instanceof LiquifiaError && TRY_AGAIN_STATUSES.includes(err.status)) throw err;
@@ -836,6 +841,35 @@ export async function decideTransfers(opts: {
     await notifyRejected(decided, note).catch((err) => console.error("Couldn't email the rejection:", err));
   }
   return [...decided, ...advanced];
+}
+
+/**
+ * Approves or rejects the rows of a batch that are waiting for this member (see `canDecide`) and leaves the
+ * others as they are, so a batch partly approved one row at a time, or with rows at different levels, can
+ * still be finished as a batch. `skipped` counts the rows that were waiting but not decided here, including
+ * any someone else decided at the same moment.
+ */
+export async function decideBatchTransfers(opts: {
+  transfers: TransferDocument[];
+  membership: MembershipDocument;
+  userId: string;
+  decision: "approve" | "reject";
+  note?: string;
+}) {
+  const { membership, userId } = opts;
+  const pending = opts.transfers.filter((t) => t.status === "pending_approval");
+  if (!pending.length) throw new HttpError(409, "Nothing in this batch is waiting for approval", "TRANSFER_NOT_PENDING");
+  const mine = pending.filter((t) => canDecide(t, membership, userId));
+  if (!mine.length) {
+    // A batch has one creator, so its creator can never decide any of it.
+    if (pending.every((t) => t.createdBy.equals(userId))) {
+      throw new HttpError(403, "Someone else has to approve a transfer you created", "CANNOT_APPROVE_OWN");
+    }
+    throw new HttpError(409, "Nothing in this batch is waiting for your approval", "NOTHING_TO_DECIDE", { pending: pending.length });
+  }
+  // decideTransfers updates each row only if it's still at the level read here, and returns those it changed.
+  const changed = await decideTransfers({ ...opts, transfers: mine });
+  return { decided: changed.length, skipped: pending.length - changed.length };
 }
 
 /** The creator withdraws transfers that haven't been approved yet. */

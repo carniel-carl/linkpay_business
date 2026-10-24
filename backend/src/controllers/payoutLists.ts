@@ -53,6 +53,12 @@ async function checkBranch(req: Request, branchId: string) {
 
 const visibleTo = (req: Request, list: PayoutListDocument) => !list.branch || canAccessBranch(req.membership!, list.branch);
 
+/** A filter for the lists a member can see, as visibleTo: those for their branches, and those with no branch. */
+export function visibleListsFilter(req: Request) {
+  const scope = branchScope(req.membership!);
+  return scope ? { $or: [{ branch: { $exists: false } }, { branch: null }, { branch: { $in: scope } }] } : {};
+}
+
 async function findList(req: Request, id: string) {
   if (!isValidObjectId(id)) throw new HttpError(400, "Invalid id");
   const list = await PayoutListModel.findOne({ _id: id, business: req.business!._id });
@@ -103,11 +109,7 @@ async function serialize(lists: PayoutListDocument[], withItems = false) {
 
 /** Lists the member can use (those for their branches, or with no branch), most recently changed first. */
 export const listPayoutLists: RequestHandler = async (req, res) => {
-  const scope = branchScope(req.membership!);
-  const lists = await PayoutListModel.find({
-    business: req.business!._id,
-    ...(scope && { $or: [{ branch: { $exists: false } }, { branch: null }, { branch: { $in: scope } }] }),
-  }).sort({ updatedAt: -1 });
+  const lists = await PayoutListModel.find({ business: req.business!._id, ...visibleListsFilter(req) }).sort({ updatedAt: -1 });
   res.json({ items: await serialize(lists) });
 };
 
