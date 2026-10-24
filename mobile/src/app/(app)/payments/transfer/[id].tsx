@@ -1,10 +1,10 @@
 import { useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, RefreshControl, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { ApprovalTimeline } from "@/components/transfers/approval-timeline";
-import { moneyOut, recipientName, TransferStatusTag } from "@/components/transfers/transfer-row";
+import { moneyOut, notSent, recipientName, TransferStatusTag } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { FormError } from "@/components/ui/form-error";
@@ -54,6 +54,18 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
   const current = t.approval?.current ?? null;
   // Approving the last level sends the money; an earlier one passes it to the next level's approvers.
   const finalApproval = !current || current >= levels;
+  const unsent = notSent(t.status);
+
+  // The page checks again by itself while the transfer is in progress, and pull to refresh or someone else's
+  // decision can move it on too. When its status changes, the transfer lists, approval counts and balances behind
+  // it refresh with it, as on the batch screen. The member's own actions refresh them already, so they note the
+  // status they got back here first.
+  const seen = useRef(t.status);
+  useEffect(() => {
+    if (seen.current === t.status) return;
+    seen.current = t.status;
+    changed(t);
+  }, [t, changed]);
 
   // Rejecting, cancelling and refreshing don't move money, so they need no PIN (rejecting keeps its own check).
   function run(kind: "reject" | "cancel" | "refresh") {
@@ -61,7 +73,8 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
     action.mutate(
       { id: t._id, action: kind, note: note.trim() || undefined },
       {
-        onSuccess: () => {
+        onSuccess: (next) => {
+          seen.current = next.status;
           if (kind === "reject") Alert.alert("Rejected", "The money is available again.");
           if (kind === "cancel") Alert.alert("Transfer cancelled", "The money is available again.");
         },
@@ -83,6 +96,7 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
       pending: finalApproval ? "Sending…" : "Approving…",
       run: (entered) => approveTransfer(t._id, trimmed, entered),
       onSuccess: (next) => {
+        seen.current = next.status;
         changed(next);
         if (next.status === "pending_approval") {
           const total = next.approval?.levels.length ?? levels;
@@ -117,8 +131,14 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
         <FocusStatusBar />
         <View className="gap-2 px-1">
           <TransferStatusTag status={t.status} />
-          <Display size={36} accessibilityLabel={`${formatNaira(t.amountKobo)} out`}>
-            {moneyOut(t.amountKobo)}
+          {/* No money left, or it came back: no minus sign, muted and struck through like the list's row. */}
+          <Display
+            size={36}
+            className={unsent ? "text-muted-foreground" : undefined}
+            style={unsent ? { textDecorationLine: "line-through" } : undefined}
+            accessibilityLabel={`${formatNaira(t.amountKobo)}${unsent ? ", not sent" : " out"}`}
+          >
+            {unsent ? formatNaira(t.amountKobo) : moneyOut(t.amountKobo)}
           </Display>
           <Text className="text-[15px] text-muted-foreground">
             to {name} · {formatDateTime(t.createdAt)}

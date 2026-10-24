@@ -1,132 +1,142 @@
 import type { InfiniteData } from "@tanstack/react-query";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Pressable, Text, View } from "react-native";
 import { moneyOut, TransferStatusTag } from "@/components/transfers/transfer-row";
 import { Icon } from "@/components/ui/icon";
 import { Figure } from "@/components/ui/typography";
-import { approvalProgress, useTransferBatch } from "@/lib/api/transfers";
-import type { Transfer, TransferList } from "@/lib/api/types";
+import { batchLevelLine, STATUS_LABELS, type BatchScope } from "@/lib/api/transfers";
+import type { Transfer, TransferBatchSummary, TransferStatus } from "@/lib/api/types";
 import { formatNaira, timeAgo } from "@/lib/format";
 import { useTheme } from "@/theme/theme";
 
-/** Every transfer of one bulk transfer in a list, folded into one entry. `_id` keeps list keys unique. */
-export type BatchGroup = { group: "batch"; _id: string; batch: string; items: Transfer[] };
-export type ListEntry = Transfer | BatchGroup;
+/** A bulk transfer in a list, from GET batches. `_id` keeps list keys apart from the transfers'. */
+export type BatchEntry = { group: "batch"; _id: string; batch: TransferBatchSummary };
+export type ListEntry = Transfer | BatchEntry;
 
-export const isBatchGroup = (e: ListEntry): e is BatchGroup => "group" in e;
+export const isBatchEntry = (e: ListEntry): e is BatchEntry => "group" in e;
 
-/**
- * Which of a batch's transfers a list is about, so a batch row counts and totals the same ones the list shows:
- * the Fund approvals tabs, and "Needs your approval" (`awaiting=me`: waiting at the member's own level).
- */
-export type BatchScope = "pending" | "approved" | "rejected" | "awaiting";
-
-const IN_SCOPE: Record<BatchScope, (t: Transfer) => boolean> = {
-  pending: (t) => t.status === "pending_approval",
-  approved: (t) => !!t.decision && (t.status === "processing" || t.status === "success" || t.status === "failed"),
-  rejected: (t) => t.status === "rejected",
-  awaiting: (t) => t.canApprove,
-};
-
-/** Single transfers as they are; a bulk transfer's rows become one entry where its first row is. */
-export function groupByBatch(items: Transfer[]): ListEntry[] {
-  const out: ListEntry[] = [];
-  const groups = new Map<string, BatchGroup>();
-  for (const t of items) {
-    if (!t.batch) {
-      out.push(t);
-      continue;
-    }
-    let group = groups.get(t.batch);
-    if (!group) {
-      group = { group: "batch", _id: `batch:${t.batch}`, batch: t.batch, items: [] };
-      groups.set(t.batch, group);
-      out.push(group);
-    }
-    group.items.push(t);
-  }
-  return out;
-}
+const createdAt = (e: ListEntry) => Date.parse(isBatchEntry(e) ? e.batch.createdAt : e.createdAt) || 0;
 
 /** Enough entries to fill a phone screen before more pages stop being fetched by themselves. */
 const FILL = 12;
 
-type PagedTransfers = {
-  data?: InfiniteData<TransferList>;
+type Paged<T> = {
+  data?: InfiniteData<{ items: T[] }>;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
+  isPending: boolean;
   isError: boolean;
+  error: unknown;
   fetchNextPage: () => Promise<unknown>;
+  refetch: () => Promise<unknown>;
 };
 
-/**
- * A paged transfer list with bulk transfers folded into one entry each (`grouped`), or as it is. A page whose
- * rows all fold into a bulk transfer already shown adds nothing to scroll to, so the list's own end-of-list
- * loading would stop there: such a page fetches the next one, and so does a list too short to fill the screen.
- */
-export function useBatchGroups(list: PagedTransfers, grouped: boolean): ListEntry[] {
-  const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
-  const entries = useMemo(() => (grouped ? groupByBatch(items) : items), [items, grouped]);
-  const pages = list.data?.pages.length ?? 0;
-  const seen = useRef({ pages: 0, entries: 0 });
-  const { hasNextPage, isFetchingNextPage, isError, fetchNextPage } = list;
+/** When the last entry loaded so far was created, for a list with more pages to come; null otherwise. */
+function edge<T extends { createdAt: string }>(list: Paged<T>) {
+  const last = list.hasNextPage ? list.data?.pages.at(-1)?.items.at(-1) : undefined;
+  return last ? Date.parse(last.createdAt) || 0 : null;
+}
 
+/**
+ * Single transfers from a transfers list and bulk transfers from the batch list (`batches`), newest first in
+ * one list. The transfers list holds the bulk transfers' rows too; they're left out, as their batch has a row
+ * of its own. Both come a page at a time, so an entry shows once nothing still to load can come before it: no
+ * older than the last one loaded from a list with more pages. `more` loads the page holding the rest back, and
+ * a page that adds nothing to scroll to (all bulk transfers' rows, or held back) loads the next by itself, as
+ * does a list too short to fill the screen. Without `batches` (a search), the transfers list as it is.
+ */
+export function useTransfersWithBatches(transfers: Paged<Transfer>, batches?: Paged<TransferBatchSummary>) {
+  const rows = useMemo(() => transfers.data?.pages.flatMap((p) => p.items) ?? [], [transfers.data]);
+  const groups = useMemo(() => batches?.data?.pages.flatMap((p) => p.items), [batches?.data]);
+  const merging = !!batches;
+  const tEdge = edge(transfers);
+  const bEdge = batches ? edge(batches) : null;
+
+  const entries = useMemo<ListEntry[]>(() => {
+    if (!groups) return merging ? [] : rows;
+    const floor = Math.max(tEdge ?? -Infinity, bEdge ?? -Infinity);
+    const all: ListEntry[] = [...rows.filter((t) => !t.batch), ...groups.map((b) => ({ group: "batch" as const, _id: `batch:${b._id}`, batch: b }))];
+    return all.filter((e) => createdAt(e) >= floor).sort((x, y) => createdAt(y) - createdAt(x) || (y._id > x._id ? 1 : -1));
+  }, [rows, groups, merging, tEdge, bEdge]);
+
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = transfers;
+  const bHasNext = !!batches?.hasNextPage;
+  const bFetching = !!batches?.isFetchingNextPage;
+  const bFetchNext = batches?.fetchNextPage;
+  const more = useCallback(() => {
+    // The list whose last loaded entry is newest is the one holding the others back.
+    const fromBatches = bHasNext && (!hasNextPage || (bEdge ?? -Infinity) >= (tEdge ?? -Infinity));
+    if (fromBatches) {
+      if (!bFetching && !isFetchingNextPage) void bFetchNext?.();
+    } else if (hasNextPage && !isFetchingNextPage && !bFetching) void fetchNextPage();
+  }, [bHasNext, hasNextPage, bEdge, tEdge, bFetching, isFetchingNextPage, bFetchNext, fetchNextPage]);
+
+  const pages = (transfers.data?.pages.length ?? 0) + (batches?.data?.pages.length ?? 0);
+  const seen = useRef({ pages: 0, entries: 0 });
+  const failed = transfers.isError || !!batches?.isError;
   useEffect(() => {
     const before = seen.current;
     seen.current = { pages, entries: entries.length };
-    if (!grouped || !hasNextPage || isFetchingNextPage || isError) return;
-    const folded = pages > before.pages && entries.length === before.entries;
-    if (folded || entries.length < FILL) void fetchNextPage();
-  }, [grouped, pages, entries.length, hasNextPage, isFetchingNextPage, isError, fetchNextPage]);
+    if (!merging || failed) return;
+    const stalled = pages > before.pages && entries.length === before.entries;
+    if (stalled || entries.length < FILL) more();
+  }, [merging, failed, pages, entries.length, more]);
 
-  return entries;
+  return {
+    entries,
+    more,
+    isPending: transfers.isPending || (merging && !!batches?.isPending),
+    isError: failed,
+    error: transfers.error ?? batches?.error,
+    isFetchingNextPage: isFetchingNextPage || bFetching,
+    refetch: () => Promise.all([transfers.refetch(), batches?.refetch()]),
+  };
 }
 
-/** "Level 1 of 2", "Levels 1 to 2 of 3", or the one-level line ("Waiting for Ada", "Approved by Bola"). */
-function levelLine(items: Transfer[]) {
-  const waiting = items.filter((t) => t.status === "pending_approval");
-  const first = waiting[0] ?? items[0];
-  if (!first) return "";
-  const levels = first.approval?.levels.length ?? 0;
-  if (!waiting.length || levels <= 1) return approvalProgress(first);
-  const at = waiting.map((t) => t.approval?.current ?? 1);
-  const low = Math.min(...at);
-  const high = Math.max(...at);
-  return low === high ? `Level ${low} of ${levels}` : `Levels ${low} to ${high} of ${levels}`;
-}
+/** The statuses a Fund approvals tab counts, as the server picks the tab's rows. */
+const IN_TAB: Record<BatchScope, TransferStatus[]> = {
+  pending: ["pending_approval"],
+  awaiting: ["pending_approval"],
+  approved: ["processing", "success", "failed"],
+  rejected: ["rejected"],
+};
 
 /**
- * One bulk transfer in an approvals list: its name, how many of its transfers the list is about, their total,
- * the approval level they're at, and "Needs you" when they wait at the member's level. The counts come from the
- * whole batch (GET batches/:id), since a page can hold only part of it; until that loads, from the rows in view.
+ * One bulk transfer in an approvals list: its name, how many transfers, their total, where the waiting ones
+ * are ("Level 1 of 2 · 3 waiting for you") and "Needs you" when some wait for the member. All of it comes with
+ * the batch list (GET batches), so a row needs no request of its own.
  */
 export const BatchRow = memo(function BatchRow({
-  group,
+  batch: b,
   scope,
   onPress,
 }: {
-  group: BatchGroup;
+  batch: TransferBatchSummary;
   scope: BatchScope;
   onPress: (batchId: string) => void;
 }) {
   const { colors } = useTheme();
-  const batch = useTransferBatch(group.batch, { poll: false });
-  const fromBatch = batch.data?.items.filter(IN_SCOPE[scope]);
-  const items = fromBatch?.length ? fromBatch : group.items;
-  const count = items.length;
-  const total = items.reduce((s, t) => s + t.amountKobo, 0);
-  const needsMe = items.some((t) => t.canApprove);
-  const statuses = new Set(items.map((t) => t.status));
-  const title = batch.data?.title ?? "Bulk transfer";
-  const created = batch.data?.createdAt ?? items[0]?.createdAt;
-  const meta = [`${count} ${count === 1 ? "transfer" : "transfers"}`, levelLine(items), timeAgo(created)].filter(Boolean).join(" · ");
-  const dead = items.every((t) => t.status === "failed" || t.status === "rejected" || t.status === "cancelled");
+  const waitingTab = scope === "pending" || scope === "awaiting";
+  const needsMe = waitingTab && b.awaitingMe > 0;
+  const statuses = IN_TAB[scope].filter((s) => b.statusCounts[s] > 0);
+  const inTab = statuses.reduce((n, s) => n + b.statusCounts[s], 0);
+  const title = b.title ?? "Bulk transfer";
+  const count =
+    !waitingTab && inTab < b.count
+      ? `${inTab} of ${b.count} ${scope === "approved" ? "approved" : "declined"}`
+      : `${b.count} ${b.count === 1 ? "transfer" : "transfers"}`;
+  const meta = [count, b.createdBy?.name && `by ${b.createdBy.name}`, timeAgo(b.createdAt)].filter(Boolean).join(" · ");
+  const levels = waitingTab ? batchLevelLine(b.levels) : "";
+  const tag = statuses.length === 1 ? statuses[0] : undefined;
+  const dead = b.statusCounts.failed + b.statusCounts.rejected + b.statusCounts.cancelled === b.count;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${title}, bulk transfer, ${formatNaira(total)}, ${needsMe ? "needs you" : meta}, ${meta}`}
-      onPress={() => onPress(group.batch)}
+      accessibilityLabel={[title, "bulk transfer", formatNaira(b.amountKobo), needsMe ? "needs you" : tag && STATUS_LABELS[tag], meta, levels]
+        .filter(Boolean)
+        .join(", ")}
+      onPress={() => onPress(b._id)}
       className="flex-row items-center gap-3 px-4 py-3.5 active:bg-muted"
     >
       <View className="h-[38px] w-[38px] items-center justify-center rounded-[12px] bg-brand-subtle">
@@ -139,14 +149,20 @@ export const BatchRow = memo(function BatchRow({
         <Text numberOfLines={1} className="text-[13px] text-muted-foreground">
           {meta}
         </Text>
+        {/* Two lines when it must: "4 waiting, 2 for you" is the part that matters, and comes last. */}
+        {levels ? (
+          <Text numberOfLines={2} className="text-[13px] text-muted-foreground">
+            {levels}
+          </Text>
+        ) : null}
         {needsMe ? (
           <View className="self-start rounded-tag bg-warning-subtle px-1.5 py-0.5">
             <Text maxFontSizeMultiplier={1.3} className="text-[12px] font-semibold text-warning-foreground">
               Needs you
             </Text>
           </View>
-        ) : statuses.size === 1 ? (
-          <TransferStatusTag status={items[0].status} />
+        ) : tag ? (
+          <TransferStatusTag status={tag} />
         ) : (
           <View className="self-start rounded-tag bg-muted px-1.5 py-0.5">
             <Text maxFontSizeMultiplier={1.3} className="text-[12px] font-semibold text-muted-foreground">
@@ -156,7 +172,7 @@ export const BatchRow = memo(function BatchRow({
         )}
       </View>
       <Figure size={16} className={dead ? "text-muted-foreground" : "text-foreground"} style={dead ? { textDecorationLine: "line-through" } : undefined}>
-        {moneyOut(total)}
+        {dead ? formatNaira(b.amountKobo) : moneyOut(b.amountKobo)}
       </Figure>
     </Pressable>
   );

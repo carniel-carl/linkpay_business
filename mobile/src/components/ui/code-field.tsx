@@ -13,7 +13,11 @@ type Props = {
   disabled?: boolean;
 };
 
-/** Six digit slots. Accepts paste and the code the keyboard suggests from Mail or Messages. */
+/**
+ * Six digit slots. Accepts paste and the code the keyboard suggests from Mail or Messages. The input keeps its own
+ * text and reads `defaultValue` once, so a field drawn again (the PIN reset form after Cancel on the new PIN's
+ * keypad) starts from the code already typed rather than showing empty slots over a kept code.
+ */
 export const CodeField = forwardRef<OTPInputRef, Props>(function CodeField(
   { label, value, onChange, onComplete, invalid, disabled },
   ref,
@@ -24,6 +28,7 @@ export const CodeField = forwardRef<OTPInputRef, Props>(function CodeField(
       <OTPInput
         ref={ref}
         value={value}
+        defaultValue={value}
         onChange={onChange}
         onComplete={onComplete}
         maxLength={6}

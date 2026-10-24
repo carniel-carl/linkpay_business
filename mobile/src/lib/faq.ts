@@ -80,11 +80,29 @@ export const FAQ: FaqTopic[] = [
       },
       {
         q: "Can I pay many people at once?",
-        a: "Bulk transfers are on the web dashboard for now: upload a CSV file or paste up to 200 rows, check them, then send them together.",
+        a: "Yes. In Payments, open Transfers and choose Bulk transfer to pay up to 200 people from one account: pick saved beneficiaries, paste a CSV or choose a CSV file, or add people one by one. You check them on one screen, then send them together.",
+      },
+      {
+        q: "What does the bulk transfer check show?",
+        a: "Before anything is sent, we check every new account with its bank and show the name it gives, then the fees, the total from the account and whether it needs approval. If any row has a problem, nothing is sent until you fix or remove it. If an account's name changes between your check and sending, nothing is sent either: we show the new name so you can accept it or remove that row. You confirm with your transaction PIN.",
       },
       {
         q: "Why is my transfer waiting?",
         a: "Your business has an approval rule, so someone else has to approve it before it's sent. The transfer shows who it's waiting for, and the money stays held until it's approved or declined.",
+      },
+    ],
+  },
+  {
+    id: "payouts",
+    title: "Beneficiaries and payout lists",
+    questions: [
+      {
+        q: "What is a beneficiary?",
+        a: "Someone you pay often, saved once for your whole team. We check the account with its bank when it's saved and keep the name it gives, so paying them later needs no new check. In the app, add them to a bulk transfer from Saved beneficiaries. You save, rename and import them on the web dashboard, under Beneficiaries.",
+      },
+      {
+        q: "What is a payout list?",
+        a: "A saved bulk payment, like Monthly salaries: beneficiaries with an amount each and the account it's usually paid from. Payout lists are on the web dashboard for now. Paying one makes an ordinary bulk transfer, so it shows in the app's Transfers and Fund approvals like any other.",
       },
     ],
   },
@@ -103,6 +121,10 @@ export const FAQ: FaqTopic[] = [
       {
         q: "Do Finance members need approval even without a rule?",
         a: "Yes. Transfers prepared by someone who can't approve transfers always need another member's approval.",
+      },
+      {
+        q: "How do I approve a bulk transfer?",
+        a: "In Fund approvals a bulk transfer shows as one row. Open it: Approve, which shows how many of its transfers are waiting for you, approves them all with your PIN. Reject declines the same ones, with an optional note. Any at another approval level, or that you prepared, are left for the right person.",
       },
       {
         q: "Where do I see what's waiting for me?",
@@ -181,6 +203,10 @@ export const FAQ: FaqTopic[] = [
       {
         q: "Can I put a pay button on my website?",
         a: "Yes. On the web dashboard, each link's page has code for a pay button that opens the checkout over your page, for the checkout shown in your page, or for opening it from your own JavaScript with your order number. You can limit a link to your own websites. Before handing over goods, check the payment from your server with the token the page gives you.",
+      },
+      {
+        q: "What if someone pays after a link's limit is reached?",
+        a: "The payment is still recorded, because the money has arrived, and it's marked Over limit. We tell your team so you can refund it or honour it. The payer's receipt still says paid.",
       },
       {
         q: "Can I change or delete a link?",

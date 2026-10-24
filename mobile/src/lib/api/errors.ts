@@ -42,6 +42,9 @@ const MESSAGES: Record<string, string> = {
   NOT_YOUR_LEVEL: "This transfer is waiting for someone at a different approval level.",
   ALREADY_APPROVED: "You approved an earlier level of this transfer, so someone else has to approve this one.",
   TRANSFER_NOT_PENDING: "This transfer is no longer waiting for approval. Refresh to see where it is.",
+  // Bulk transfers: nothing left in it waits for this member (other levels, or someone else just decided it).
+  NOTHING_TO_DECIDE:
+    "Nothing in this bulk transfer is waiting for you now. What's still waiting is for someone at another approval level, or someone else has just decided it.",
   ACCOUNT_NOT_FOUND: "We couldn't find that account. Check the number and bank.",
   SAME_ACCOUNT: "You can't send money to the account it's coming from.",
   ACCOUNT_BUSY: "Another transfer from this account is going through. Try again in a moment.",

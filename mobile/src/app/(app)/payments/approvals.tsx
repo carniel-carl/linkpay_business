@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { PaymentRowSkeleton } from "@/components/payments/payment-row";
-import { BatchRow, isBatchGroup, useBatchGroups } from "@/components/transfers/batch-row";
+import { BatchRow, isBatchEntry, useTransfersWithBatches } from "@/components/transfers/batch-row";
 import { TransferRow } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -22,6 +22,7 @@ import {
   useApprovals,
   useAwaitingCount,
   usePendingApprovalCount,
+  useTransferBatches,
   type ApprovalTab,
 } from "@/lib/api/transfers";
 import type { ApprovalRule, Transfer } from "@/lib/api/types";
@@ -45,8 +46,9 @@ const EMPTY: Record<ApprovalTab, { title: string; body: string }> = {
 /**
  * Fund approvals, as on the web: what's waiting, approved or declined, and how approvals work for the
  * business. Reached from Payments › Transfers. Setting up levels stays on the web; managers can change
- * the simple rule here. A bulk transfer shows as one row (count, total, level) that opens it, to approve or
- * reject it all at once.
+ * the simple rule here. Bulk transfers come from the batch list, one row each (count, total, level) that opens
+ * it, to approve or reject what waits for the member at once; single transfers from the transfers list. A
+ * search looks for recipients, so it lists the transfers that match, bulk ones too, one by one.
  */
 export default function FundApprovals() {
   const gate = useBankingGate();
@@ -59,15 +61,17 @@ export default function FundApprovals() {
   const [q, setQ] = useState<string>();
   const qc = useQueryClient();
   const business = useBusinessContext((s) => s.businessId ?? "default");
-  const list = useApprovals(tab, q);
-  // The list, the tiles and the rule (all under "transfers" for the business), and the bulk transfers' own counts.
+  const transfers = useApprovals(tab, q);
+  const batches = useTransferBatches(tab, !q);
+  const list = useTransfersWithBatches(transfers, q ? undefined : batches);
+  const items = list.entries;
+  // The lists, the tiles and the rule (all under "transfers" for the business), and bulk transfers opened before.
   const pull = usePullToRefresh(() =>
     Promise.all([qc.invalidateQueries({ queryKey: [business, "transfers"] }), qc.invalidateQueries({ queryKey: [business, "batch"] })]),
   );
   const pending = usePendingApprovalCount(ready).data ?? 0;
   const awaiting = useAwaitingCount(ready && approver).data ?? 0;
   const rule = useApprovalRule(ready);
-  const items = useBatchGroups(list, true);
 
   // Search waits for a pause in typing.
   useEffect(() => {
@@ -105,9 +109,7 @@ export default function FundApprovals() {
         contentContainerStyle={{ paddingBottom: 48 }}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
         onEndReachedThreshold={0.6}
-        onEndReached={() => {
-          if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
-        }}
+        onEndReached={list.more}
         ListHeaderComponent={
           <View className="gap-4 px-4 pb-3 pt-2">
             <FocusStatusBar />
@@ -143,8 +145,8 @@ export default function FundApprovals() {
         renderItem={({ item, index }) => (
           <View className={cn("mx-4 overflow-hidden bg-card", index === 0 && "rounded-t-surface", index === items.length - 1 && "rounded-b-surface")}>
             {index > 0 && <View className="ml-[66px] h-px bg-border" />}
-            {isBatchGroup(item) ? (
-              <BatchRow group={item} scope={tab} onPress={openBatch} />
+            {isBatchEntry(item) ? (
+              <BatchRow batch={item.batch} scope={tab} onPress={openBatch} />
             ) : (
               <TransferRow transfer={item} onPress={openTransfer} approvals />
             )}
