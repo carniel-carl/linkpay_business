@@ -78,9 +78,11 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
   const actions = canCreate && sources.length > 0 && (
     <>
       <BulkTransferDialog accounts={sources} defaultBranchId={selected?._id}>
-        <Button variant="outline">
+        {/* Icons only on phones, like the approval rule's, so the header's buttons fit beside each other. `px-0!`
+            beats the button's own padding beside an icon, so the icon sits in the middle. */}
+        <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
           <Rows3 data-icon="inline-start" aria-hidden />
-          Bulk transfer
+          <span className="max-sm:sr-only">Bulk transfer</span>
         </Button>
       </BulkTransferDialog>
       <NewTransferDialog accounts={sources} defaultBranchId={selected?._id}>

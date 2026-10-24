@@ -15,6 +15,7 @@ import {
   getPendingApprovalCount,
   getSelected,
   getTransfer,
+  getTransferBatches,
   getTransfers,
   getTransferSettings,
 } from "@/lib/data"
@@ -58,12 +59,17 @@ export default async function ApprovalsPage({ searchParams }: PageProps<"/approv
   const canApprove = can(overview, "transfers.approve")
   const canManage = can(overview, "transfers.manage")
 
-  const [list, pendingCount, awaitingCount, settings, linked] = await Promise.all([
+  // Bulk transfers with rows waiting for this member, newest first, to decide as a whole.
+  const batchParams = new URLSearchParams({ awaiting: "me", take: "10" })
+  if (selected) batchParams.set("branch", selected._id)
+
+  const [list, pendingCount, awaitingCount, settings, linked, batches] = await Promise.all([
     getTransfers(toApprovalApiParams(query, selected?._id)),
     getPendingApprovalCount(),
     canApprove ? getAwaitingApprovalCount() : Promise.resolve(0),
     getTransferSettings(),
     query.transfer ? getTransfer(query.transfer) : null,
+    canApprove ? getTransferBatches(batchParams) : null,
   ])
   const workflow = settings.ok && settings.data.approval.mode === "workflow"
 
@@ -109,6 +115,7 @@ export default async function ApprovalsPage({ searchParams }: PageProps<"/approv
           awaitingCount={canApprove ? awaitingCount : null}
           showBranch={!selected && branches.length > 1}
           linked={linked?.ok ? linked.data : null}
+          batches={batches?.ok ? batches.data : null}
         />
         {settings.ok && <WorkflowSummary settings={settings.data} canManage={canManage} />}
       </div>

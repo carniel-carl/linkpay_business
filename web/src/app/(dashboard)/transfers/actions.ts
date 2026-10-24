@@ -7,6 +7,7 @@ import { api } from "@/lib/api/client"
 import { messageForCode } from "@/lib/api/errors"
 import { pinHeader } from "@/lib/api/transaction-pin"
 import type { Bank, BulkPreview, BulkResolvedRow, FeeQuote, ResolvedAccount, Transfer, TransferBatch, TransferSettings } from "@/lib/api/types"
+import type { TransferBatchDecision } from "@/lib/api/types"
 import { BULK_CHECK_SLICE } from "@/lib/transfers"
 
 const id = z.string().regex(/^[a-f\d]{24}$/i)
@@ -65,7 +66,11 @@ const createInput = z.object({
   recipient: z.discriminatedUnion("type", [
     z.object({ type: z.literal("bank"), accountNumber, bankUuid: z.string().min(1) }),
     z.object({ type: z.literal("branch"), branch: id }),
+    // A saved beneficiary is paid under the name saved with it: no new name enquiry.
+    z.object({ type: z.literal("beneficiary"), beneficiary: id }),
   ]),
+  // A new bank recipient is saved to the beneficiaries as it's paid.
+  saveBeneficiary: z.literal(true).optional(),
   idempotencyKey,
 })
 
@@ -80,19 +85,30 @@ export async function createTransfer(input: z.input<typeof createInput>, pin: st
 
 const bulkRows = z
   .array(
-    z.object({
-      accountNumber,
-      bankUuid: z.string().min(1),
-      amountKobo,
-      narration,
-      // The name the member reviewed: the API refuses the row (ACCOUNT_NAME_CHANGED) if the bank now gives another.
-      accountName: z.string().trim().min(1).max(200).optional(),
-    }),
+    z.union([
+      // A saved beneficiary: paid under its saved name, so it needs no name enquiry.
+      z.object({ beneficiary: id, amountKobo, narration }),
+      z.object({
+        accountNumber,
+        bankUuid: z.string().min(1),
+        amountKobo,
+        narration,
+        // The name the member reviewed: the API refuses the row (ACCOUNT_NAME_CHANGED) if the bank now gives another.
+        accountName: z.string().trim().min(1).max(200).optional(),
+      }),
+    ]),
   )
   .min(1)
   .max(200)
 
-const bulkInput = z.object({ branch: id, title: z.string().trim().max(80).optional(), items: bulkRows, idempotencyKey })
+const bulkInput = z.object({
+  branch: id,
+  title: z.string().trim().max(80).optional(),
+  items: bulkRows,
+  // Saves the rows' new accounts to the beneficiaries.
+  saveBeneficiaries: z.literal(true).optional(),
+  idempotencyKey,
+})
 
 /** A dry run of a bulk transfer: fees, totals, balance, the approval it would need and each row's problem. */
 export async function previewBulkTransfer(input: Omit<z.input<typeof bulkInput>, "idempotencyKey">) {
@@ -142,20 +158,32 @@ export async function approveTransfer(transferId: string, text: string | undefin
   return result
 }
 
-/** reject | cancel everything in a bulk transfer that's still waiting. Approving takes the PIN: approveBatch. */
-export async function actOnBatch(batchId: string, action: "reject" | "cancel", text?: string) {
-  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/${z.enum(["reject", "cancel"]).parse(action)}`
-  const result = await runAction(() => api<TransferBatch>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
+// Bulk transfers. Approving and rejecting decide only the rows waiting for the member (at a level that names
+// them or is open to anyone, not their own, no earlier level approved by them) and leave the rest for their
+// approvers: the answer says how many were `decided` and `skipped`. NOTHING_TO_DECIDE: none of it waits for them.
+
+/** Approves the rows of a bulk transfer waiting for the member, at their level. Takes the PIN. */
+export async function approveBatch(batchId: string, pin: string, text?: string) {
+  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/approve`
+  const result = await runAction(() =>
+    api<TransferBatchDecision>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: pinHeader(pin) }),
+  )
   if (result.ok) refresh()
   return result
 }
 
-/** Approves everything in a bulk transfer that's waiting at the member's level. */
-export async function approveBatch(batchId: string, pin: string, text?: string) {
-  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/approve`
-  const result = await runAction(() =>
-    api<TransferBatch>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: pinHeader(pin) }),
-  )
+/** Rejects the rows of a bulk transfer waiting for the member. No PIN. */
+export async function rejectBatch(batchId: string, text?: string) {
+  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/reject`
+  const result = await runAction(() => api<TransferBatchDecision>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
+  if (result.ok) refresh()
+  return result
+}
+
+/** Cancels everything still waiting in a bulk transfer the member created. */
+export async function cancelBatch(batchId: string) {
+  const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/cancel`
+  const result = await runAction(() => api<TransferBatch>(path, { method: "POST", json: {} }))
   if (result.ok) refresh()
   return result
 }

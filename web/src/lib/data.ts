@@ -34,12 +34,13 @@ import type {
   Approver,
   Transfer,
   TransferBatch,
+  TransferBatchList,
   TransferList,
   TransferSettings,
   UnreadCount,
   User,
 } from "@/lib/api/types"
-import type { BeneficiaryList, PayoutList, PayoutListWithItems } from "@/lib/api/types"
+import type { BeneficiaryDetail, BeneficiaryList, PayoutList, PayoutListWithItems } from "@/lib/api/types"
 
 // Server Components can't change cookies, so an expired session goes through the
 // sign-out route handler, which clears the cookie and redirects to sign in.
@@ -158,6 +159,9 @@ export const getTransfer = (id: string) => load<Transfer>(`/api/transfers/${enco
 
 export const getTransferBatch = (id: string) => load<TransferBatch>(`/api/transfers/batches/${encodeURIComponent(id)}`)
 
+/** GET /api/transfers/batches (`?branch=&approval=&awaiting=me&skip=&take=`): bulk transfers, newest first, without rows. */
+export const getTransferBatches = (params: URLSearchParams) => load<TransferBatchList>(`/api/transfers/batches?${params}`)
+
 /** How many transfers wait for the signed-in member's approval (0 when they can't approve). */
 export const getAwaitingApprovalCount = cache(async () => {
   const result = await load<TransferList>("/api/transfers?awaiting=me&take=1")
@@ -251,6 +255,16 @@ export const getLinkCheckout = (id: string) => load<LinkCheckout>(`/api/payment-
 
 /** GET /api/beneficiaries (see lib/payouts.ts for the query). */
 export const getBeneficiaries = (params: URLSearchParams) => load<BeneficiaryList>(`/api/beneficiaries?${params}`)
+
+/** One beneficiary with the payout lists that pay it, or null when it doesn't exist (or was deleted). */
+export const getBeneficiary = cache(async (id: string) => {
+  try {
+    return await api<BeneficiaryDetail>(`/api/beneficiaries/${encodeURIComponent(id)}`)
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 400)) return null
+    onReadError(err)
+  }
+})
 
 /** The lists the member can use (their branches' and those with no branch), most recently changed first. */
 export const getPayoutLists = () => load<{ items: PayoutList[] }>("/api/payout-lists")

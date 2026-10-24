@@ -1,10 +1,11 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { BookUser, ListChecks, UserPlus } from "lucide-react"
+import { BookUser, FileUp, ListChecks, UserPlus } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
 import { BeneficiariesView } from "@/components/payouts/beneficiaries-view"
 import { BeneficiaryFormDialog } from "@/components/payouts/beneficiary-form-dialog"
+import { BeneficiaryImportDialog } from "@/components/payouts/beneficiary-import-dialog"
 import { PayoutsLocked } from "@/components/payouts/parts"
 import { PayoutsUnavailable } from "@/components/payouts/unavailable"
 import { Button } from "@/components/ui/button"
@@ -49,12 +50,21 @@ export default async function BeneficiariesPage({ searchParams }: PageProps<"/be
         description="The people and businesses you pay, checked with their bank once and saved for your whole team. Put them on a payout list to pay them together."
         actions={
           <>
-            <Button variant="outline" asChild>
+            {/* Icons only on phones, so all three fit beside each other. */}
+            <Button variant="outline" className="max-sm:w-9 max-sm:px-0!" asChild>
               <Link href="/payout-lists">
                 <ListChecks data-icon="inline-start" aria-hidden />
-                Payout lists
+                <span className="max-sm:sr-only">Payout lists</span>
               </Link>
             </Button>
+            {canManage && (
+              <BeneficiaryImportDialog>
+                <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
+                  <FileUp data-icon="inline-start" aria-hidden />
+                  <span className="max-sm:sr-only">Import</span>
+                </Button>
+              </BeneficiaryImportDialog>
+            )}
             {add}
           </>
         }

@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Spinner } from "@/components/ui/spinner"
-import type { Transfer, TransferList } from "@/lib/api/types"
+import type { Transfer, TransferBatchList, TransferList } from "@/lib/api/types"
 import {
   APPROVAL_TAB_LABELS,
   APPROVAL_TABS,
@@ -29,6 +29,7 @@ import { formatDate, formatShortDate, formatTime } from "@/lib/format"
 import { periodLabel } from "@/lib/transactions"
 import { DEFAULT_PAGE_SIZE, PAGE_SIZES } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
+import { WaitingBatches } from "./waiting-batches"
 
 type Patch = Record<string, string | undefined>
 
@@ -62,9 +63,11 @@ type Props = {
   showBranch: boolean
   /** A transfer opened by link (?transfer=) that isn't on this page of the list. */
   linked: Transfer | null
+  /** Bulk transfers with rows waiting for the member; null when they can't approve. */
+  batches: TransferBatchList | null
 }
 
-export function ApprovalsView({ data, query, pendingCount, awaitingCount, showBranch, linked }: Props) {
+export function ApprovalsView({ data, query, pendingCount, awaitingCount, showBranch, linked, batches }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -226,6 +229,8 @@ export function ApprovalsView({ data, query, pendingCount, awaitingCount, showBr
           />
         )}
       </div>
+
+      {batches && <WaitingBatches data={batches} showBranch={showBranch} />}
 
       <div className="surface overflow-hidden">
         <nav aria-label="Approval status" className="overflow-x-auto px-4 pt-2 sm:px-6">
