@@ -1,6 +1,6 @@
 # LinkPay Business: production deploy runbook
 
-One ordered checklist for the **first production deploy** of everything in audit batches 1–8 (`fix/audit-batch-8` and later). It replaces the "Before deploying" lists scattered through the session log in [IMPLEMENTATION.md](IMPLEMENTATION.md) §8 (batches 3–7). Work through it top to bottom; tick each box.
+One ordered checklist for the **first production deploy** of everything in audit batches 1–9 (`fix/audit-batch-9` and later). It replaces the "Before deploying" lists scattered through the session log in [IMPLEMENTATION.md](IMPLEMENTATION.md) §8 (batches 3–7). Work through it top to bottom; tick each box.
 
 `bun run preflight` (`backend/scripts/preflight.ts`) checks most of it **without writing anything**: environment, email provider, the database's data and indexes, and optionally the Liquifia key. Run it before and after the deploy. It prints PASS / WARN / FAIL per check and exits 1 on any FAIL.
 
@@ -8,6 +8,7 @@ One ordered checklist for the **first production deploy** of everything in audit
 cd backend
 bun --env-file=/path/to/production.env scripts/preflight.ts            # --env-file keeps backend/.env out of it
 bun --env-file=/path/to/production.env scripts/preflight.ts --liquifia # plus a read-only GET /me and GET /banks
+bun --env-file=/path/to/production.env scripts/preflight.ts --liquifia --email --storage # plus Resend's domains and a one-key bucket list
 bun run preflight                                                       # on a host whose environment is production's
 ```
 
@@ -20,8 +21,10 @@ Last updated: 2026-10-25
 - [ ] **One backend instance.** Decided in batch 6. The SSE notification bus, the payment-link live stream, the bank/fee/name caches and the job single-flight guards live in the process. A brief overlap during a restart is safe (every job's writes are conditional), but don't keep two running and don't autoscale.
 - [ ] **MongoDB.** A replica set isn't required: nothing uses transactions or change streams. Atlas is fine. Tests run against MongoDB 8.2. The database user needs `readWrite` on the database (it covers `createIndex` and `dropIndex`).
 - [ ] **bun 1.4 or later** in every package (the lockfiles need it; `packageManager: bun@1.4.0`).
-- [ ] **A real email provider**, wired with `setEmailProvider()` (`backend/src/services/email.ts`). With `NODE_ENV=production` the server refuses to start on the console provider, which would print sign-in codes and invite links to the log. Call it at the top level of a module that `index.ts` imports (say `src/services/emailProvider.ts`), not in `index.ts`'s own body, so preflight and the scripts load it too. Which provider: open question 5.
-- [ ] **File storage.** Uploads (KYB documents, logos, link pictures) go to local disk at `UPLOAD_DIR` unless `setFileStorage()` is wired the same way. On local disk, use an absolute path on a persistent volume and include it in the backups.
+- [ ] **Email through Resend** (chosen in batch 9; open question 5). In Resend, add the sending domain, publish its DNS records until it shows as verified, and create a **sending-only** API key. Set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` and `EMAIL_FROM` on that domain (§2). With `NODE_ENV=production`, or any live key, the server refuses to start on console email, which would print sign-in codes and invite links to the log. `src/services/providers.ts` wires the provider when it's imported (by `index.ts`, preflight and the scripts that need it). Preflight `--email` checks the key and that the from domain is verified.
+- [ ] **File storage.** Uploads (KYB documents, logos, link pictures) go to one of:
+  - **An S3-compatible bucket** (`STORAGE_PROVIDER=s3`: AWS S3, Cloudflare R2, DigitalOcean Spaces). Block all public access on the bucket: the API serves every file itself. The key needs `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject`, plus `s3:ListBucket` (preflight `--storage` lists one key, and without it S3 answers a missing file with 403 instead of 404). Turn on versioning or backups for the bucket. **Existing local uploads aren't copied for you:** before switching, sync `UPLOAD_DIR` to `s3://<bucket>/<S3_PREFIX>` keeping the same keys (e.g. `aws s3 sync`).
+  - **Local disk** (`STORAGE_PROVIDER=local`, the default) at `UPLOAD_DIR`: an absolute path on a persistent volume, included in the backups. Fine for the single instance.
 - [ ] **HTTPS in front of the API, web and admin.** The proxy in front of web and admin must send `X-Forwarded-Proto: https` (for the CSP's `upgrade-insecure-requests`) and set the visitor-IP header named by `CLIENT_IP_HEADER`. Don't cache web or admin pages on a CDN: they're rendered per request with a CSP nonce.
 - [ ] **Liquifia:** a live secret key (`sk_live_`). The webhook secret if Liquifia has sent it (open question 1).
 - [ ] **Mobile:** an EAS project, the real bundle id (open question 7), and APNs/FCM credentials for `PUSH_PROVIDER=expo`. Slice 3 added native modules, so this is a native build, not an OTA update.
@@ -57,7 +60,16 @@ Values are on only when exactly `1` (`ENCRYPTION_REQUIRE_V2`, `LIQUIFIA_ALLOW_LI
 | `ADMIN_APP_URL` | the admin console's `https://` origin, not `WEB_URL` | Staff invite links. |
 | `PUSH_PROVIDER` | **`expo`** | Anything else prints every push, text included, to the log. |
 | `EXPO_ACCESS_TOKEN` | if the Expo project has enhanced push security | |
-| `UPLOAD_DIR` | an absolute path on a persistent volume | Unless `setFileStorage()` is wired. |
+| `EMAIL_PROVIDER` | **`resend`** | `console` (the default) prints emails to the log and is refused in production. Anything else stops the boot. |
+| `RESEND_API_KEY` | a sending-only key, `re_…` | Required with `resend`. |
+| `EMAIL_FROM` | e.g. `LinkPay Business <no-reply@mail.linkpay.ng>` | Required with `resend`, on the domain verified in Resend. A bare address or `Name <address>`; quote a name with punctuation. Preflight FAILs a placeholder domain or `resend.dev`. |
+| `EMAIL_REPLY_TO` | optional | Where replies go when an email doesn't say (invoice emails reply to the business). |
+| `STORAGE_PROVIDER` | `s3`, or `local` | §1. |
+| `S3_BUCKET`, `S3_REGION` | the bucket, and its region (`auto` for R2) | Required with `s3`. |
+| `S3_ENDPOINT` | only for R2, Spaces and other non-AWS services | The bare `https://` origin, without the bucket or a path. |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the bucket key (§1 for its permissions) | Required with `s3`. |
+| `S3_PREFIX` | optional, e.g. `linkpay/production` | A folder inside the bucket. |
+| `UPLOAD_DIR` | an absolute path on a persistent volume | Only with `STORAGE_PROVIDER=local`. |
 | `MIN_MOBILE_APP_VERSION` | **unset at first**; the new mobile build's version once it can be downloaded | §4 step 3. Three whole numbers (`1.1.0`); the backend refuses to start on anything else. Unset means no minimum. |
 | `APP_NAME` | e.g. `LinkPay Business` | Default `LinkPay`, used in every email subject and body. |
 | `JWT_EXPIRES_IN` | default `7d` | A web session's maximum age. A duration with a unit (`7d`, `12h`); the backend refuses to start on anything else, bare digits included. |
@@ -96,10 +108,10 @@ The admin's `start` script is fixed to port 3001.
 
 Run the scripts from the **new** release's `backend/`, with the production environment (`--env-file`, as above). They load `src/config/env.ts`, so they need `NODE_ENV=production` for the live key, never `LIQUIFIA_ALLOW_LIVE`.
 
-1. [ ] **Back up.** Take an Atlas on-demand snapshot (or `mongodump`) of the whole database, and copy `UPLOAD_DIR` or the bucket. Note the time. After `migrate:kyb --apply`, `migrate:staff --apply` and `migrate:encryption --apply`, this backup is the only way back.
-2. [ ] **Preflight** with `--liquifia`. Fix every FAIL in Environment and Email and files. Expect these Database lines at this point: KYB documents (FAIL until step 4), Encrypted BVNs (WARN until §5), Unique indexes (WARN until the backend builds them), and maybe Staff (step 3).
+1. [ ] **Back up.** Take an Atlas on-demand snapshot (or `mongodump`) of the whole database, and copy `UPLOAD_DIR` or the bucket (or check its versioning is on). Note the time. After `migrate:kyb --apply`, `migrate:staff --apply` and `migrate:encryption --apply`, this backup is the only way back.
+2. [ ] **Preflight** with `--liquifia --email --storage`. Fix every FAIL in Environment and Email and files. Expect these Database lines at this point: KYB documents (FAIL until step 4), Encrypted BVNs and TOTP secrets (WARN until §5), Unique indexes (WARN until the backend builds them), and maybe Staff (step 3).
 3. [ ] **`migrate:staff`**, only if preflight's Staff line names `role "admin"` users or staff without a role. Run `bun run migrate:staff`, read the dry run, then run `bun run migrate:staff --apply` **with the product owner's go-ahead** (open question 11). It deletes users who were staff only, with their sessions and biometric keys. IMPLEMENTATION.md disagrees with itself here: the 2026-10-21 session log says the product owner ran it on Atlas, but its §3 status table and open question 11 say it hasn't been run. The Staff line settles it. If the line says no super admin is active, add one: `bun run staff add <email> "<name>"`.
-4. [ ] **`migrate:kyb`** removes duplicate KYB documents, so the unique `{ business, type, person }` index can build. Run `bun run migrate:kyb` (dry run) whenever you like. Run `bun run migrate:kyb --apply` in the deploy window, after the old backend is stopped and **before the new backend starts**: two uploads at once on the old code can still make a duplicate. It deletes the extra documents and their files through `src/services/storage.ts`. If production storage is wired with `setFileStorage()`, the script must load that wiring too, or the removed documents' files stay behind (it prints their keys).
+4. [ ] **`migrate:kyb`** removes duplicate KYB documents, so the unique `{ business, type, person }` index can build. Run `bun run migrate:kyb` (dry run) whenever you like. Run `bun run migrate:kyb --apply` in the deploy window, after the old backend is stopped and **before the new backend starts**: two uploads at once on the old code can still make a duplicate. It deletes the extra documents and their files through `src/services/storage.ts`. It loads the storage wiring (`src/services/providers.ts`), so with `STORAGE_PROVIDER=s3` it deletes from the bucket.
 5. [ ] **Preflight again.** No FAIL is left.
 
 The dry runs are read-only: the scripts connect with Mongoose's autoIndex and autoCreate off, so they build no index and create no collection. Only `--apply` runs `syncIndexes` (`migrate:staff` on `staff`, `migrate:kyb` on `kybdocuments`). `migrate:branches` has no dry run (§5 step 8). Preflight never writes.
@@ -108,9 +120,11 @@ The dry runs are read-only: the scripts connect with Mongoose's autoIndex and au
 
 ## 4. Deploy order
 
-1. [ ] **Backend.** Stop the old one, then start the new one, still a single instance. The startup log says `Encryption: values in the old format (before v2) are still read…`, then `Server running on…`. Around the same time it logs `Indexes: every declared index is built (N models)`, or `🚨 INDEX BUILD FAILED` with one line per missing index (§5 step 1). If it won't start, the error names the variable: `NODE_ENV` unset or unknown; a secret too short, shared or from the repo; a number, duration or `MIN_MOBILE_APP_VERSION` that isn't one; `TRUST_PROXY`; `ENCRYPTION_KEY`; the console email provider in production; or a live key without `NODE_ENV=production`. Preflight's Startup modules and Backend config lines show the same errors.
+1. [ ] **Backend.** Stop the old one, then start the new one, still a single instance. The startup log says `Encryption: values in the old format (before v2) are still read…`, `Email: Resend, from <EMAIL_FROM>. Files: <the bucket, or local disk at UPLOAD_DIR>.`, then `Server running on…`. Around the same time it logs `Indexes: every declared index is built (N models)`, or `🚨 INDEX BUILD FAILED` with one line per missing index (§5 step 1). If it won't start, the error names the variable: `NODE_ENV` unset or unknown; a secret too short, shared or from the repo; a number, duration or `MIN_MOBILE_APP_VERSION` that isn't one; `TRUST_PROXY`; `ENCRYPTION_KEY`; the console email provider in production; or a live key without `NODE_ENV=production`. Preflight's Startup modules and Backend config lines show the same errors.
    - **Sessions:** from this moment the API refuses web tokens without a `sid`, so **every web user is signed out**, whichever web version they're on. Mobile device sessions already carry one and stay signed in.
    - **PIN:** the 15 covered routes (sending, approving, savings moves, security settings) answer `TRANSACTION_PIN_REQUIRED` until the user sets a PIN. The old web and old mobile builds have no way to set one.
+   - **2FA sign-ins in progress:** two-step challenges now carry the password stamp. A challenge issued by the old backend (they last 10 minutes) is refused for anyone whose password has ever changed, so they sign in again.
+   - **Batch decisions** need `expect` (400 `EXPECT_REQUIRED`). Web and mobile from batch 8 on send it.
    - **Idempotency keys:** `POST /api/transfers`, `/api/transfers/bulk` and `/api/payout-lists/:id/run` answer 400 `IDEMPOTENCY_KEY_REQUIRED` without an `Idempotency-Key` header. The new web and mobile send one. Anything else that sends money through the API (a script, an integration) must too.
 2. [ ] **Admin and web together, straight after.** They can't go first, because they call endpoints only the new backend has: `/api/transaction-pin`, `/api/auth/password`, `GET /transfers/batches`, `bulk/preview`, `resolve-accounts`, and the `decided`/`skipped` batch answers. They can't wait either: until the new web is live, nobody on the web can send or approve money, because only it can set a PIN. Admin and the backend share the new `activity.view_ips` permission and the audit labels (`staff.added`; a contract test keeps the two lists in step). Set `CLIENT_IP_HEADER` before they go live, or sign-in limits count every visitor as the web server.
 3. [ ] **Mobile forced update.** Old builds can't send `X-Transaction-Pin` or set a PIN, so every money action fails on them. They also predate the batch summary list. Release the new build (App Store, Play, TestFlight) with a higher `version` in `mobile/app.json`, built with `EXPO_PUBLIC_IOS_STORE_URL` (`https://apps.apple.com/app/id<app id>`; without it the iOS update screen has no store button) and, if the Play listing isn't the app's package, `EXPO_PUBLIC_ANDROID_STORE_URL`. **Once it can be downloaded**, set `MIN_MOBILE_APP_VERSION` on the backend to that version (three whole numbers, like `1.1.0`; anything else stops the boot) and restart it. Set it earlier and phones are told to update to a version they can't get yet.
@@ -136,7 +150,7 @@ The dry runs are read-only: the scripts connect with Mongoose's autoIndex and au
    db.transferbatches.dropIndex("business_1") // replaced by { business: 1, createdAt: -1 }
    ```
 3. [ ] **Rate limits** now live in MongoDB (`ratelimithits`). They start from zero at this deploy, and each limited request costs one Mongo write.
-4. [ ] **`migrate:encryption`.** Run `bun run migrate:encryption` (dry run). If it lists unreadable values, stop: `ENCRYPTION_KEY` isn't the data's key. Then run `bun run migrate:encryption --apply`, and run it again until it prints `No values left in the old format`. Set `ENCRYPTION_REQUIRE_V2=1`, restart the backend, and check that the startup log says old-format values are refused and preflight's Encrypted BVNs line is PASS. **This is the point of no return for the backend** (§8).
+4. [ ] **`migrate:encryption`.** Run `bun run migrate:encryption` (dry run). If it lists unreadable values, stop: `ENCRYPTION_KEY` isn't the data's key. Then run `bun run migrate:encryption --apply`, and run it again until it prints `No values left in the old format`. Since batch 9 it also encrypts authenticator-app (TOTP) secrets, which were stored in plain text; that last line covers BVNs and TOTP secrets together, and preflight's TOTP secrets line must be PASS too. Set `ENCRYPTION_REQUIRE_V2=1`, restart the backend, and check that the startup log says old-format values are refused and preflight's Encrypted BVNs line is PASS. **This is the point of no return for the backend** (§8).
 5. [ ] **CSP rollout.** Deploy web and admin with `CSP_REPORT_ONLY=1` for the first days, and watch their `/api/csp-report` log lines (`CSP report-only: <directive> <blocked> on <page>`). Cover sign-in, the dashboard, pay pages and an embedded checkout. When it's quiet, unset `CSP_REPORT_ONLY` and redeploy both. Violations then log as `CSP blocked: …`; keep watching for a few days.
 6. [ ] **Alerts.**
    - Backend `Rate limits can't reach MongoDB: requests are NOT being limited until it's back.` Limits fail open while the store is down. The session log calls it "rate limit store unavailable", but that's not the actual text. Recovery logs `Rate limits are counting again: MongoDB is back.`
@@ -153,6 +167,9 @@ The dry runs are read-only: the scripts connect with Mongoose's autoIndex and au
 - **Every web user signs in again**, once, when the backend goes live. Web sessions now end after 12 hours idle (still to confirm with the product owner, batch 3), and signing out ends them on the server. Staff sign in again too if `STAFF_JWT_SECRET` is new.
 - **Transaction PIN.** The first time someone sends, approves, moves savings or changes a security setting, they choose a 4-digit PIN (their password, then the PIN twice), and the action carries on. Anyone without a password (some email-code sign-ups, and anyone whose sign-up password the H1 fix removed) gets `PASSWORD_NOT_SET` and must use "Forgot password" first. Easy PINs (1234, 1111, 2580, years) are refused. Five wrong PINs in a row lock it for 30 minutes; 15 wrong in a day lock it until it's reset, and the user is emailed.
 - **Mobile: update the app.** Old versions can't send or approve money.
+- **Two-step sign-in recovery codes.** Anyone using an authenticator app gets 10 one-time recovery codes the next time they turn it on, or from Security › Get new codes. Tell existing authenticator users to make theirs: until they do, a lost phone is still a support case.
+- **Statements.** Transactions › Download statement (web) and an account's Statement (mobile): PDF or CSV for up to 366 days, without opening or closing balances.
+- **Suspended or closed businesses** now see a banner and read-only screens, or a "closed" page, instead of raw errors.
 - Bulk transfers have a review step, and batch approval decides only the rows waiting for you. The approve button names the count and total ("Approve 3 · ₦45,000"), and if the batch changes before the PIN is entered, nothing is approved and the screen refreshes.
 - Automatic invoice reminders stop 30 days after the due date, so an invoice already further overdue gets no more when the new backend starts.
 
@@ -177,6 +194,8 @@ Only with the product owner's go-ahead. It's the first real money out (IMPLEMENT
 | Web and admin | Only together with the backend. The old web on the new backend can't set a PIN, so nobody could send money. |
 | Backend code | Yes, until **the first v2 BVN is written**. That's `migrate:encryption --apply`, or anyone saving a BVN on the new backend. Older code can't read v2 values, so it fails on approval and provisioning. Check with `db.businesses.countDocuments({ "people.bvnEncrypted": /^v2:/ })`: while it's 0, a rollback is safe. |
 | `ENCRYPTION_REQUIRE_V2=1` | Yes. Unset it and restart. |
+| TOTP secrets and recovery codes | Older code can't read an encrypted TOTP secret, and the new backend writes one for anyone who turns on an authenticator app (and `migrate:encryption --apply` writes them all). After a rollback those people can't finish signing in until 2FA is reset for them. Check with `db.users.countDocuments({ "twoFactor.totpSecret": /^v2:/ })` and the same on `db.staff`. Recovery codes are ignored by older code. |
+| `EMAIL_PROVIDER`, `STORAGE_PROVIDER` | Older code ignores them: email falls back to console (refused in production) and files to `UPLOAD_DIR`. Files written to the bucket aren't on local disk, so roll back storage only after syncing the bucket back. |
 | Index changes | Harmless to older code. If you roll back, recreate the dropped ones for speed: `db.transfers.createIndex({ batch: 1 })` and `db.transferbatches.createIndex({ business: 1 })`. |
 | `migrate:kyb --apply`, `migrate:staff --apply` | No. The deleted documents, files, staff-only users and their sessions come back only from the backup. |
 | PINs, web sessions, rate-limit counters | Older code ignores them. Leave them in place. |
@@ -188,6 +207,9 @@ Only with the product owner's go-ahead. It's the first real money out (IMPLEMENT
 
 ## 9. Known gaps
 
-- **One instance only** until the per-process pieces listed in the batch 5 session log become shared.
+- **One instance only** until the per-process pieces listed in the batch 5 session log become shared. Batch 9 adds one: statement PDFs render at most two at a time, queued in the process.
+- **Email during a Resend outage.** Each email tries 4 times with backoff; an awaited send (inviting someone, sending an invoice) can take about 45 seconds before it fails. Sign-in code emails go out in the background.
+- **Staff sessions don't carry the password stamp** that business sessions do (`docs/briefs/two-factor-recovery.md`): a staff session that signs in within milliseconds of a password change can outlive it.
+- **Statements have no opening or closing balances** (`docs/briefs/statements.md`): nothing stores a past balance.
 - **The webhook secret and signature scheme** are still to come from Liquifia, and so are its answers on payouts and inbound transfers.
 - The batch 4 list asked to check a `Notification.branch` index. No such index exists, and none is needed (ops re-audit), so it isn't in §5.

@@ -100,3 +100,20 @@ Existing endpoints, extended:
 - **Banned**: every business route answers `403 BUSINESS_BANNED`. Show a closed screen (support contact) instead of the dashboard; keep sign-out and the business switcher for members of other businesses.
 - New user notifications: `business.suspended`, `business.reinstated`, `business.banned` (push on the `account` channel, link `/dashboard`).
 - The public invoice page already handles 404 (a restricted business's invoices return `INVOICE_NOT_FOUND`).
+
+## Batch 9: what members see (2026-10-25)
+
+The backend needed no change. `GET /api/business` returns `restriction: { status, since }`, even for a banned business. `GET /api/memberships` gives each business's `restriction` as a bare string (`active`, `suspended` or `banned`). `backend/tests/restrictionClients.test.ts` pins both.
+
+- **Web, suspended.**
+  - A banner under the header on every dashboard page: "<Business> is suspended. You can view your account, but you can't send money or make changes. Contact <support email>." A "Suspended" badge replaces "Verified".
+  - The main write actions are dimmed, with that reason as a tooltip (`components/shell/write-gate.tsx`): send, bulk, invoices, payment links, savings, payout lists, beneficiaries, team and branches.
+  - Anything else that reaches the server shows the mapped `BUSINESS_SUSPENDED` message.
+- **Web, banned.**
+  - The dashboard and onboarding layouts, and any `BUSINESS_BANNED` read (`lib/data.ts`), go to `/closed`. It offers the support contact, the member's other businesses with their states, and sign out.
+  - It re-checks when the tab comes back into view, so a lifted ban returns to the dashboard.
+- **Mobile.**
+  - Suspended: Home shows a banner (tapping it emails support), and branch cards drop Send. Other write screens show the mapped error.
+  - Banned: a full-screen closed overlay sits over the tabs, below the update and lock screens. It offers support, other businesses and sign out.
+  - The business switcher tags Suspended or Closed. The overview refetches when a request is refused with either code, when the unread count rises, and on returning to the foreground while restricted.
+- The email sent when a suspension or ban is lifted now reads "We've finished our review of <Business> and restored full access."

@@ -174,3 +174,8 @@ Running a list can also return everything `POST /transfers/bulk` does: `INSUFFIC
   - Line 1 is skipped as a header only if it mentions "account" and its first cell has letters and no digits.
 - **Mobile now has payout lists:** index, create and edit (picker and new account), pay with the review and PIN, delete, and a read-only view. Saving a bulk transfer as a list is web only. They open from More › Payout lists (approved businesses, with `accounts.view`) and from a row on the Bulk transfer screen. Screens: `mobile/src/app/(app)/payments/lists/`, draft state in `src/lib/payout-list-draft.ts`.
   - Known gap: the phone builds a run's key from beneficiary ids (`runKeyBody` in `payout-list-draft.ts`), while the server hashes accounts. Suppose a run's answer is lost, and before the retry the list is edited so a row points at a different saved beneficiary for the same account. The retry then gets a new key and can pay again. It takes a list edit in that window; keying by account, like the web, would close it.
+
+## Batch 9 changes (2026-10-25)
+
+- **List items carry `bankUuid`** on the item's beneficiary (`GET /payout-lists/:id` and the create/update answers).
+- **Web and mobile build a list run's Idempotency-Key from accounts:** the list, the branch, and per row `accountNumber`, `bankUuid`, `amountKobo` and `narration`, as the server hashes them. This closes the batch 8 gap: editing a list so a row points at another saved beneficiary for the same account no longer changes the key.

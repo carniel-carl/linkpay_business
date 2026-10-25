@@ -300,3 +300,7 @@ A link can show up to 4 pictures, for example a product photo or an e-book's cov
 **Web relays and embeds**
 - Public file relays (link pictures, logos, invoice PDFs) forward the visitor's IP from `CLIENT_IP_HEADER`.
 - The proxy's `frame-ancestors` lookup caches only successful answers. On a failure it serves the last good value, or `'self'` uncached.
+
+## Batch 9 changes (2026-10-25)
+
+- **Caching of public pictures and logos.** Link pictures are `public, max-age=604800, s-maxage=300` (a week in browsers, 5 minutes on a CDN, which then revalidates with the ETag). Public logos (pay pages, public invoices) are `public, max-age=86400, s-maxage=300`. Every refusal (taken down, suspended, unknown, removed) is `no-store`, so a take-down stops a CDN serving them within 5 minutes and a restore shows them at once. The signed-in `GET /branding/logo` is `private`.
