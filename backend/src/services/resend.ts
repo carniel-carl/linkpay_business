@@ -49,6 +49,11 @@ export type ResendOptions = {
   baseUrl?: string;
   /** Each request gives up after this long. */
   timeoutMs?: number;
+  /**
+   * Every try of one message, and every wait between them, ends within this long of the first try: a try is cut
+   * short to fit, and a wait that would reach it isn't begun.
+   */
+  deadlineMs?: number;
   /** Tries in all, the first included. */
   attempts?: number;
   /** The first wait between tries; it doubles each time. A longer Retry-After wins. */
@@ -65,6 +70,7 @@ export function createResendProvider({
   replyTo,
   baseUrl = RESEND_API_URL,
   timeoutMs = 10_000,
+  deadlineMs = 20_000,
   attempts = 4,
   backoffMs = 500,
   maxWaitMs = 10_000,
@@ -89,6 +95,8 @@ export function createResendProvider({
       // One key for every try of this message: if a try that timed out did reach Resend, the next one can't send it twice.
       const idempotencyKey = crypto.randomUUID();
       const to = `an email to a ${recipientDomain(message.to)} address`;
+      // An awaited send (an invite, an invoice) holds its request this long at most, even while Resend is down.
+      const deadline = Date.now() + deadlineMs;
 
       for (let attempt = 1; ; attempt++) {
         let failure: string;
@@ -99,7 +107,7 @@ export function createResendProvider({
             method: "POST",
             headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
             body,
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: AbortSignal.timeout(Math.max(1, Math.min(timeoutMs, deadline - Date.now()))),
           });
           if (res.ok) {
             await res.arrayBuffer().catch(() => {});
@@ -113,9 +121,16 @@ export function createResendProvider({
           failure = `network error (${networkErrorName(err)})`;
         }
         const wait = Math.max(asked ?? 0, backoffMs * 2 ** (attempt - 1));
-        if (!again || attempt >= attempts || wait > maxWaitMs) {
-          const longWait = again && attempt < attempts ? `, and Resend asked to wait ${Math.ceil(wait / 1000)} s` : "";
-          throw new Error(`Resend didn't send ${to}: ${failure}${longWait} (${attempt} ${attempt === 1 ? "try" : "tries"})`);
+        // A wait that ends at the deadline leaves no time for the try after it.
+        const outOfTime = Date.now() + wait >= deadline;
+        if (!again || attempt >= attempts || wait > maxWaitMs || outOfTime) {
+          let why = "";
+          if (again && attempt < attempts) {
+            why = wait > maxWaitMs
+              ? `, and Resend asked to wait ${Math.ceil(wait / 1000)} s`
+              : `, and there's no time for another try (each email gets ${+(deadlineMs / 1000).toFixed(1)} s)`;
+          }
+          throw new Error(`Resend didn't send ${to}: ${failure}${why} (${attempt} ${attempt === 1 ? "try" : "tries"})`);
         }
         console.warn(`Resend: ${failure} for ${to}; trying again in ${wait} ms (try ${attempt + 1} of ${attempts})`);
         await sleep(wait);

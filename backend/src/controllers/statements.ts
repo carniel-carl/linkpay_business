@@ -26,7 +26,8 @@ const query = z.object({
 /**
  * One branch account's statement as a file. `?branch=<id>&from=YYYY-MM-DD&to=YYYY-MM-DD&format=pdf|csv`.
  * Same access as GET /api/transactions (accounts.view, the member's branches); a read, so suspended
- * businesses can still download it. Contract: docs/briefs/statements.md.
+ * businesses can still download it. Balances come from the daily snapshots; a period ending today also reads
+ * the live balance from Liquifia (one call, 5 s at most). Contract: docs/briefs/statements.md.
  */
 export const downloadStatement: RequestHandler = async (req, res) => {
   const q = query.parse(req.query);

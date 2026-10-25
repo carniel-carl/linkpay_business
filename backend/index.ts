@@ -4,6 +4,7 @@ import { checkIndexes, connectDB, disconnectDB, logIndexReport } from "./src/con
 import { env } from "./src/config/env";
 import { RISK_CHECK_INTERVAL_MS } from "./src/config/compliance";
 import { SAFELOCK_RELEASE_INTERVAL_MS } from "./src/config/safelock";
+import { startBalanceSnapshots } from "./src/services/balanceSnapshots";
 import { usingConsoleEmail } from "./src/services/email";
 import { startInvoiceReminders } from "./src/services/invoices";
 import { isLiveMode } from "./src/services/liquifia/client";
@@ -51,6 +52,9 @@ const server = app.listen(env.port, () => {
 const stopSync = startTransactionSync(env.liquifia.syncIntervalMs);
 // Sends approved transfers Liquifia hasn't accepted yet and follows up payouts until they settle.
 const stopTransfers = startTransferProcessor(env.liquifia.syncIntervalMs);
+// Records each account's balance just after 00:00 WAT (one Liquifia call per account a day), for statements'
+// opening and closing balances. Off with the sync (LIQUIFIA_SYNC_INTERVAL_MS=0).
+const stopBalanceSnapshots = startBalanceSnapshots(env.liquifia.syncIntervalMs);
 // Emails invoice reminders (3 days before, on the day, 3 and 10 days after the due date). Each goes once.
 const stopReminders = startInvoiceReminders(15 * 60 * 1000);
 // Automatic risk rules over recent payments and transfers; they raise flags for the compliance team.
@@ -65,6 +69,7 @@ void settleStaleMovements().catch((err) => console.error("Couldn't settle pocket
 async function shutdown() {
   stopSync();
   stopTransfers();
+  stopBalanceSnapshots();
   stopReminders();
   stopRiskChecks();
   stopSafelockReleases();

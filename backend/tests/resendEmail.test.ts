@@ -21,8 +21,11 @@ const MESSAGE: EmailMessage = {
   attachments: [{ filename: "INV-0001.pdf", content: PDF, contentType: "application/pdf" }],
 };
 
-type Seen = { method: string; path: string; headers: Record<string, string>; body: any };
+type Seen = { method: string; path: string; headers: Record<string, string>; body: any; at: number };
+type Answer = () => Response | Promise<Response>;
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) => () => Response.json(body, { status, headers });
+/** `answer`, given after `ms`. */
+const slowly = (ms: number, answer: Answer): Answer => async () => (await Bun.sleep(ms), answer());
 const ok = json(200, { id: "4ef9a417-02e9-4d39-ad75-9611e0fcc33c" });
 const resendError = (status: number, name: string, headers: Record<string, string> = {}) =>
   // Resend's messages can repeat what was sent; only `name` may reach a log.
@@ -36,11 +39,12 @@ afterAll(() => {
 });
 
 /** A stand-in Resend: request n gets answers[n] (the last answer repeats). `delayMs` holds the first answer back. */
-function fakeResend(answers: (() => Response)[] = [ok], { delayMs = 0 } = {}) {
+function fakeResend(answers: Answer[] = [ok], { delayMs = 0 } = {}) {
   const seen: Seen[] = [];
   const server = serveStandIn({
     async fetch(req) {
-      seen.push({ method: req.method, path: new URL(req.url).pathname, headers: Object.fromEntries(req.headers), body: await req.json().catch(() => null) });
+      const at = Date.now();
+      seen.push({ method: req.method, path: new URL(req.url).pathname, headers: Object.fromEntries(req.headers), body: await req.json().catch(() => null), at });
       if (delayMs && seen.length === 1) await Bun.sleep(delayMs);
       return answers[Math.min(seen.length, answers.length) - 1]!();
     },
@@ -207,6 +211,55 @@ describe("giving up", () => {
       expect([text, resend.seen.length, p.waits]).toEqual([text, 1, []]);
       expect(error?.message).toEndWith(text);
     }
+  });
+
+  test("each email gets 20 s by default: a Retry-After that would run past it isn't waited for", async () => {
+    // Every answer asks for 8 s, within maxWaitMs. Two waits fit in 20 s; a third would end at 24 s.
+    const resend = fakeResend([resendError(429, "rate_limit_exceeded", { "Retry-After": "8" })]);
+    let clock = Date.now();
+    // Waits move a stand-in clock instead of passing; Date.now() reads it while this send runs.
+    const now = spyOn(Date, "now").mockImplementation(() => clock);
+    const p = provider(resend.url, { sleep: async (ms) => void (p.waits.push(ms), (clock += ms)) });
+    const { error } = await captured(() => p.send(MESSAGE)).finally(() => now.mockRestore());
+    expect(p.waits).toEqual([8000, 8000]);
+    expect(resend.seen).toHaveLength(3);
+    expect(error?.message).toBe(
+      "Resend didn't send an email to a business.ng address: 429 rate_limit_exceeded, and there's no time for another try (each email gets 20 s) (3 tries)",
+    );
+  });
+
+  test("an outage that answers 503 slowly gives up within the deadline: no try or wait starts that would run past it", async () => {
+    // Each answer takes 400 ms. Tries at about 0 and 700 ms; the wait after the second would end at about 1.7 s.
+    const resend = fakeResend([slowly(400, resendError(503, "internal_server_error"))]);
+    const waits: number[] = [];
+    const p = provider(resend.url, { attempts: 10, backoffMs: 300, deadlineMs: 1500, sleep: (ms) => (waits.push(ms), Bun.sleep(ms)) });
+    const started = Date.now();
+    const { error, lines } = await captured(() => p.send(MESSAGE));
+    const took = Date.now() - started;
+
+    expect(took).toBeLessThan(1500);
+    expect(resend.seen).toHaveLength(2);
+    for (const r of resend.seen) expect(r.at - started).toBeLessThan(1500);
+    expect(new Set(resend.seen.map((r) => r.headers["idempotency-key"])).size).toBe(1);
+    expect(waits).toEqual([300]);
+    expect(lines).toHaveLength(1);
+    expect(error?.message).toBe(
+      "Resend didn't send an email to a business.ng address: 503 internal_server_error, and there's no time for another try (each email gets 1.5 s) (2 tries)",
+    );
+  });
+
+  test("a try is cut short at the deadline, even inside its own timeout", async () => {
+    // Resend never answers in time; the 10 s per-try timeout would hold the first try far past the 600 ms deadline.
+    const resend = fakeResend([slowly(3000, ok)]);
+    const p = provider(resend.url, { deadlineMs: 600, sleep: Bun.sleep });
+    const started = Date.now();
+    const { error } = await captured(() => p.send(MESSAGE));
+    const took = Date.now() - started;
+
+    expect(took).toBeGreaterThanOrEqual(550);
+    expect(took).toBeLessThan(1000);
+    expect(resend.seen).toHaveLength(1);
+    expect(error?.message).toMatch(/^Resend didn't send an email to a business\.ng address: network error \((TimeoutError|AbortError)[^)]*\), and there's no time for another try \(each email gets 0\.6 s\) \(1 try\)$/);
   });
 
   test("a failed code email on a public route is still only logged: the same 200, as with any provider outage", async () => {

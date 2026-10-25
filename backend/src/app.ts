@@ -71,6 +71,13 @@ function assertNarrowSubnet(entry: string) {
 }
 
 app.use(cors());
+// API answers are per person and often secret (tokens, account numbers, statements): nothing may store them. iOS
+// otherwise keeps responses without a Cache-Control in its on-disk URL cache, refresh tokens included. Routes that
+// serve public files (link pictures, logos) set their own, which replaces this.
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 // Before express.json(): webhook signatures need the raw body.
 app.use("/api/webhooks", webhooksRouter);
 app.use(express.json());

@@ -3,7 +3,7 @@ import { SignJWT, jwtVerify } from "jose";
 import type { Types } from "mongoose";
 import { env } from "../config/env";
 import { staffPermissionsOf } from "../config/staffPermissions";
-import type { StaffDocument } from "../models/Staff";
+import { StaffModel, type StaffDocument } from "../models/Staff";
 import { StaffSessionModel } from "../models/StaffSession";
 import { HttpError } from "../utils/HttpError";
 import { passwordStamp } from "./tokens";
@@ -82,12 +82,17 @@ export function serializeStaff(staff: StaffDocument) {
   };
 }
 
-/** Opens a session after both sign-in steps passed. */
+/**
+ * Opens a session after both sign-in steps passed. `staff` is the staff member as the second step loaded them: the
+ * session carries that load's passwordChangedAt, so a password change that lands while the sign-in is still running
+ * ends it too.
+ */
 export async function startStaffSession(req: Request, staff: StaffDocument) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + STAFF_SESSION_MAX_AGE_MS);
   const session = await StaffSessionModel.create({
     staff: staff._id,
+    passwordChangedAt: staff.passwordChangedAt ?? undefined,
     lastUsedAt: now,
     expiresAt,
     ip: req.ip,
@@ -103,33 +108,69 @@ export async function startStaffSession(req: Request, staff: StaffDocument) {
   };
 }
 
-/** Checks the session behind a token and extends its idle timeout. Throws STAFF_SESSION_ENDED when it's over. */
+type PasswordStamp = { passwordChangedAt?: Date | null };
+
+/**
+ * Whether a session signed in before the staff member's latest password change. Such a session is over even if
+ * nothing revoked it: a change revokes every other session, but a sign-in already past its checks can open one a
+ * moment later, and this is what stops it. A session from before stamps has none and counts as 0, so it works until
+ * the password next changes, as business sessions do (services/sessions.ts).
+ */
+const predatesPassword = (session: PasswordStamp, staff: PasswordStamp | null) =>
+  passwordStamp(session.passwordChangedAt) < passwordStamp(staff?.passwordChangedAt);
+
+const sessionEnded = () => new HttpError(401, "Your staff session has ended. Sign in again.", "STAFF_SESSION_ENDED");
+
+/**
+ * Checks the session behind a token and extends its idle timeout. Throws STAFF_SESSION_ENDED when it's over,
+ * including when it signed in before the staff member's latest password change, or the staff member is gone.
+ * Returns their status and role: requireStaff re-reads them on every request, and the password stamp comes with
+ * that same read.
+ */
 export async function touchStaffSession(sessionId: string, staffId: string) {
-  const session = await StaffSessionModel.findOne({ _id: sessionId, staff: staffId });
+  const [session, staff] = await Promise.all([
+    StaffSessionModel.findOne({ _id: sessionId, staff: staffId }).select("revokedAt expiresAt lastUsedAt passwordChangedAt").lean(),
+    StaffModel.findById(staffId).select("status role passwordChangedAt").lean(),
+  ]);
   const now = Date.now();
   if (
     !session ||
     session.revokedAt ||
     session.expiresAt.getTime() <= now ||
-    now - session.lastUsedAt!.getTime() > STAFF_SESSION_IDLE_MS
+    now - session.lastUsedAt!.getTime() > STAFF_SESSION_IDLE_MS ||
+    !staff ||
+    predatesPassword(session, staff)
   ) {
-    throw new HttpError(401, "Your staff session has ended. Sign in again.", "STAFF_SESSION_ENDED");
+    throw sessionEnded();
   }
   if (now - session.lastUsedAt!.getTime() >= TOUCH_INTERVAL_MS) {
     await StaffSessionModel.updateOne({ _id: session._id }, { lastUsedAt: new Date(now) });
   }
+  return { status: staff.status, role: staff.role };
 }
 
 /** Whether the session is still usable, without counting as activity (for long-lived streams). */
 export async function isStaffSessionLive(sessionId: string, staffId: string) {
-  const session = await StaffSessionModel.findOne({ _id: sessionId, staff: staffId }).select("revokedAt expiresAt lastUsedAt").lean();
+  const [session, staff] = await Promise.all([
+    StaffSessionModel.findOne({ _id: sessionId, staff: staffId }).select("revokedAt expiresAt lastUsedAt passwordChangedAt").lean(),
+    StaffModel.findById(staffId).select("passwordChangedAt").lean(),
+  ]);
   const now = Date.now();
   return (
     !!session &&
     !session.revokedAt &&
     session.expiresAt.getTime() > now &&
-    now - (session.lastUsedAt?.getTime() ?? 0) <= STAFF_SESSION_IDLE_MS
+    now - (session.lastUsedAt?.getTime() ?? 0) <= STAFF_SESSION_IDLE_MS &&
+    !predatesPassword(session, staff)
   );
+}
+
+/**
+ * A password change made from this session: it moves on to the new password (call before saving the staff member's
+ * new passwordChangedAt, so it never looks older than it) while revokeStaffSessions ends every other one.
+ */
+export async function carryStaffSessionOver(sessionId: string | undefined, passwordChangedAt: Date) {
+  if (sessionId) await StaffSessionModel.updateOne({ _id: sessionId }, { passwordChangedAt });
 }
 
 /** Ends a staff member's open sessions, optionally keeping one (the one making the request). */

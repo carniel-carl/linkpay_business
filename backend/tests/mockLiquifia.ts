@@ -62,6 +62,13 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
     inboundOrder: "newest_first" as "newest_first" | "oldest_first",
     /** Inbound-transfer pages are answered this long after they're read, so a test can change the list mid-sync. */
     inboundDelayMs: 0,
+    /** Virtual account ids whose balance answers 503, as one account's lookup might fail at the bank. */
+    failBalancesFor: new Set<string>(),
+    /** Balance lookups are answered this long after they're read, so a test can see how many run at once. */
+    balanceDelayMs: 0,
+    /** Balance lookups being answered right now, and the most there have been at once. */
+    balancesInFlight: 0,
+    maxBalancesInFlight: 0,
     payouts: [] as Payout[],
     /** Account holders for name enquiry, keyed by account number. Unknown numbers resolve to "Test Recipient" unless they start with 000. */
     bankAccounts: new Map<string, string>(),
@@ -172,6 +179,15 @@ export function startMockLiquifia(opts: { autoSettlePayoutsMs?: number } = {}) {
       if (req.method === "GET" && balance) {
         const va = accounts.find((a) => a.id === balance[1]);
         if (!va) return error(404, "NOT_FOUND", "Virtual account not found");
+        state.balancesInFlight++;
+        state.maxBalancesInFlight = Math.max(state.maxBalancesInFlight, state.balancesInFlight);
+        try {
+          if (state.balanceDelayMs > 0) await Bun.sleep(state.balanceDelayMs);
+        } finally {
+          state.balancesInFlight--;
+        }
+        if (state.failBalancesFor.has(va.id)) return error(503, "UNAVAILABLE", "Try again later");
+        // Read after the delay, so a test can move money while a lookup is in flight.
         return json({ virtual_account_id: va.id, account_number: va.account_number, balance: balances.get(va.id) ?? 0 });
       }
 
