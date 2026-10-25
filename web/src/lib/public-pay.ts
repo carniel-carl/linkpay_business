@@ -1,5 +1,5 @@
 import "server-only"
-import { clientIp } from "@/lib/client-ip"
+import { clientIp, forwardIpHeaders } from "@/lib/client-ip"
 
 // The payer's side of payment links (no sign-in). Route handlers and the pay page call the backend's
 // public routes with the payer's address, so its rate limits count each payer, not this server.
@@ -10,11 +10,11 @@ export const forwardedFor = clientIp
 
 /** Calls a public backend route and hands back its status and JSON body unchanged. */
 export async function publicApi(path: string, init: { method?: "GET" | "POST"; json?: unknown; clientIp?: string } = {}) {
-  const headers: Record<string, string> = { Accept: "application/json" }
+  const url = `${API_URL}${path}`
+  const headers: Record<string, string> = { Accept: "application/json", ...forwardIpHeaders(init.clientIp, url) }
   if (init.json !== undefined) headers["Content-Type"] = "application/json"
-  if (init.clientIp) headers["X-Forwarded-For"] = init.clientIp
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await fetch(url, {
       method: init.method ?? "GET",
       headers,
       body: init.json !== undefined ? JSON.stringify(init.json) : undefined,

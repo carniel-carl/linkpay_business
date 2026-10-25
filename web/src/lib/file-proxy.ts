@@ -1,7 +1,7 @@
 import "server-only"
 import { headers } from "next/headers"
 import { apiFile } from "@/lib/api/client"
-import { clientIp } from "@/lib/client-ip"
+import { clientIp, forwardIpHeaders } from "@/lib/client-ip"
 
 /** Streams a file from the backend (a KYB document, an invoice PDF), passing the session token along. */
 export async function proxyFile(path: string, download: boolean) {
@@ -16,13 +16,11 @@ export async function proxyFile(path: string, download: boolean) {
  * this server, every logo, picture and PDF would share one limit, and one busy page could use it up for everyone.
  */
 export async function proxyPublicFile(path: string, download: boolean, cacheControl = "no-store") {
+  const url = `${process.env.API_URL ?? "http://localhost:4000"}${path}`
   const ip = clientIp(await headers())
   let upstream: Response
   try {
-    upstream = await fetch(`${process.env.API_URL ?? "http://localhost:4000"}${path}`, {
-      cache: "no-store",
-      headers: ip ? { "X-Forwarded-For": ip } : undefined,
-    })
+    upstream = await fetch(url, { cache: "no-store", headers: forwardIpHeaders(ip, url) })
   } catch {
     return Response.json({ error: "File not available" }, { status: 503 })
   }

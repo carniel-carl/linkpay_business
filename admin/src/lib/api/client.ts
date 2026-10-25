@@ -1,7 +1,7 @@
 import "server-only"
 import { headers as requestHeaders } from "next/headers"
 import { unstable_rethrow } from "next/navigation"
-import { clientIp } from "@/lib/client-ip"
+import { clientIp, forwardIpHeaders } from "@/lib/client-ip"
 import { getSessionToken } from "@/lib/session"
 import { ApiError } from "./errors"
 
@@ -18,13 +18,15 @@ type RequestOptions = {
 
 const authHeader = (token: string | null): Record<string, string> => (token ? { Authorization: `Bearer ${token}` } : {})
 
-/** The staff member's address and browser, so the API's sign-in limits count each person rather than this server. */
-async function visitorHeaders(): Promise<Record<string, string>> {
+/**
+ * The staff member's address and browser for a call to `url`, so the API's sign-in limits count each person rather
+ * than this server.
+ */
+async function visitorHeaders(url: string): Promise<Record<string, string>> {
   try {
     const incoming = await requestHeaders()
-    const ip = clientIp(incoming)
     const userAgent = incoming.get("user-agent")
-    return { ...(ip && { "X-Forwarded-For": ip }), ...(userAgent && { "User-Agent": userAgent }) }
+    return { ...forwardIpHeaders(clientIp(incoming), url), ...(userAgent && { "User-Agent": userAgent }) }
   } catch (err) {
     // Next's own signals (such as prerendering bailing out) go on up; outside a request there's nothing to forward.
     unstable_rethrow(err)
@@ -35,12 +37,13 @@ async function visitorHeaders(): Promise<Record<string, string>> {
 /** Server-side fetch to the backend. Throws ApiError for non-2xx responses. */
 export async function api<T>(path: string, { method = "GET", json, auth = true }: RequestOptions = {}) {
   const token = auth ? await getSessionToken() : null
-  const headers: Record<string, string> = { Accept: "application/json", ...(await visitorHeaders()), ...authHeader(token) }
+  const url = `${API_URL}${path}`
+  const headers: Record<string, string> = { Accept: "application/json", ...(await visitorHeaders(url)), ...authHeader(token) }
   if (json !== undefined) headers["Content-Type"] = "application/json"
 
   let res: Response
   try {
-    res = await fetch(`${API_URL}${path}`, {
+    res = await fetch(url, {
       method,
       headers,
       body: json !== undefined ? JSON.stringify(json) : undefined,

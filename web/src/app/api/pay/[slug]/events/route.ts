@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server"
+import { forwardIpHeaders } from "@/lib/client-ip"
 import { forwardedFor, payJson } from "@/lib/public-pay"
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000"
@@ -10,11 +11,11 @@ const API_URL = process.env.API_URL ?? "http://localhost:4000"
  */
 export async function GET(request: NextRequest, ctx: RouteContext<"/api/pay/[slug]/events">) {
   const { slug } = await ctx.params
-  const clientIp = forwardedFor(request.headers)
+  const url = `${API_URL}/api/public/pay/${encodeURIComponent(slug)}/events`
   let upstream: Response
   try {
-    upstream = await fetch(`${API_URL}/api/public/pay/${encodeURIComponent(slug)}/events`, {
-      headers: { Accept: "text/event-stream", ...(clientIp && { "X-Forwarded-For": clientIp }) },
+    upstream = await fetch(url, {
+      headers: { Accept: "text/event-stream", ...forwardIpHeaders(forwardedFor(request.headers), url) },
       cache: "no-store",
       signal: request.signal,
     })
