@@ -31,6 +31,39 @@ Last updated: 2026-10-25
 
 ---
 
+### Hosting: Render (API), Vercel (web and admin), Cloudflare R2 (files)
+
+Chosen for the first deploy (2026-10-25).
+
+- **Where Render deploys from.**
+  - PRs and merges happen in `carniel-carl/linkpay_business`.
+  - Render deploys from a private mirror, `Temitayo-spec/linkpay-business` (git remote `deploy`).
+  - After a merge, publish it with `git push deploy main`, then deploy from Render's dashboard. Auto-deploy is off, so nothing goes out by itself.
+- **Render web service.**
+  - Docker, Frankfurt, Starter (512 MB), one instance, no autoscaling.
+  - Docker context `backend`, Dockerfile `backend/Dockerfile` (Bun 1.4.4, runs as the `bun` user).
+  - Health check path `/health`. Render sets `PORT=10000`, which the API reads.
+  - Watch memory in Metrics: a statement PDF can take about 200 MB, and two can render at once.
+  - The preflight, migration and staff scripts are in the image: run them from the service's Shell (`bun run preflight`, `bun run migrate:kyb`, …).
+  - When you add or change environment variables, choose **Save only** until you mean to deploy. "Save and deploy" starts the API against production.
+- **Vercel (web and admin).**
+  - Set `API_URL` to the API's public URL.
+  - Set `CLIENT_IP_HEADER=x-real-ip`; Vercel sets it to the visitor's address.
+  - Set `CLIENT_IP_SECRET` to the same value as the API's. Vercel has no fixed outgoing IPs to list in `TRUST_PROXY`, so the web servers pass the visitor's IP in `X-LinkPay-Client-IP` with the secret in `X-LinkPay-Client-Secret`. The API believes the IP only when the secret matches.
+- **`TRUST_PROXY` on Render.** The API sits behind Render's load balancer, which adds the caller to `X-Forwarded-For`. For the mobile app's direct calls, `TRUST_PROXY` must name that balancer's address as the API sees it. Confirm it after the first deploy:
+  1. Sign in once from a known IP.
+  2. Look at the newest `ratelimithits` keys in Atlas: they should hold your IP, not a `10.x` address.
+  3. If they show a private address, set `TRUST_PROXY` to that range (for example `10.0.0.0/8`) and redeploy.
+- **R2.**
+  - A private bucket with public access off. Create an API token scoped to the bucket with Object Read & Write.
+  - Settings: `STORAGE_PROVIDER=s3`, `S3_REGION=auto`, `S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com`, and the token's key id and secret.
+  - Before the API goes live, copy the files the Atlas data points to (the `backend/uploads` folder of wherever the backend ran against Atlas) into the bucket under the same keys, with `S3_PREFIX` in front if you set one.
+- **Atlas.**
+  - In Network Access, allow Render's Frankfurt outbound IPs (the service's Connect › Outbound tab).
+  - Allow your own IP too, for running preflight and the migrations from your machine.
+
+---
+
 ## 2. Environment
 
 Values are on only when exactly `1` (`ENCRYPTION_REQUIRE_V2`, `LIQUIFIA_ALLOW_LIVE`, `CSP_REPORT_ONLY`). Numbers are plain digits, and the backend refuses to start on anything else (`60_000`, `30d`) or on a number out of range. Generate secrets with `openssl rand -hex 32`. `backend/.env.example` and `mobile/.env.example` list every variable with a placeholder (copy them to `backend/.env` and `mobile/.env.local` for local work); the tables below say what production needs.
@@ -54,7 +87,8 @@ Values are on only when exactly `1` (`ENCRYPTION_REQUIRE_V2`, `LIQUIFIA_ALLOW_LI
 | `LIQUIFIA_PUBLIC_KEY` | optional | Read into the config, but no code uses it. |
 | `LIQUIFIA_WEBHOOK_SECRET` | from Liquifia | Until it's set, `POST /api/webhooks/liquifia` answers 503: payments arrive through the sync and payout outcomes through the follow-up, both every minute. |
 | `LIQUIFIA_SYNC_INTERVAL_MS` | unset (`60000`) | `0`, or 1000 to 86400000. `0` turns off **both** the inbound sync and the payout sender and follow-up, so never `0` in production. |
-| `TRUST_PROXY` | the web and admin servers' addresses as the API sees them, plus any load balancer in front of the API, comma-separated | Never `true`, a hop count, or a `/0` range: the server refuses the first two, and all three let a caller choose their own IP. Unset means `loopback`. Web on a host without fixed outgoing IPs (e.g. Vercel) can't be listed yet. |
+| `TRUST_PROXY` | the web and admin servers' addresses as the API sees them, plus any load balancer in front of the API, comma-separated | Never `true`, a hop count, or a `/0` range: the server refuses the first two, and all three let a caller choose their own IP. Unset means `loopback`. On Render, name Render's load balancer (§1, Hosting) for the mobile app's direct calls. Web and admin on Vercel don't need listing: they use `CLIENT_IP_SECRET`. |
+| `CLIENT_IP_SECRET` | 32+ random characters (`openssl rand -hex 32`), **the same value on web and admin** | Lets web and admin pass the visitor's IP in `X-LinkPay-Client-IP`, believed only with this secret in `X-LinkPay-Client-Secret` from any address. That's how web on Vercel works without fixed IPs. It must differ from the other secrets, have no spaces, and isn't accepted if it's a repo value in production. Unset, those headers are ignored. Rotate it on all three at once: in between, the headers are ignored with warnings and visitors briefly share limits. Nothing breaks. |
 | `API_URL` | the API's public `https://` origin | Shown to businesses in payment-link embed code and its verify URL. |
 | `WEB_URL` | the web app's `https://` origin | Emailed links: invites, invoices, password resets, pay pages, `embed.js`. |
 | `ADMIN_APP_URL` | the admin console's `https://` origin, not `WEB_URL` | Staff invite links. |
@@ -87,6 +121,7 @@ Set these for `next build` as well as at runtime: `NEXT_PUBLIC_*` values are bui
 | --- | --- | --- | --- |
 | `API_URL` | both | the backend as **this server** reaches it | It can be a private address. The browser never calls the API. Not the same meaning as the backend's `API_URL`. |
 | `CLIENT_IP_HEADER` | both | the header your platform sets with the visitor's IP | `x-real-ip` (nginx, Vercel), `cf-connecting-ip` (Cloudflare). Unset, every visitor shares the server's rate limits (sign-in, pay pages, and public files: invoice PDFs, logos, link pictures), and production logs `CLIENT_IP_HEADER isn't set`. The check of which sites may embed a payment link is asked as the web server itself (remembered for 30 seconds per link) and as the visitor only when the server's own limit is spent. |
+| `CLIENT_IP_SECRET` | both | the API's `CLIENT_IP_SECRET` | Server-only, never `NEXT_PUBLIC_`, read at runtime. It's sent only to `API_URL`'s origin and needs `CLIENT_IP_HEADER` set. Unset in production logs `CLIENT_IP_SECRET isn't set`. |
 | `CSP_REPORT_ONLY` | both | `1` for the first days, then unset | See §5 step 5. |
 | `NEXT_PUBLIC_SUPPORT_EMAIL` | web | the real support address | Default `support@linkpay.ng` (placeholder, open question 7). |
 
@@ -155,7 +190,8 @@ The dry runs are read-only: the scripts connect with Mongoose's autoIndex and au
 6. [ ] **Alerts.**
    - Backend `Rate limits can't reach MongoDB: requests are NOT being limited until it's back.` Limits fail open while the store is down. The session log calls it "rate limit store unavailable", but that's not the actual text. Recovery logs `Rate limits are counting again: MongoDB is back.`
    - Backend `🚨 INDEX BUILD FAILED`, or `GET /health` with `"indexes": "failed"`.
-   - Web and admin `CLIENT_IP_HEADER isn't set`.
+   - Web and admin `CLIENT_IP_HEADER isn't set` and `CLIENT_IP_SECRET isn't set`.
+   - Backend `WARN: ignored X-LinkPay-Client-IP and X-LinkPay-Client-Secret`: the secrets don't match, or someone is trying to fake an address. To check the secret path works, sign in on the web from a known IP: the newest `ratelimithits` keys should hold that IP.
    - `transfer.stuck` in the admin bell: payouts in an unknown state, or not settled after a day.
 7. [ ] **Liquifia webhook**, once the secret arrives: set `LIQUIFIA_WEBHOOK_SECRET`, restart, and give Liquifia `https://<API host>/api/webhooks/liquifia`. Confirm the signature scheme first (§5 of IMPLEMENTATION.md, open question 1).
 8. [ ] **Balance snapshots.** The morning after the deploy, check that every active account has one for today: `db.balancesnapshots.countDocuments({ day: "<today YYYY-MM-DD>" })` against the count of active virtual accounts. The job makes one Liquifia balance call per account per day, retries a failing account every minute for the first 15 minutes and then hourly, and is off when `LIQUIFIA_SYNC_INTERVAL_MS=0`. The collection's unique `{ virtualAccount, day }` index builds at startup like the rest.
