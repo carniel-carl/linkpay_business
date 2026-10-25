@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { Button, TextButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { NairaField } from "@/components/ui/naira-field";
@@ -93,6 +94,8 @@ export default function Send() {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      {/* Opened from a link while suspended: says so, and Continue explains instead of going on. */}
+      <SuspendedNotice />
       {accounts.isPending ? (
         <View className="h-28 rounded-surface bg-muted" />
       ) : sources.length === 0 ? (
@@ -205,8 +208,11 @@ export default function Send() {
         hint="The recipient sees this on their statement."
         maxLength={100}
       />
-      <Button onPress={next}>Continue</Button>
+      <Button write onPress={next}>
+        Continue
+      </Button>
       <TextButton
+        write
         className="self-center"
         onPress={() => {
           useBulkDraft.getState().open(useBusinessContext.getState().businessId ?? "default", source?.branch._id);

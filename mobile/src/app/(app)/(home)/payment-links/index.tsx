@@ -66,7 +66,7 @@ export default function PaymentLinks() {
     <>
       <Stack.Screen
         options={{
-          headerRight: manager ? () => <HeaderButton label="New" icon={{ ios: "plus", android: "add" }} onPress={create} /> : undefined,
+          headerRight: manager ? () => <HeaderButton write label="New" icon={{ ios: "plus", android: "add" }} onPress={create} /> : undefined,
           headerSearchBarOptions:
             view === "links"
               ? {
@@ -209,7 +209,7 @@ function FirstLink({ onCreate }: { onCreate?: () => void }) {
         payment is matched for you.
       </Text>
       {onCreate && (
-        <Button size="md" icon={{ ios: "plus", android: "add" }} onPress={onCreate}>
+        <Button write size="md" icon={{ ios: "plus", android: "add" }} onPress={onCreate}>
           New payment link
         </Button>
       )}

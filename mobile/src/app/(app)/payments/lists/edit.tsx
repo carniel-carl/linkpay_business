@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { PersonRow, RowsCard } from "@/components/payouts/list-parts";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
@@ -184,6 +185,7 @@ function Form({ list, branches }: { list?: PayoutListWithItems; branches: Branch
         contentContainerClassName="gap-6 px-4 pb-12 pt-4"
       >
         <FocusStatusBar />
+        <SuspendedNotice />
         <FormError message={error} />
 
         <TextField
@@ -255,7 +257,7 @@ function Form({ list, branches }: { list?: PayoutListWithItems; branches: Branch
         <FormError message={show(errors.rows ?? errors.fix)} />
 
         <View className="gap-3">
-          <Button loading={pin.busy} onPress={save}>
+          <Button write loading={pin.busy} onPress={save}>
             {editing ? "Save changes" : "Save list"}
           </Button>
           <Button variant="ghost" disabled={pin.busy} onPress={() => router.back()}>

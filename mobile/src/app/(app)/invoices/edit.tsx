@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Pressable, Switch, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { InvoicePaper, paperBusiness } from "@/components/invoices/invoice-paper";
 import { Button, TextButton } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
@@ -339,6 +340,7 @@ function Editor({
         contentContainerClassName="gap-7 px-4 pb-12 pt-4"
       >
         <FocusStatusBar />
+        <SuspendedNotice />
         <Segmented
           label="Show"
           segments={[
@@ -381,7 +383,7 @@ function Editor({
                 payTo: payToFor(branches.find((b) => b._id === branchId)),
               }}
             />
-            <TextButton className="self-center" onPress={() => router.push("/invoices/branding")}>
+            <TextButton write className="self-center" onPress={() => router.push("/invoices/branding")}>
               Change logo and colours
             </TextButton>
           </View>
@@ -640,7 +642,7 @@ function Editor({
 
         <Totals totals={totals} discount={discount} vatRateBps={vatRateBps} number={number} />
         <FormError message={error} />
-        <Button loading={change.isPending} disabled={readyBranches.length === 0 && !invoice} onPress={save}>
+        <Button write loading={change.isPending} disabled={readyBranches.length === 0 && !invoice} onPress={save}>
           {invoice ? "Save changes" : "Save draft"}
         </Button>
         {!invoice && (

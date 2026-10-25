@@ -93,7 +93,7 @@ export default function Savings() {
       <Stack.Screen
         options={{
           headerRight: manager
-            ? () => <HeaderButton label="New" icon={{ ios: "plus", android: "add" }} onPress={create} />
+            ? () => <HeaderButton write label="New" icon={{ ios: "plus", android: "add" }} onPress={create} />
             : undefined,
         }}
       />
@@ -285,7 +285,7 @@ function FirstSafelock({ onCreate }: { onCreate?: () => void }) {
         can take it out early.
       </Text>
       {onCreate && (
-        <Button size="md" icon={{ ios: "lock", android: "lock" }} onPress={onCreate}>
+        <Button write size="md" icon={{ ios: "lock", android: "lock" }} onPress={onCreate}>
           New Safelock
         </Button>
       )}
@@ -350,7 +350,7 @@ function FirstPocket({ onCreate }: { onCreate?: () => void }) {
         it. You can save a share of every payment in automatically.
       </Text>
       {onCreate && (
-        <Button size="md" icon={{ ios: "plus", android: "add" }} onPress={onCreate}>
+        <Button write size="md" icon={{ ios: "plus", android: "add" }} onPress={onCreate}>
           New pocket
         </Button>
       )}

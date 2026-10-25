@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Alert, Pressable, Switch, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { InvoicePaper, paperBusiness } from "@/components/invoices/invoice-paper";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -211,6 +212,7 @@ function Form({ branding, overview }: { branding: Branding; overview: Overview }
       contentContainerClassName="gap-8 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <FormError message={error} />
 
       <Section title="Logo" description="On your invoices, receipts, the customer's payment page and emails.">
@@ -230,7 +232,9 @@ function Form({ branding, overview }: { branding: Branding; overview: Overview }
           )}
         </View>
         <View className="flex-row gap-3">
+          {/* Uploading or removing the logo saves straight away. */}
           <Button
+            write
             variant="outline"
             size="md"
             className="flex-1"
@@ -242,7 +246,7 @@ function Form({ branding, overview }: { branding: Branding; overview: Overview }
             {branding.logo ? "Replace logo" : "Upload logo"}
           </Button>
           {branding.logo && (
-            <Button variant="destructive" size="md" loading={busy === "remove"} disabled={!!busy} onPress={removeLogo}>
+            <Button write variant="destructive" size="md" loading={busy === "remove"} disabled={!!busy} onPress={removeLogo}>
               Remove
             </Button>
           )}
@@ -392,7 +396,7 @@ function Form({ branding, overview }: { branding: Branding; overview: Overview }
         />
       </Section>
 
-      <Button loading={busy === "save"} disabled={!!busy && busy !== "save"} onPress={save}>
+      <Button write loading={busy === "save"} disabled={!!busy && busy !== "save"} onPress={save}>
         Save branding
       </Button>
 

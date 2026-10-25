@@ -119,9 +119,28 @@ function Card({
   const held = balance?.heldKobo ?? 0;
   const saved = balance?.savedKobo ?? 0;
   const hidden = useBalanceVisibility((s) => s.hidden);
+  const toggleHidden = useBalanceVisibility((s) => s.toggle);
+  // VoiceOver reads the card as one button (it opens the account), which hides the buttons inside it, so they're
+  // offered as its actions too. Send stays an action while the business is suspended: it explains, like the button.
+  const actions = number
+    ? [
+        { name: "share", label: "Share account details" },
+        ...(onSend ? [{ name: "send", label: "Send money" }] : []),
+        ...(saved > 0 ? [{ name: "savings", label: "Open savings" }] : []),
+        { name: "balance", label: hidden ? "Show balance" : "Hide balance" },
+      ]
+    : undefined;
 
   return (
     <Pressable
+      accessibilityActions={actions}
+      onAccessibilityAction={(e) => {
+        const action = e.nativeEvent.actionName;
+        if (action === "share") onShare();
+        else if (action === "send") onSend?.();
+        else if (action === "savings") onSavings();
+        else if (action === "balance") toggleHidden();
+      }}
       accessibilityRole={account ? "button" : undefined}
       accessibilityLabel={[
         branch.name,

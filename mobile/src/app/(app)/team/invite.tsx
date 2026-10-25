@@ -2,6 +2,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { AccessFields, accessError } from "@/components/team/access-fields";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,7 @@ export default function InviteMember() {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         They get an email with a link to join {overview.data?.business.name ?? "your business"}. If they don't have a LinkPay account yet, they
         create one from the link.
@@ -103,7 +105,7 @@ export default function InviteMember() {
       ) : (
         <View className="h-64 rounded-surface bg-muted" />
       )}
-      <Button loading={pin.busy} onPress={send} icon={{ ios: "paperplane", android: "send" }}>
+      <Button write loading={pin.busy} onPress={send} icon={{ ios: "paperplane", android: "send" }}>
         Send invite
       </Button>
       {pin.sheet}

@@ -1,6 +1,7 @@
+import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import Animated, { Easing, FadeIn, FadeInDown } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Logo } from "@/components/brand/logo";
@@ -8,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Display } from "@/components/ui/typography";
 import { useMemberships } from "@/lib/api/banking";
+import { friendlyMessage } from "@/lib/api/errors";
+import { useLeaveBusiness } from "@/lib/api/team";
 import { useAuth } from "@/lib/auth/store";
 import { useBusinessContext } from "@/lib/business-context";
 import { SUPPORT_EMAIL } from "@/lib/config";
@@ -20,17 +23,20 @@ const EASE_OUT = Easing.out(Easing.exp);
 
 /**
  * Covers the tabs while the business in view has been closed by compliance (banned): every business request is
- * refused, so there's nothing to show. Offers support, the member's other businesses, and signing out. The lock
- * screen and the update screen still sit above it (root layout).
+ * refused, so there's nothing to show. Offers support, the member's other businesses, leaving it (`canLeave`: anyone
+ * but the owner, which the API allows for a closed business) and signing out. The lock screen and the update screen
+ * still sit above it (root layout).
  */
-export function BusinessClosed({ businessId, name }: { businessId: string; name: string }) {
+export function BusinessClosed({ businessId, name, canLeave }: { businessId: string; name: string; canLeave: boolean }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const memberships = useMemberships();
   const signOut = useAuth((s) => s.signOut);
   const setBusinessId = useBusinessContext((s) => s.setBusinessId);
   const resetFilters = usePaymentFilters((s) => s.reset);
+  const leaveBusiness = useLeaveBusiness();
   const [signingOut, setSigningOut] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const others = (memberships.data ?? []).filter((m) => m.business._id !== businessId);
 
   async function leave() {
@@ -40,6 +46,32 @@ export function BusinessClosed({ businessId, name }: { businessId: string; name:
     } finally {
       setSigningOut(false);
     }
+  }
+
+  // Leaves this business, by its id, then Home shows the next one (or setup if there's none) and this screen goes.
+  function confirmLeave() {
+    Alert.alert(
+      `Leave ${name}?`,
+      "It won't be listed with your businesses any more. If it opens again, someone on its team will have to invite you back.",
+      [
+        { text: "Stay", style: "cancel" },
+        {
+          text: "Leave business",
+          style: "destructive",
+          onPress: async () => {
+            setLeaving(true);
+            try {
+              await leaveBusiness(businessId);
+              router.navigate("/");
+            } catch (err) {
+              Alert.alert("You're still a member", friendlyMessage(err));
+            } finally {
+              setLeaving(false);
+            }
+          },
+        },
+      ],
+    );
   }
 
   function open(id: string) {
@@ -128,7 +160,12 @@ export function BusinessClosed({ businessId, name }: { businessId: string; name:
             >
               Email support
             </Button>
-            <Button variant="band" loading={signingOut} onPress={() => void leave()} className="h-14">
+            {canLeave && (
+              <Button variant="band" loading={leaving} disabled={signingOut} onPress={confirmLeave} className="h-14">
+                Leave this business
+              </Button>
+            )}
+            <Button variant="band" loading={signingOut} disabled={leaving} onPress={() => void leave()} className="h-14">
               Sign out
             </Button>
           </Animated.View>

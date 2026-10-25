@@ -21,6 +21,7 @@ import { cn } from "@/lib/cn";
 import { formatAccountNumber, formatDate, formatDateTime, formatNaira } from "@/lib/format";
 import { accentPalette, dueLabel, formatDay, isUnpaid, METHOD_LABELS } from "@/lib/invoices";
 import { usePullToRefresh } from "@/lib/query";
+import { useWriteGuard } from "@/lib/restriction";
 import { useTheme } from "@/theme/theme";
 
 /** One invoice: what's owed, how to get paid, and what the member can do with it now. */
@@ -178,6 +179,7 @@ function Detail({
         <View className="gap-3">
           {manager && editable && (
             <Button
+              write
               icon={{ ios: "paperplane", android: "send" }}
               onPress={() => router.push({ pathname: "/invoices/send", params: { id: inv._id } })}
             >
@@ -185,7 +187,9 @@ function Detail({
             </Button>
           )}
           {(inv.publicUrl || manager) && (
+            // A draft has no link until it's marked sent, which is a change; sharing an existing link is a read.
             <Button
+              write={!inv.publicUrl}
               variant="outline"
               icon={{ ios: "square.and.arrow.up", android: "share" }}
               loading={sharing}
@@ -241,6 +245,7 @@ function Detail({
         />
         {manager && editable && (
           <ListRow
+            write
             icon={{ ios: "pencil", android: "edit" }}
             title="Edit"
             onPress={() => router.push({ pathname: "/invoices/edit", params: { id: inv._id } })}
@@ -248,6 +253,7 @@ function Detail({
         )}
         {manager && unpaid && inv.customer.email && (
           <ListRow
+            write
             icon={{ ios: "bell", android: "notifications" }}
             title="Send a reminder now"
             detail={inv.customer.email}
@@ -256,6 +262,7 @@ function Detail({
         )}
         {manager && (
           <ListRow
+            write
             icon={{ ios: "plus.square.on.square", android: "content_copy" }}
             title="Duplicate"
             detail="Copy to a new draft"
@@ -264,6 +271,7 @@ function Detail({
         )}
         {manager && unpaid && inv.payments.length === 0 && (
           <ListRow
+            write
             destructive
             icon={{ ios: "nosign", android: "block" }}
             title="Void invoice"
@@ -280,7 +288,7 @@ function Detail({
           />
         )}
         {manager && draft && (
-          <ListRow destructive icon={{ ios: "trash", android: "delete" }} title="Delete draft" onPress={removeDraft} />
+          <ListRow write destructive icon={{ ios: "trash", android: "delete" }} title="Delete draft" onPress={removeDraft} />
         )}
       </ListSection>
     </ScrollView>
@@ -347,6 +355,7 @@ function Balance({ inv }: { inv: Invoice }) {
 function Payments({ inv, manager, onError }: { inv: Invoice; manager: boolean; onError: (err: unknown) => void }) {
   const { colors, shadows } = useTheme();
   const change = useInvoiceChange();
+  const writes = useWriteGuard();
   const unpaid = isUnpaid(inv);
   if (inv.payments.length === 0 && !(manager && unpaid)) return null;
 
@@ -397,7 +406,7 @@ function Payments({ inv, manager, onError }: { inv: Invoice; manager: boolean; o
                     accessibilityLabel={`Remove the ${formatNaira(p.amountKobo)} payment`}
                     hitSlop={6}
                     disabled={change.isPending}
-                    onPress={() => remove(p)}
+                    onPress={writes.guard(() => remove(p))}
                     className="h-9 w-9 items-center justify-center rounded-full active:bg-muted"
                   >
                     <Icon ios="xmark" android="close" size={15} color={colors["muted-foreground"]} />
@@ -412,6 +421,7 @@ function Payments({ inv, manager, onError }: { inv: Invoice; manager: boolean; o
       )}
       {manager && unpaid && (
         <Button
+          write
           variant="outline"
           icon={{ ios: "plus", android: "add" }}
           onPress={() => router.push({ pathname: "/invoices/record-payment", params: { id: inv._id } })}
@@ -426,6 +436,7 @@ function Payments({ inv, manager, onError }: { inv: Invoice; manager: boolean; o
 function Reminders({ inv, onError }: { inv: Invoice; onError: (err: unknown) => void }) {
   const { colors, shadows } = useTheme();
   const change = useInvoiceChange();
+  const writes = useWriteGuard();
   const [enabled, setEnabled] = useState(inv.reminders.enabled);
   const noEmail = !inv.customer.email;
   return (
@@ -449,6 +460,8 @@ function Reminders({ inv, onError }: { inv: Invoice; onError: (err: unknown) => 
         trackColor={{ true: colors.primary, false: colors.input }}
         accessibilityLabel="Automatic reminders"
         onValueChange={(next) => {
+          // Saves straight away, so while the business is suspended it explains and stays as it was.
+          if (!writes.allow()) return;
           setEnabled(next);
           change.mutate(
             { kind: "reminders", id: inv._id, enabled: next },

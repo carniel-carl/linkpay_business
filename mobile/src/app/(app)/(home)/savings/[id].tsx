@@ -112,10 +112,11 @@ export default function PocketScreen() {
 
       {manage && open && (
         <View className="flex-row gap-3">
-          <Button className="flex-1" icon={{ ios: "plus", android: "add" }} onPress={() => move("deposit")}>
+          <Button write className="flex-1" icon={{ ios: "plus", android: "add" }} onPress={() => move("deposit")}>
             Add money
           </Button>
           <Button
+            write
             className="flex-1"
             variant="outline"
             icon={{ ios: "arrow.uturn.backward", android: "undo" }}
@@ -145,12 +146,14 @@ export default function PocketScreen() {
       {manage && open && (
         <ListSection>
           <ListRow
+            write
             icon={{ ios: "pencil", android: "edit" }}
             title="Edit pocket"
             detail="Name, look, target and auto-save"
             onPress={() => router.push({ pathname: "/savings/edit", params: { id: p._id } })}
           />
           <ListRow
+            write
             icon={{ ios: "xmark.circle", android: "cancel" }}
             title={pin.busy ? "Closing…" : "Close pocket"}
             destructive

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { RowsCard, RunPersonRow } from "@/components/payouts/list-parts";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -132,6 +133,7 @@ function Pay({ list }: { list: PayoutListWithItems }) {
     >
       <Stack.Screen options={{ title: `Pay ${list.title}` }} />
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         Change an amount just for this payment, or leave someone out this time. Nothing moves until you've checked it and confirmed with your PIN.
       </Text>
@@ -222,7 +224,7 @@ function Pay({ list }: { list: PayoutListWithItems }) {
       )}
 
       <FormError message={show(errors.from ?? errors.rows ?? errors.fix)} />
-      <Button disabled={!sources.length} onPress={review}>
+      <Button write disabled={!sources.length} onPress={review}>
         Review payment
       </Button>
     </KeyboardAwareScrollView>

@@ -2,6 +2,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -38,6 +39,7 @@ export default function ApprovalRuleScreen() {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         A second person with approval access checks the transfer before money leaves. Nobody can approve their own transfer.
       </Text>
@@ -120,7 +122,7 @@ function RuleForm({ rule }: { rule: ApprovalRule }) {
         />
       )}
       <FormError message={error} />
-      <Button loading={pin.busy} disabled={!mode} onPress={submit}>
+      <Button write loading={pin.busy} disabled={!mode} onPress={submit}>
         Save rule
       </Button>
       {pin.sheet}

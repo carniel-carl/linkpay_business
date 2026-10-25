@@ -5,6 +5,7 @@ import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import type { DeviceSession, TwoFactorMethod, User } from "@/lib/api/types";
 import { loadBusinessId, useBusinessContext } from "@/lib/business-context";
 import { loadInstallationId } from "@/lib/device";
+import { deleteDownloads } from "@/lib/downloads";
 import { queryClient } from "@/lib/query";
 import { biometricFlags, readSignInSecret, saveBiometrics, type BiometricFlags } from "@/lib/security/biometrics";
 import { failedAttempts, hasPasscode, MAX_ATTEMPTS, resetAttempts } from "@/lib/security/passcode";
@@ -119,6 +120,8 @@ export const useAuth = create<AuthState>((set, get) => ({
       const profile = rawProfile ? (JSON.parse(rawProfile) as Profile) : undefined;
       // Signed out: only a phone with biometric sign-in remembers who used it.
       if (!session && !flags.signIn) await wipeDevice();
+      // Downloaded statements and PDFs left by a sign-out the app was closed in the middle of.
+      if (!session) deleteDownloads();
       set({
         profile: session || flags.signIn ? profile : undefined,
         biometrics: flags.unlock,
@@ -133,6 +136,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       // An unreadable keychain (restored backup, OS key change) must never strand the app on a blank screen.
       await secureWipe().catch(() => undefined);
       await loadInstallationId().catch(() => undefined);
+      deleteDownloads();
       set({ status: "signedOut", profile: undefined, biometrics: false, biometricSignIn: false });
     }
   },
@@ -236,6 +240,8 @@ export const useAuth = create<AuthState>((set, get) => ({
       endedReason: reason,
       ...(!keep && { profile: undefined, biometrics: false, biometricSignIn: false }),
     });
+    // Statements and invoice PDFs downloaded to show or share. Best effort, after the wipe: it can't fail the sign-out.
+    deleteDownloads();
     // Ending the session also stops this phone getting the account's pushes (the server drops its tokens).
     if (noted) void sendNotedLogout(noted);
     await forgetPush();

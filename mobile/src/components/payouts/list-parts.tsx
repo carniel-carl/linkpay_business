@@ -86,7 +86,7 @@ export const ListCard = memo(function ListCard({
           <Text className="text-[14px] text-muted-foreground">{l.lastRunAt ? `Last paid ${formatDate(l.lastRunAt)}` : "Not paid yet"}</Text>
         )}
         {canPay && l.count > 0 && (
-          <Button size="sm" onPress={() => onPay(l)} accessibilityLabel={`Pay ${l.title}`}>
+          <Button write size="sm" onPress={() => onPay(l)} accessibilityLabel={`Pay ${l.title}`}>
             Pay
           </Button>
         )}

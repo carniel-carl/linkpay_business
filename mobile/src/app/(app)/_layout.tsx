@@ -2,8 +2,9 @@ import { NativeTabs } from "expo-router/native-tabs";
 import { Platform } from "react-native";
 import { BusinessClosed } from "@/components/home/business-closed";
 import { useOverview } from "@/lib/api/banking";
+import { isOwner } from "@/lib/permissions";
 import { useRecoveryCodesOnScreen } from "@/lib/recovery-codes";
-import { restrictionOf, useRestrictionSync } from "@/lib/restriction";
+import { restrictionOf, SuspendedContext, useRestrictionSync } from "@/lib/restriction";
 import { useTheme } from "@/theme/theme";
 
 /**
@@ -12,7 +13,8 @@ import { useTheme } from "@/theme/theme";
  * wallpaper colours, so it gets the app's own.
  *
  * A business compliance has closed gets the closed screen over the tabs instead (every business request is refused);
- * a suspended one keeps the tabs, with Home's banner (lib/restriction.ts).
+ * a suspended one keeps the tabs, with Home's banner, and every action that changes it explains instead of running
+ * (SuspendedContext and useWriteGuard in lib/restriction.ts).
  */
 export default function AppTabs() {
   const { colors } = useTheme();
@@ -23,7 +25,7 @@ export default function AppTabs() {
   const codesOnScreen = useRecoveryCodesOnScreen((s) => s.shown);
 
   return (
-    <>
+    <SuspendedContext value={restriction === "suspended" && overview.data ? overview.data.business.name : null}>
       <NativeTabs
         tintColor={colors.primary}
         labelStyle={{ selected: { color: colors.primary } }}
@@ -59,8 +61,13 @@ export default function AppTabs() {
         </NativeTabs.Trigger>
       </NativeTabs>
       {restriction === "banned" && overview.data && (
-        <BusinessClosed businessId={overview.data.business._id} name={overview.data.business.name} />
+        <BusinessClosed
+          businessId={overview.data.business._id}
+          name={overview.data.business.name}
+          // The owner can't leave (OWNER_CANNOT_LEAVE); any other member can, though the business is closed.
+          canLeave={!!overview.data.membership && !isOwner(overview.data.membership)}
+        />
       )}
-    </>
+    </SuspendedContext>
   );
 }

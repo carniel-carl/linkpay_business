@@ -36,6 +36,7 @@ import { formatNaira } from "@/lib/format";
 import { usePaymentFilters } from "@/lib/payment-filters";
 import { queryClient } from "@/lib/query";
 import { askForPush, dismissPushPrompt, pushPromptDismissed, pushStatus, type PushStatus } from "@/lib/push";
+import { useWriteGuard } from "@/lib/restriction";
 import { useSendDraft } from "@/lib/send-draft";
 import { shareAccount } from "@/lib/share";
 import { useTheme } from "@/theme/theme";
@@ -80,9 +81,11 @@ export default function Home() {
       ? gate.overview.business
       : undefined;
   const switchable = (memberships.data?.length ?? 0) > 1;
-  // Suspended: reads work, writes are refused. The band says so and Send is left off the cards. (A closed business
-  // gets the closed screen over the tabs instead; see the (app) layout.)
+  // Suspended: reads work, writes are refused. The band says so, and Send stays on the cards but explains instead of
+  // opening the form (useWriteGuard). (A closed business gets the closed screen over the tabs instead; see the (app)
+  // layout.)
   const suspended = business?.restriction?.status === "suspended";
+  const writes = useWriteGuard();
   const [refreshing, setRefreshing] = useState(false);
   // The business's own logo (Invoice branding), when it has one.
   const branding = useBranding(ready);
@@ -150,11 +153,11 @@ export default function Home() {
               }}
               onSavings={(c) => router.push({ pathname: "/savings", params: { branch: c.branch._id } })}
               onSend={
-                can(gate.overview, "transfers.create") && !suspended
-                  ? (c) => {
+                can(gate.overview, "transfers.create")
+                  ? writes.guard((c: BranchCard) => {
                       useSendDraft.getState().start(c.branch._id);
                       router.push("/payments/send");
-                    }
+                    })
                   : undefined
               }
             />

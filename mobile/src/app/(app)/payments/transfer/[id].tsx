@@ -2,6 +2,7 @@ import { useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Alert, RefreshControl, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { ApprovalTimeline } from "@/components/transfers/approval-timeline";
 import { moneyOut, notSent, recipientName, TransferStatusTag } from "@/components/transfers/transfer-row";
@@ -129,6 +130,9 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
         <FocusStatusBar />
+        {/* Opened from a notification while suspended: says so, and its actions explain instead of running. Only with
+            an action the suspension stops: "Check status now" still works, so a transfer in progress has no banner. */}
+        {(t.canApprove || t.canCancel) && <SuspendedNotice />}
         <View className="gap-2 px-1">
           <TransferStatusTag status={t.status} />
           {/* No money left, or it came back: no minus sign, muted and struck through like the list's row. */}
@@ -193,10 +197,11 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
         {t.canApprove && (
           <View className="gap-3">
             <TextField label="Note (optional)" value={note} onChangeText={(v) => setNote(v.slice(0, 300))} hint="The person who prepared it sees this." maxLength={300} />
-            <Button loading={pin.busy} disabled={action.isPending} onPress={approve}>
+            <Button write loading={pin.busy} disabled={action.isPending} onPress={approve}>
               {finalApproval ? "Approve and send" : `Approve level ${current} of ${levels}`}
             </Button>
             <Button
+              write
               variant="destructive"
               loading={action.isPending && action.variables?.action === "reject"}
               disabled={action.isPending || pin.busy}
@@ -213,6 +218,7 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
         )}
         {t.canCancel && (
           <Button
+            write
             variant="destructive"
             loading={action.isPending && action.variables?.action === "cancel"}
             onPress={() =>
@@ -233,6 +239,7 @@ function Detail({ t, justSent, refetch }: { t: Transfer; justSent: boolean; refe
           </Text>
         )}
         {t.status === "processing" && (
+          // Only asks the bank how the payout is doing, so the API allows it while the business is suspended.
           <Button variant="outline" loading={action.isPending && action.variables?.action === "refresh"} onPress={() => run("refresh")}>
             Check status now
           </Button>

@@ -167,11 +167,11 @@ function SimulatePayment({ checkout: c }: { checkout: LinkCheckout }) {
         </Text>
       </View>
       <FormError message={change.error ? friendlyMessage(change.error) : undefined} />
-      <Button icon={{ ios: "flask", android: "science" }} loading={change.isPending && outcome === "paid"} disabled={change.isPending} onPress={() => simulate("paid")}>
+      <Button write icon={{ ios: "flask", android: "science" }} loading={change.isPending && outcome === "paid"} disabled={change.isPending} onPress={() => simulate("paid")}>
         {donation ? "Simulate gift" : "Simulate payment"}
       </Button>
       {!donation && (
-        <Button variant="outline" loading={change.isPending && outcome === "underpaid"} disabled={change.isPending} onPress={() => simulate("underpaid")}>
+        <Button write variant="outline" loading={change.isPending && outcome === "underpaid"} disabled={change.isPending} onPress={() => simulate("underpaid")}>
           Simulate part payment
         </Button>
       )}
@@ -260,7 +260,7 @@ function LinkPayment({ checkout: c }: { checkout: LinkCheckout }) {
               );
             })}
           </View>
-          <Button loading={change.isPending} disabled={!chosen} onPress={link}>
+          <Button write loading={change.isPending} disabled={!chosen} onPress={link}>
             Link this payment
           </Button>
         </>

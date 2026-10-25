@@ -3,6 +3,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { PocketTile } from "@/components/savings/pocket-parts";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
@@ -142,6 +143,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <View className="flex-row items-center gap-3 px-1">
         <PocketTile icon={pocket.icon} color={pocket.color} />
         <View className="flex-1 gap-0.5">
@@ -194,7 +196,7 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
       />
 
       <View className="gap-3">
-        <Button loading={change.isPending || pin.busy} onPress={submit}>
+        <Button write loading={change.isPending || pin.busy} onPress={submit}>
           {deposit
             ? kobo && !amountError
               ? `Add ${formatNaira(kobo)}`

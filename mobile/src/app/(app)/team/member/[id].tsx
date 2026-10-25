@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { AccessFields, accessError } from "@/components/team/access-fields";
 import { Button } from "@/components/ui/button";
@@ -101,6 +102,7 @@ function MemberForm({ member }: { member: TeamMember }) {
   return (
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-6 px-4 pb-12 pt-4">
       <FocusStatusBar />
+      <SuspendedNotice />
       <View className="flex-row items-center gap-3 px-1">
         <View className="h-12 w-12 items-center justify-center rounded-[14px] bg-brand-subtle">
           <Text className="font-display text-[16px] text-primary">{initials(name)}</Text>
@@ -130,10 +132,11 @@ function MemberForm({ member }: { member: TeamMember }) {
       )}
 
       <View className="gap-3">
-        <Button loading={pin.busy && pinFor === "save"} disabled={!dirty || pin.busy} onPress={save}>
+        <Button write loading={pin.busy && pinFor === "save"} disabled={!dirty || pin.busy} onPress={save}>
           Save changes
         </Button>
         <Button
+          write
           variant="destructive"
           loading={pin.busy && pinFor === "remove"}
           disabled={pin.busy}

@@ -227,7 +227,7 @@ export type TransactionSummary = { inflowKobo: number; outflowKobo: number; fees
 /**
  * GET /api/transactions/statement?branch=&from=&to=&format= answers with the file itself (docs/briefs/statements.md):
  * one branch account's completed transactions over Lagos days `from` to `to` (both included, at most 366, ending
- * today or earlier), with totals and no balances.
+ * today or earlier), with totals, and opening and closing balances where the bank reported them.
  */
 export type StatementFormat = "pdf" | "csv";
 

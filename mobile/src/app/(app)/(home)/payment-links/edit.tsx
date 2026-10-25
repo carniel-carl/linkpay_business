@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Switch, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { Button } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
 import { FormError } from "@/components/ui/form-error";
@@ -35,6 +36,7 @@ import {
   originLabel,
   PHONE_LABELS,
 } from "@/lib/payment-links";
+import { useWriteGuard } from "@/lib/restriction";
 import { parseNaira } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
 
@@ -80,6 +82,7 @@ const naira = (kobo: number | null | undefined) => (kobo ? koboToInput(kobo).rep
 
 function Form({ link, branches }: { link?: PaymentLink; branches: Branch[] }) {
   const change = usePaymentLinkChange();
+  const writes = useWriteGuard();
   const editing = !!link;
   const [linkKind, setLinkKind] = useState<PaymentLinkKind>(link?.kind ?? "payment");
   const donation = linkKind === "donation";
@@ -255,6 +258,7 @@ function Form({ link, branches }: { link?: PaymentLink; branches: Branch[] }) {
       contentContainerClassName="gap-7 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         {editing
           ? "Changes apply to new payments. Anyone already paying keeps the amount they were given."
@@ -310,7 +314,8 @@ function Form({ link, branches }: { link?: PaymentLink; branches: Branch[] }) {
         />
       </View>
 
-      <Pictures pictures={pictures} uploading={uploading} onAdd={() => void addPicture()} onPress={pictureOptions} />
+      {/* A picture uploads as soon as it's chosen, so adding one is a change too. */}
+      <Pictures pictures={pictures} uploading={uploading} onAdd={writes.guard(() => void addPicture())} onPress={pictureOptions} />
 
       {editing
         ? link.branch && (
@@ -536,7 +541,7 @@ function Form({ link, branches }: { link?: PaymentLink; branches: Branch[] }) {
         </Text>
       </View>
 
-      <Button loading={change.isPending} disabled={uploading} onPress={submit}>
+      <Button write loading={change.isPending} disabled={uploading} onPress={submit}>
         {editing ? "Save changes" : "Create link"}
       </Button>
     </KeyboardAwareScrollView>

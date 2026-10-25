@@ -48,7 +48,7 @@ export default function PayoutLists() {
     <>
       <Stack.Screen
         options={{
-          headerRight: canManage && !full && items.length > 0 ? () => <HeaderButton label="New" icon={{ ios: "plus", android: "add" }} onPress={newList} /> : undefined,
+          headerRight: canManage && !full && items.length > 0 ? () => <HeaderButton write label="New" icon={{ ios: "plus", android: "add" }} onPress={newList} /> : undefined,
         }}
       />
       <FlatList
@@ -116,7 +116,7 @@ function FirstList({ canManage }: { canManage: boolean }) {
           : "Lists of people your business pays often, like monthly salaries, show here once someone who sends money saves one."}
       </Text>
       {canManage && (
-        <Button size="md" icon={{ ios: "plus", android: "add" }} onPress={newList}>
+        <Button write size="md" icon={{ ios: "plus", android: "add" }} onPress={newList}>
           New payout list
         </Button>
       )}
