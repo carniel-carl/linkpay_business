@@ -180,3 +180,7 @@ At each new level, that level's approvers get `transfer.approval_requested` (ema
   - Web and mobile send `expect` from what they showed, and label the button "Approve 2 · ₦200,000.00".
 - **`GET /transfers?batch=none`** returns only transfers that aren't part of a bulk transfer, with `total` and paging to match. It combines with every other filter. Mobile uses it to merge single transfers with `GET /batches`.
 - **Sends re-check the sender inside the account lock.** The approval rule and the sender's membership are re-read there, so a rule changed, or a member demoted or removed, during a long request takes effect. Responses: 403 `NOT_A_MEMBER`, 403 `PERMISSION_DENIED` if they lost `transfers.create`, or 404 if they lost access to the branch.
+
+## Batch 9 changes (2026-10-25)
+
+- **`expect` is required** on `POST /batches/:id/approve` and `/reject`. Without it the response is 400 `EXPECT_REQUIRED` ("Send expect with the count and total you were shown…"), checked when the body is parsed, before the batch is read: so it comes before 404 and every state error. On approve the PIN check still runs first. A malformed `expect` is the plain 400 "Validation failed". Batch 8's precedence for the rest is unchanged.

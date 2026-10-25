@@ -63,7 +63,9 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | `NODE_ENV` (required) | `production`, `development` or `test`. The server refuses to start without it. Servers must set `production` (`bun run start` doesn't), and a local `.env` sets `development`. `test` is refused with a live Liquifia key. |
 | `JWT_SECRET`, `JWT_EXPIRES_IN`, `ENCRYPTION_KEY` | Generate secrets with `openssl rand -hex 32`. Outside tests, `JWT_SECRET` and `STAFF_JWT_SECRET` must both be at least 32 characters, different from each other and from `ENCRYPTION_KEY`. In production or with a live key, they must also not be any value committed in the repo (`REPO_SECRETS`). `JWT_EXPIRES_IN` and `ACCESS_TOKEN_TTL` must be durations such as `15m` or `7d`. Numeric vars (`PORT`, `LIQUIFIA_SYNC_INTERVAL_MS`, `SESSION_*`, `BIOMETRIC_*`) must be plain digits within range, or startup fails. `ENCRYPTION_KEY` encrypts BVNs. `JWT_EXPIRES_IN` (default 7d) is also a web session's maximum age. Every web sign-in is a server-side session (`Session.kind: "web"`) with a 12-hour idle timeout (`WEB_SESSION_IDLE_MS`) and can be signed out from any device. |
 | `STAFF_JWT_SECRET` | Signs staff (admin console) tokens. **Required everywhere except tests**: at least 32 characters and different from `JWT_SECRET`, or the server refuses to start (`openssl rand -hex 32`). `dev:mock` and `dev:seed` set their own. |
-| `UPLOAD_DIR` | Local folder for verification documents (gitignored). |
+| `EMAIL_PROVIDER`, `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_REPLY_TO` | Email. `console` (default) prints them; `resend` sends through Resend (`src/services/resend.ts`) and needs the key and a from address. `src/services/providers.ts` wires it when imported. Bad values stop the boot. |
+| `STORAGE_PROVIDER`, `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_PREFIX` | Uploads. `local` (default) writes to `UPLOAD_DIR`; `s3` to a private S3-compatible bucket (AWS, R2, Spaces) through `Bun.S3Client`, with a 30 s timeout per call. |
+| `UPLOAD_DIR` | Local folder for uploads when `STORAGE_PROVIDER=local` (gitignored). |
 | `WEB_URL` | Public web URL used in emailed links (team invites). Default `http://localhost:3000`. |
 | `PUSH_PROVIDER`, `EXPO_ACCESS_TOKEN` | Phone pushes. Unset, they print to the console (`📱 Push to ...`); `expo` sends them through Expo's push service (the access token only if the Expo project requires one). |
 | `ADMIN_APP_URL` | Public URL of the admin console (`admin/`), used in staff invite links (`ADMIN_APP_URL/invite/<token>`). Default `http://localhost:3001`. |
@@ -73,7 +75,7 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia and moves payouts on (default 60000, at most 86400000; 0 turns both off). |
 | `MIN_MOBILE_APP_VERSION` | The oldest mobile app version the API works with, three whole numbers such as `1.1.0` (anything else stops the boot). Unset: any version. Older phones, and builds that don't send `X-App-Version`, get 426 `APP_UPDATE_REQUIRED` on everything but signing out, refreshing and removing a push token (`src/middleware/appVersion.ts`). Set it only once that version can be downloaded: DEPLOY.md §4 step 3. |
 
-Until a real email provider is connected, **emails, including OTP codes, are printed to the backend console.** For that reason the server **refuses to start with `NODE_ENV=production`, or with any live Liquifia key,** until `setEmailProvider()` is called at startup (`src/services/email.ts`). Console pushes (`PUSH_PROVIDER` not `expo`) only log a WARN.
+With `EMAIL_PROVIDER=console` (the default, and what `dev:mock` and the tests use), **emails, including OTP codes, are printed to the backend console.** For that reason the server **refuses to start on console email with `NODE_ENV=production`, or with any live Liquifia key**: set `EMAIL_PROVIDER=resend`. Console pushes (`PUSH_PROVIDER` not `expo`) only log a WARN.
 
 **Deploying to production:** follow [DEPLOY.md](DEPLOY.md), one ordered runbook; `bun run preflight` checks the production config and database read-only.
 
@@ -311,8 +313,8 @@ The business statuses are `draft → submitted → approved | rejected`, with `c
    - **Staff roles** (brief: `docs/briefs/staff-roles.md`): backend and admin/ screens done 2026-10-21. Left: click through the invite and role dialogs in a browser. The product owner may still rename or adjust the four roles (`backend/src/config/staffPermissions.ts`).
    - **Real-time notifications** (web, admin, mobile): requested 2026-10-21. **Backend done** 2026-10-21 (contract: [docs/briefs/notifications.md](briefs/notifications.md)); web built 2026-10-21 (session c7; not yet clicked through in a browser), admin/ (session e5). Mobile plan and the product owner's decisions (full-detail pushes, no per-type switches at launch, refresh-on-events instead of a live stream): [docs/briefs/mobile-notifications.md](briefs/mobile-notifications.md). Left after the clients: a browser and device run against `dev:mock --seed`, the Expo project id and APNs/FCM credentials for real pushes (`PUSH_PROVIDER=expo`), and a shared bus (Redis or change streams) before running more than one backend instance.
 4. **Savings** (brief: `docs/briefs/savings.md`; product owner's decisions 2026-10-21: savings *pockets*, not "Pay with Pocket"; money set aside inside the branch account; Safelock as a lock with **no interest** at launch; pockets first). **Pockets backend done** 2026-10-21; **web Pockets built** 2026-10-21 (not yet clicked through in a browser). **Mobile Pockets built** 2026-10-21 (not yet run on a device). Left: a browser run of the web and a device run of the app, the product owner's sign-off. **Safelock backend done** 2026-10-21; its web and mobile screens are next. Interest-bearing savings wait for the bank partner's terms.
-   Then: scheduled transfers (Auto-Send), transaction statements and exports.
-5. **Compliance and activity monitoring** (brief: [docs/briefs/compliance.md](briefs/compliance.md)): **backend and admin/ screens done** 2026-10-21. Left: a browser click-through of the admin dialogs, flag sheet and chart against `dev:seed`, then the web and mobile handling of `restriction`, `BUSINESS_SUSPENDED` and `BUSINESS_BANNED`, then the product owner's sign-off on the rule thresholds (open question 16).
+   Then: scheduled transfers (Auto-Send). ~~Transaction statements and exports~~: CSV and PDF statements done in batch 9 ([briefs/statements.md](briefs/statements.md)).
+5. **Compliance and activity monitoring** (brief: [docs/briefs/compliance.md](briefs/compliance.md)): **backend and admin/ screens done** 2026-10-21. Left: a browser click-through of the admin dialogs, flag sheet and chart against `dev:seed`, then ~~the web and mobile handling of `restriction`, `BUSINESS_SUSPENDED` and `BUSINESS_BANNED`~~ (done in batch 9), then the product owner's sign-off on the rule thresholds (open question 16).
 6. **Mobile app:** slices 1 to 4 built, plus biometric sign-in and single Transfers (slice 3, onboarding with the camera, on 2026-10-21). Waiting for the product owner to rebuild the dev client (`bunx expo run:ios`; slice 3 added native modules), run them against `dev:mock` and sign off. Invoices and invoice branding built 2026-10-21 (not yet run on a device). Left: bulk transfers, universal links for invite emails, then the design finish review and a mobile DESIGN.md.
 7. **Team follow-ups** (product decisions): custom roles, transferring ownership, linking a branch's `manager` contact to a member, and a "Start your own business" entry for users who are only members elsewhere.
 
@@ -323,11 +325,11 @@ Branches, still to do:
 
 Technical debt to fit in along the way:
 - Rewrite the earlier auth, KYB and accounts e2e suites into `backend/tests/`. The harness (`tests/helpers.ts`, `tests/mockLiquifia.ts`) is in place.
-- Connect a real email provider and S3/R2 storage.
+- ~~Connect a real email provider and S3/R2 storage.~~ Resend and S3-compatible storage, batch 9: set them in production (DEPLOY.md §1).
 - Refresh tokens and session revocation for the **web** (mobile has device sessions; the web still uses a 7-day token that can't be revoked).
 - Password reset.
-- Recovery codes for authenticator-app 2FA.
-- Encrypt TOTP secrets at rest.
+- ~~Recovery codes for authenticator-app 2FA.~~ Batch 9 ([briefs/two-factor-recovery.md](briefs/two-factor-recovery.md)).
+- ~~Encrypt TOTP secrets at rest.~~ Batch 9 (`migrate:encryption` rewrites existing ones).
 - Automatic BVN/NIN checks through Liquifia `/kyc/bvn`.
 - Audit logs.
 - ~~An audit log of staff actions~~ done 2026-10-21 (`AuditLog`). Still not logged: invite resends, staff sign-ins (`StaffSession` has them), and business-side actions.
@@ -341,7 +343,7 @@ Technical debt to fit in along the way:
 | 2 | Test keys (`sk_test_`) for development | Ask Liquifia |
 | 3 | Does Liquifia support business customers (the account name shown to payers)? | Ask Liquifia |
 | 4 | Are the verification documents per business type (`backend/src/config/kyb.ts`) correct? | Bank partner's compliance team |
-| 5 | Which email provider (Resend, SES, …)? | Product owner |
+| 5 | ~~Which email provider (Resend, SES, …)?~~ **Resend** (batch 9). Still needed: the sending domain verified in Resend and a sending-only key. | Product owner |
 | 7 | Mobile bundle id / package `com.linkpay.business` and the support email `support@linkpay.ng` are placeholders. Real values? | Product owner |
 | 10 | Invite emails link to the web. Should the app open them (universal links / Android app links on the production domain, needing the real domain and bundle id from #7)? | Product owner |
 | 9 | Biometric sign-in skips 2FA (device key plus enrolled biometrics count as two factors) and lasts up to 180 days without a password. Acceptable for the bank partner? | Product owner / compliance |
@@ -798,3 +800,53 @@ Add a line per session: date, what was done, and anything left half-finished.
     - **Mobile payout-list run keys** follow beneficiary ids, not accounts ([bulk-payouts brief](briefs/bulk-payouts.md), batch 8).
     - **`legacySendHash`** can go once no pre-deploy transfer can be retried.
     - **Still to come from the product owner and Liquifia:** an email provider, the webhook secret, and Liquifia's answers.
+
+- **2026-10-25 (batch 9, launch blockers, re-audit leftovers, 2FA recovery, statements):** on branch `fix/audit-batch-9`. Backend: 700/700 tests pass on two full runs, and typecheck is clean. Web, admin and mobile: typecheck and lint are clean (web and admin keep their three old warnings), and web and admin build.
+  - **Email and files:**
+    - **Resend** (chosen for open question 5): `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` and `EMAIL_FROM`.
+      - Each message gets one Idempotency-Key and is tried 4 times, with backoff that honours `Retry-After`.
+      - Logs hold only the status, Resend's error name and the recipient's domain.
+    - **S3-compatible storage:** `STORAGE_PROVIDER=s3` through `Bun.S3Client` (AWS, R2, Spaces). Objects are private, and each call times out after 30 s.
+    - **Wiring:** both are set up when `src/services/providers.ts` is imported (by `index.ts`, preflight and `migrate:kyb`). Bad settings stop the boot (`src/config/providerSettings.ts`).
+    - **Preflight:** new `--email` (Resend domains) and `--storage` (one-key list) flags, both read-only.
+    - **Tests:** pinned to console email and local storage, against local stand-ins (`tests/fakeS3.ts`).
+  - **2FA:**
+    - **Recovery codes** for business users and staff ([briefs/two-factor-recovery.md](briefs/two-factor-recovery.md)).
+      - Turning on the authenticator returns 10 one-time codes, and `POST /2fa/recovery-codes` replaces them.
+      - The account objects carry `twoFactor.recoveryCodesLeft`.
+      - `/login/2fa` accepts `recoveryCode`. Codes are stored as keyed hashes and used atomically, and each use sends an email.
+    - **TOTP secrets** are encrypted at rest (v2, bound to the record). `migrate:encryption` rewrites the plain ones, and preflight has a TOTP secrets line.
+    - **Web, admin and mobile** show the codes once, show "N left" in Security with "Get new codes", and offer "Use a recovery code instead" at sign-in, with a one-off notice afterwards.
+  - **Re-audit lows, all closed:**
+    - the 2FA challenge carries the password stamp (staff gained `passwordChangedAt`);
+    - biometric sign-in can't outlive a reset;
+    - the OTP daily cap counts per email and address (10, IPv6 by /56) with 50 across all addresses;
+    - `expect` is required on batch decisions (400 `EXPECT_REQUIRED`);
+    - pictures and public logos are `s-maxage=300` with `no-store` refusals, and the signed-in logo is `private`.
+    - The transaction-PIN reset passes the caller's address too.
+  - **Suspended and closed businesses** ([briefs/compliance.md](briefs/compliance.md), batch 9 section). No backend change; `tests/restrictionClients.test.ts` pins what the clients read.
+    - Web: a banner and dimmed write actions (`components/shell/write-gate.tsx`), and `/closed` for a banned business.
+    - Mobile: a Home banner, Send hidden on cards, a full-screen closed overlay, and tags in the switcher.
+    - The email sent when a restriction is lifted no longer says "suspension" for a ban.
+  - **Statements** ([briefs/statements.md](briefs/statements.md)): `GET /api/transactions/statement?branch&from&to&format=pdf|csv`.
+    - Up to 366 Lagos days, branch-scoped, completed transactions only.
+    - CSV: UTF-8 with a BOM, and a formula-injection guard.
+    - PDF: A4 landscape, at most 5,000 rows and two renders at a time. CSV allows 20,000 rows.
+    - No opening or closing balances, because nothing stores a past balance.
+    - On web, "Download statement" on Transactions. On mobile, Statement on an account, opening PDF and CSV in Quick Look.
+  - **Payout lists:** items carry `bankUuid`, and web and mobile build list-run keys from accounts, closing batch 8's gap.
+  - **QA:**
+    - **Web and admin**, in the browser against `dev:seed`: all nine checks pass. Fixed: an over-long recovery code crashed the sign-in step; the statement dialog after a remote sign-out; an undimmed approvals link.
+    - **Mobile**, on the simulator (iPhone 17 Pro): recovery codes, closed business, statements, payout-list runs and batch approval pass. Fixed: a second tap on More threw away the one-time codes; "Email support" with no mail app.
+    - **Not seen on screen:** the suspended write message and the hidden Send on cards (both checked in code and against the API), and the update screen above the closed overlay (checked in code).
+  - **Deploy:** [DEPLOY.md](DEPLOY.md) covers it.
+    - Set up Resend: verify the domain and create a sending-only key.
+    - Choose S3 or local disk. Sync existing uploads before switching to S3.
+    - Run preflight with `--email --storage`.
+    - `migrate:encryption` now covers TOTP secrets.
+    - New rollback caveat: older code can't read encrypted TOTP secrets.
+  - **Left:**
+    - Staff sessions don't carry the password stamp (a millisecond race, in the brief).
+    - Statements have no balances until balance snapshots exist.
+    - A few secondary write actions on web (Safelock rename, branch edit, beneficiary row actions) aren't dimmed while suspended; they show the mapped message.
+    - Liquifia's answers and the webhook secret.
