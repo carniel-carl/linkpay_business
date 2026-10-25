@@ -847,6 +847,44 @@ Add a line per session: date, what was done, and anything left half-finished.
     - New rollback caveat: older code can't read encrypted TOTP secrets.
   - **Left:**
     - Staff sessions don't carry the password stamp (a millisecond race, in the brief).
-    - Statements have no balances until balance snapshots exist.
-    - A few secondary write actions on web (Safelock rename, branch edit, beneficiary row actions) aren't dimmed while suspended; they show the mapped message.
+    - ~~Statements have no balances~~ and ~~secondary write actions undimmed while suspended~~: both closed in batch 10.
     - Liquifia's answers and the webhook secret.
+
+- **2026-10-25 (batch 10, closing the known gaps):** on branch `fix/audit-batch-10`. Backend: 723/723 tests pass on two full runs, and typecheck is clean. Web, admin and mobile: typecheck and lint are clean (web and admin keep their three old warnings), and web and admin build.
+  - **Staff sessions carry the password stamp.**
+    - `StaffSession.passwordChangedAt` is taken from the second step's load.
+    - An older session gets 401 `STAFF_SESSION_ENDED` and its notification stream ends. The check uses the same read as the role, so it costs nothing extra.
+    - The session that changed the password is re-stamped.
+    - Unstamped sessions work until the next change.
+  - **Each email gets 20 s in all.** That holds across up to 4 tries, with each try's timeout cut to fit. An awaited send fails within about 20 s in a Resend outage, instead of about 45.
+  - **Statement balances from daily snapshots** ([briefs/statements.md](briefs/statements.md)).
+    - A job records each active account's balance as Liquifia reports it just after 00:00 WAT. There's one call per account per day, a failing account is retried every minute for 15 minutes and then hourly, and the job is off at `LIQUIFIA_SYNC_INTERVAL_MS=0`. Snapshots go in `balancesnapshots`, unique on `{ virtualAccount, day }`.
+    - A statement shows opening and closing balances only from snapshots within 15 minutes of midnight, labelled with when the bank reported them. A period ending today uses the live balance.
+    - A reconciliation line compares the listed rows (`netKobo`) with the change in balance and names any difference. No balance is ever adjusted.
+    - Balances start from the deploy day.
+  - **Suspended businesses: every write gated, centrally** ([briefs/compliance.md](briefs/compliance.md), batch 10).
+    - Web: a `write` prop on the shared `Button` and `DropdownMenuItem` dims the control and shows the reason, while it stays focusable.
+    - Mobile: a `write` prop on `Button`, `TextButton`, `HeaderButton` and `ListRow` keeps the action visible and alerts on tap, with Email support. Write screens opened from links show the banner.
+    - Two backend exemptions through `businessGate` in `middleware/roles.ts`:
+      - leaving a business works while it's suspended or closed;
+      - "Check status now" works while suspended.
+  - **QA:**
+    - **Web**, in the browser against `dev:seed`: about 50 gated controls checked by mouse and keyboard, the exemptions, an active-business regression check, statement balances with and without snapshots, and 375px. Three bugs fixed:
+      - tooltips off-screen on phones;
+      - a dropped picture uploading while suspended;
+      - a tooltip opening by itself when a pocket sheet opened.
+    - **Mobile**, on the simulator: every gated entry point, the deep links, the exemptions, statement balances and an accessibility dump. Three bugs fixed:
+      - Home kept the business after leaving it;
+      - VoiceOver couldn't reach the branch card's Send;
+      - branch and team rows kept their normal hint while suspended.
+    - **Follow-ups**, each checked by hand afterwards:
+      - **Closed screens:** non-owners can leave from web `/closed` and the mobile closed overlay.
+      - **Downloads:** downloaded documents live in `Caches/downloads`, which is deleted on sign-out.
+      - **Screen readers:** decorative icons are hidden from VoiceOver (`components/ui/icon.tsx`).
+      - **Transfer banner:** a processing transfer no longer shows the suspended banner.
+      - **Menus:** "…" menus open while suspended, and only their write items are dimmed.
+    - **Security, found during QA:** iOS kept API responses, refresh tokens included, in its on-disk URL cache because most answers had no `Cache-Control`. Every `/api` answer now defaults to `Cache-Control: no-store` (`src/app.ts`); routes that serve public files set their own. `tests/apiCaching.test.ts` covers it.
+  - **Deploy:** no new env vars.
+    - New: the `balancesnapshots` collection and index, built at startup, and the snapshot job.
+    - Check the first morning's snapshots (DEPLOY.md §5 step 8).
+    - On an environment that already ran batch 9, staff who changed their password there sign in once more.

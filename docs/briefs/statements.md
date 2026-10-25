@@ -1,14 +1,15 @@
 # Account statements (batch 9)
 
-**Built:** 2026-10-25. A business can download a statement of one branch account, as a PDF or a CSV, for any period of up to 366 days. It's on the web (Transactions, "Download statement") and on mobile (Account details, "Download statement").
+**Built:** 2026-10-25 (batch 9); opening and closing balances added 2026-10-25 (batch 10). A business can download a statement of one branch account, as a PDF or a CSV, for any period of up to 366 days. It's on the web (Transactions, "Download statement") and on mobile (Account details, "Download statement").
 
 The backend's code is in:
 
-- `src/services/statements.ts`: the period, what the statement holds, the CSV and the PDF;
+- `src/services/statements.ts`: the period, what the statement holds, its balances and their reconciliation, the CSV and the PDF;
 - `src/controllers/statements.ts`: the endpoint;
-- `src/routes/transactions.ts`: the route and its rate limit.
+- `src/routes/transactions.ts`: the route and its rate limit;
+- `src/models/BalanceSnapshot.ts` and `src/services/balanceSnapshots.ts`: the start-of-day balance snapshots and the job that takes them.
 
-The tests are in `tests/statements.test.ts`.
+The tests are in `tests/statements.test.ts` and `tests/balanceSnapshots.test.ts`.
 
 ## Endpoint
 
@@ -23,7 +24,8 @@ The tests are in `tests/statements.test.ts`.
   - `to` can't be after today in Lagos;
   - the period can be at most **366 days**, counting both ends.
 - **Format.** `format` defaults to `pdf`.
-- **Freshness.** Like the transactions list, the endpoint first pulls new payments from Liquifia if the last sync is more than 30 s old. It waits at most 3 s for that.
+- **Freshness.** Like the transactions list, the endpoint first pulls new payments from Liquifia if the last sync is more than 30 s old. It waits at most 3 s for that. A period ending today also reads the account's live balance (one Liquifia call, at most 5 s; see [Opening and closing balances](#opening-and-closing-balances)).
+- **Contract.** Unchanged by the balances: the same query, headers and errors. Only the file's content gained them.
 - **Success.** It answers 200 with the file itself:
   - `Content-Type: application/pdf`, or `text/csv; charset=utf-8`;
   - `Content-Disposition: attachment; filename="linkpay-statement-<branch>-<from>-<to>.<pdf|csv>"`. `<branch>` is a plain-ASCII slug of the branch name, such as `head-office` or `kano`;
@@ -85,11 +87,28 @@ The totals therefore add up the money that actually moved.
 - money in (with a count), money out (with a count), and all fees (with the stamp duty);
 - net: money in, less the fees on it, less money out and its fees. This is the stored net amounts added up. It is **not** a balance.
 
+**The balances** (see [Opening and closing balances](#opening-and-closing-balances)):
+
+- the opening and closing balance, each with when the bank reported it, or why it isn't shown;
+- the change in balance, and its difference from the net, with a plain sentence about any difference.
+
 Pocket and Safelock moves aren't on a statement. That money never leaves the Liquifia account; the app only sets it aside.
 
 ### CSV
 
-- The file is UTF-8 with a byte-order mark, so Excel reads ₦ and accented names. It has CRLF line ends and one header row:
+- The file is UTF-8 with a byte-order mark, so Excel reads ₦ and accented names. It has CRLF line ends.
+- **Layout: a balances block on top, then the table.** The block is always the same 5 rows, then 1 empty row, so the table's header is **always row 7** (`STATEMENT_CSV_PREAMBLE_ROWS = 6`; in pandas, `skiprows=6`; in Power Query, remove the top 6 rows). Every row, the block's and the empty one too, has the table's 14 columns, so the file stays rectangular and strict CSV readers don't stop on a short row. This keeps the balances where a person opening the file sees them first, and keeps the table a plain table that imports with one fixed skip.
+- **The balances block:**
+
+  | Row | `Balances` | `Amount (NGN)` | `Reported at (Lagos)` | `Note` |
+  | --- | --- | --- | --- | --- |
+  | 2 | `Opening balance` | the amount, or empty | `YYYY-MM-DD HH:mm`, or empty | the label ("Start of 1 Oct 2026, reported by the bank at 00:02 WAT"), or "Not available. <reason>" |
+  | 3 | `Closing balance` | the same | the same | the label ("End of 25 Oct 2026, reported by the bank at 00:01 WAT on 26 Oct 2026", or "Balance at 14:05 WAT today, 25 Oct 2026, as the bank reported it"), or "Not available. <reason>" |
+  | 4 | `Change in balance` | closing less opening, or empty | empty | "Closing balance less opening balance.", or "Not available. Needs both an opening and a closing balance." |
+  | 5 | `Difference` | the change less the listed net (`0.00` when they match), or empty | empty | the reconciliation sentence, or "Not checked. Needs both an opening and a closing balance." |
+
+  The block's amounts are plain signed numbers, such as `-1250.00`. The formula guard (below) is for text and isn't applied to them: a number can't run as a formula, and `'-1250.00` wouldn't be a number.
+- **The table** has one header row:
   - `Date`, `Time (Lagos)`, `Description`, `Narration`, `Reference`;
   - `Counterparty`, `Counterparty bank`, `Counterparty account`;
   - `Credit (NGN)`, `Debit (NGN)`, `Fee (NGN)`, `Stamp duty in fee (NGN)`;
@@ -98,13 +117,17 @@ Pocket and Safelock moves aren't on a statement. That money never leaves the Liq
 - Each transaction fills Credit or Debit and leaves the other empty.
 - Quoting follows RFC 4180: a field is quoted when it has a comma, a quote or a line break, and quotes inside it are doubled.
 - **Formula guard.** A cell that starts with `=`, `+`, `-`, `@`, a tab or a CR gets a leading `'`. This happens after the text is trimmed, and before quoting.
-- There are no totals rows, so the file imports as a plain table.
-- An empty period gives the header row alone.
+- There are no totals rows, so the table imports as a plain table.
+- An empty period gives the balances block and the table's header row alone.
 
 ### PDF
 
 - **Layout.** The PDF is A4 landscape, made with pdfkit, using the invoice PDF's Inter fonts (they have the naira sign) and the `formatNaira` and `formatDay` helpers.
-- **First page.** It has the title, the business and branch, the period and its length, the account details, four total tiles (money in, money out, fees, net) and a note. The note says that it lists completed transactions only, in Lagos time, and has no balances.
+- **First page.** It has the title, the business and branch, the period and its length, the account details, and the summary:
+  - four total tiles: money in, money out, fees, net;
+  - four balance tiles: opening balance, closing balance, change in balance, difference from net. A balance tile shows the amount with its label, or "Not available" with the reason. The change and difference tiles show "Not available" and "Not checked" when a balance is missing;
+  - the reconciliation sentence (up to 3 lines);
+  - a note: completed transactions only, in Lagos time; pending and failed transfers aren't listed; fees are as reported or quoted; balances are only those the bank reported, at the times shown.
 - **The table.** Its columns are Date, Details, Reference, Credit, Debit and Fee:
   - Details has three lines: the description, then the bank and account number, then the narration;
   - the table header repeats on every page;
@@ -113,26 +136,85 @@ Pocket and Safelock moves aren't on a statement. That money never leaves the Liq
 - **Footer.** Every page ends with "Generated <date, time> Lagos time · LinkPay" and "Page N of M".
 - **How it's made.** The rows are laid out first, so the page count is known before anything is drawn. Each page is finished and freed as the next one starts, with no `bufferPages`.
 
-## Opening and closing balances: left out
+## Opening and closing balances
 
-**Decision: no opening or closing balance on statements, until the data can support one.** No stored data can give a balance truthfully:
+**Principle: a balance shown is one the bank reported, labelled with when.** Liquifia only reports an account's current balance (`GET /virtual-accounts/:id/balance`), and it has no balance at a past date. Working one out backwards from today's balance, or forwards from our own rows, would be a guess (see [Why nothing is worked out](#why-nothing-is-worked-out)). So LinkPay records the bank's balance at the start of every Lagos day, and a statement shows a balance only where one was recorded close enough to the moment it stands for. Otherwise it says why there's none. A balance is never adjusted, estimated or filled in.
 
-1. **Nothing stores a balance.** Liquifia is the source of truth, and the API reads it live (`GET /virtual-accounts/:id/balance`, the current balance only). No balance is kept per transaction or per day, and Liquifia offers no balance at a past date.
-2. **Working backwards from today's balance would be a guess.** Today's live balance less the movements since `from` would need every movement to be recorded, and correct. Today, that isn't known:
-   - **The inbound sync is eventually consistent.** It reads a list with no documented order, at most 10,000 rows a run, and a payment can show up late (IMPLEMENTATION.md §5).
-   - **Debit timing is unconfirmed.** Nobody has confirmed whether Liquifia's balance drops when a payout is accepted or when it settles. No live payout has been sent yet.
-   - **The real fee isn't known.** A payout's fee is the quoted fee, not one Liquifia confirmed.
-   - **The inbound fee isn't confirmed either.** Nobody has confirmed whether the fee on an incoming transfer comes out of the account.
-   - **Other movements may exist.** Liquifia could have changes we never record, such as reversals after success or charges.
-3. **Summing our own rows from the start** has the same gaps. It would also be wrong for accounts that existed before we recorded anything.
+### Snapshots
 
-**To add balances later:**
+- **`BalanceSnapshot`** (`balancesnapshots` collection): `{ business, branch, virtualAccount, day, balanceKobo, takenAt }`.
+  - `day` is the Lagos day the balance opens (`YYYY-MM-DD`).
+  - `balanceKobo` is Liquifia's balance, in kobo, as reported.
+  - `takenAt` is when Liquifia's answer arrived. A snapshot taken late keeps its real time.
+  - **Unique on `{ virtualAccount, day }`.** That index also serves the statement's lookups.
+- **Written once.** The job writes with an insert-only upsert (`$setOnInsert`) on the unique key. A duplicate-key error from a racing writer counts as "already recorded". Two overlapping passes, or two instances, can't record a day twice or change one. Before writing, a pass waits for Mongoose's build of the unique index; if that build failed, the pass throws and writes nothing (the startup log and `GET /health` already say so).
 
-- Store Liquifia's reported balance with each recorded movement, or take a daily snapshot from `GET /balance` at Lagos midnight.
-- Reconcile it against the rows.
-- Show the opening balance as the snapshot at the start of `from`, and the closing balance as the snapshot at the end of `to`, only when the reconciliation for the period is clean.
+### The job
 
-Until then, the statement says plainly that it has no balances, and the net figure is labelled as net movement.
+`startBalanceSnapshots(syncIntervalMs)` in `src/services/balanceSnapshots.ts`, started from `index.ts` (and `scripts/dev-mock.ts`) like the other jobs.
+
+- **When.** It runs once at startup, then looks every minute (or every `LIQUIFIA_SYNC_INTERVAL_MS`, if that's shorter). Each pass finds the active accounts that have no snapshot for today (Lagos), and takes theirs. So each day's snapshot lands within a minute or so of 00:00 WAT.
+- **Off** when `LIQUIFIA_SYNC_INTERVAL_MS=0`, like the inbound sync and the payout follow-up.
+- **Which accounts.** Every `VirtualAccount` whose `status` is `active` (in any case) or not set. The status is what Liquifia returned when the account opened.
+- **Single flight.** One pass at a time in the process. A tick during a pass does nothing.
+- **Load on Liquifia: one balance call per account per day.** The passes in between ask nothing once every account has its snapshot. At most **5 calls at once**, each with a **10 s timeout**, always read fresh (there's no balance cache).
+- **Failures.** One account's failure doesn't stop the others. Within the tolerance window (the first 15 minutes of the day) a failed account is tried again on every pass, so it gets about a dozen tries while its snapshot can still count. After the window, it's tried once an hour, so an account that keeps failing costs about 40 calls a day, not 1,440. The retry times are kept in memory, so a restart tries again at once. A pass that takes or fails anything logs one line: `Balance snapshots for <day>: N taken, M failed (first: <error>); retrying`.
+- **Midnight.** A balance asked for before midnight and answered after is dropped: it can't be said which day it opens. The next pass takes the new day's.
+- **Late snapshots.** If the server was down at midnight, the first pass after it takes the day's snapshot late, with its real `takenAt`. Statements don't use it (see the tolerance), but it marks the day as recorded.
+
+### The tolerance: 15 minutes
+
+A snapshot stands for the start of its day only if `takenAt` is at or after 00:00 WAT, and at most **15 minutes** after (`BALANCE_SNAPSHOTS.toleranceMs`). Why 15 minutes:
+
+- The job looks every minute, so a snapshot normally lands a minute or two after midnight. 15 minutes leaves room for about a dozen retries of a lookup that failed, or a slow first pass after a restart.
+- It keeps "at the start of the day" true to within a quarter of an hour. Business is light then, and any transaction in that gap is named by the reconciliation, not hidden.
+- Longer would let a snapshot taken well into the morning pass as the opening balance. Shorter would lose a day's balance to one brief outage.
+
+### What a statement shows
+
+- **Opening balance:** the snapshot for `from`, if it's within the tolerance. Labelled "Start of 1 Oct 2026, reported by the bank at 00:02 WAT".
+- **Closing balance:**
+  - for a period ending before today: the snapshot for the day after `to`, within the tolerance. Labelled "End of 25 Oct 2026, reported by the bank at 00:01 WAT on 26 Oct 2026";
+  - for a period ending **today**: the live balance, read during the request (at most 5 s, `STATEMENT_BALANCE_SETTINGS.liveTimeoutMs`). Labelled "Balance at 14:05 WAT today, 25 Oct 2026, as the bank reported it".
+- **Snapshots are per account.** The statement reads the snapshots of the branch's own account only, so branch scoping is the same as for the rows.
+- **When a balance is missing,** it's left out and the statement says why. The reasons, as the PDF and CSV word them:
+
+  | Case | Reason |
+  | --- | --- |
+  | The account has no snapshot at all yet | "No balance has been recorded for this account yet." |
+  | The day is before the account's first snapshot | "Balances are recorded from 26 Oct 2026." |
+  | The opening snapshot was taken too late | "Recorded at 03:12 WAT, too late to count as the start of 1 Oct 2026." |
+  | The closing snapshot was taken too late | "Recorded at 03:12 WAT on 26 Oct 2026, too late to count as the end of 25 Oct 2026." |
+  | No snapshot for the opening day | "Not recorded at the start of 1 Oct 2026." |
+  | No snapshot for the closing day | "Not recorded at the end of 25 Oct 2026." |
+  | The closing day is today, within its first 15 minutes, and its snapshot isn't in yet | "The end of 24 Oct 2026 is recorded just after midnight. Try again in a few minutes." |
+  | A period ending today, and the live read failed | "The bank's balance couldn't be fetched just now. Download again to include it." |
+
+  The CSV puts "Not available. " before the reason. The PDF shows "Not available" as the tile's value and the reason under it.
+- **Periods before the first snapshot have no balances.** Balances start from the day the job first runs: the first closing balance is that day's end (the next morning's snapshot); the first opening balance is the next day's, unless the job first ran within 15 minutes of midnight.
+
+### Reconciliation
+
+When both balances are shown, the statement compares the change in balance (closing less opening) with the listed transactions' net, `totals.netKobo`:
+
+- **Which amounts count.** Each listed row counts by its stored `netKobo`, the money that moves the balance:
+  - **credits: net of their fee** (`amountKobo − feeKobo`). Liquifia reports a `fee` on each incoming transfer, and the sync stores `netKobo = amount − fee`. Whether the bank really takes it from the balance isn't confirmed (IMPLEMENTATION.md §5). The fee is usually ₦0;
+  - **debits: inclusive of the fee, stamp duty included** (`Transfer.totalKobo = amount + fee`). This is how the mock moves the balance (it debits `amount + fee` when it accepts a payout, and refunds both if the payout fails). The quoted fee already includes the stamp duty. Whether the live fee matches the quote isn't confirmed either.
+- **When they match** (to the kobo): "The listed transactions account for the change in balance."
+- **When they don't,** the statement shows the difference plainly, and never adjusts a balance to match: "The balance changed by ₦30,000.00, and the listed transactions come to ₦39,920.00: a difference of −₦9,920.00." Then what can be seen of why, each only when it applies:
+  - **The edges.** Listed transactions before the opening balance was reported (between 00:00 and 00:02, say), or after a live closing balance was read, are in the list but not in the change. Transactions after the period's end but before the closing snapshot are in the change but not in the list. These are counted exactly: "2 transactions made between the period's start or end and the moment the bank reported a balance account for all of it" (or "for ₦X of it").
+  - **Incoming fees.** When what's left equals the fees on the period's incoming payments: "It equals the fees on incoming payments (₦0.50), which the bank may not have taken from the balance."
+  - **Settling.** Pending transactions in the period (up to the closing balance) aren't listed, but the bank may already have moved the money: "1 transaction (₦40.00) was still settling, so it isn't listed; the bank may already have counted it."
+  - **Anything still left:** "It may come from transactions still settling when a balance was reported or bank charges that aren't listed." For a live closing balance it adds payments from the last few minutes that aren't recorded yet.
+- **Not checked** when either balance is missing: "Needs both an opening and a closing balance."
+
+### Why nothing is worked out
+
+These still hold, and are why a balance appears only where the bank reported it:
+
+1. **Nothing else stores a balance.** Liquifia offers no balance at a past date, and no balance is kept per transaction.
+2. **Working backwards from today's balance would be a guess.** It needs every movement recorded, and correct. The inbound sync is eventually consistent, debit timing and the real fees are unconfirmed, and Liquifia may have movements we never record (IMPLEMENTATION.md §5). The reconciliation shows any of these as a difference, instead of hiding them in a balance.
+3. **Summing our own rows from the start** has the same gaps, and is wrong for accounts that existed before we recorded anything.
 
 ## Limits
 
@@ -153,8 +235,11 @@ Until then, the statement says plainly that it has no balances, and the net figu
   - The memory figure is the whole test process, including the rows held in memory.
 - **Concurrency.** At most **2 PDFs render at once** in the process, and the rest wait in turn. This in-process queue fits the single instance at launch. With more instances, each would have its own.
 - **Mobile.** The app waits up to 120 s for the file.
+- **Liquifia calls.** A statement whose period ends today makes one live balance call (5 s at most). The rate limit above bounds them. The snapshot job makes one call per account per day.
 
 ## Clients
+
+**Copy.** Both apps say: "Every completed payment into and out of one account, with totals, in Lagos time. Opening and closing balances appear where the bank reported them, from the first day they were recorded." The CSV format's description starts "The balances, then one row per transaction".
 
 **Web.** "Download statement" sits in the Transactions header (`components/transactions/statement-dialog.tsx`). The dialog has:
 
@@ -175,3 +260,7 @@ How the download works:
 - **Android.** The phone's app for that type opens it. With no such app, expo-file-system's folder picker saves the file where the person chooses, because React Native's share sheet only takes text on Android.
 
 This uses no new native module: expo-file-system and React Native's `Share` were already in the app.
+
+### Downloads on the phone (batch 10)
+Statements and invoice PDFs are saved under `Caches/downloads` (`mobile/src/lib/downloads.ts`). That folder is deleted on sign-out, as a best-effort step after the security wipe, and again at any launch with no session.
+

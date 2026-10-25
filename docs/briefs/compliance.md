@@ -117,3 +117,30 @@ The backend needed no change. `GET /api/business` returns `restriction: { status
   - Banned: a full-screen closed overlay sits over the tabs, below the update and lock screens. It offers support, other businesses and sign out.
   - The business switcher tags Suspended or Closed. The overview refetches when a request is refused with either code, when the unread count rises, and on returning to the foreground while restricted.
 - The email sent when a suspension or ban is lifted now reads "We've finished our review of <Business> and restored full access."
+
+## Batch 10: every write gated, two exemptions (2026-10-25)
+
+- **Web:**
+  - The shared `Button` and `DropdownMenuItem` take a `write` prop (`components/ui/button.tsx`, `ui/dropdown-menu.tsx`; `AlertDialogAction` passes it through).
+  - While the business is suspended, a `write` control is dimmed and stays focusable, with the "<Name> is suspended, so you can't do this right now" tooltip. Choosing a dimmed menu item does nothing, and a link item doesn't navigate.
+  - Every business write is marked this way: transfers and approvals, beneficiaries, payout lists, invoices and branding, payment links, savings, team and branches.
+- **Mobile:**
+  - `useWriteGuard()`, `alertSuspended()` and `SuspendedNotice` live in `lib/restriction.ts`.
+  - A `write` prop on `Button`, `TextButton`, `HeaderButton` and `ListRow` keeps the action visible. A tap shows an alert with the same sentence, "You can still see your balances and payments.", and OK or Email support.
+  - Home's Send on branch cards is back, and explains itself when tapped.
+  - Write screens opened from a link or a notification show the banner at the top.
+- **Not gated:**
+  - user-level settings: profile, password, 2FA, sessions, transaction PIN, notifications;
+  - reads, downloads, copying and sharing;
+  - onboarding;
+  - automatic lookups inside a flow that's already past a gate.
+- **Two backend exemptions** (`businessGate` in `middleware/roles.ts`):
+  - `POST /api/team/leave` works while the business is suspended or closed. Leaving ends only the member's own access, and nobody should be kept in a business they want out of. The owner still can't leave.
+  - `POST /api/transfers/:id/refresh` ("Check status now") works while suspended. It only asks the bank how a payout already sent is doing, as the payout follow-up does every minute. It stays refused for a closed business, like every other route.
+  - The apps don't gate either button.
+- **Leaving from the closed screens.**
+  - Non-owners can leave from web `/closed` and from the mobile closed overlay; owners don't see the option.
+  - The call names the closed business (web: the `businessId` option on `api()`), so it can't leave another one by mistake.
+  - Afterwards the member moves to their next business, or to onboarding if they have none.
+- **The banner on transfer and batch screens** shows only when the screen has a gated action. A processing transfer, whose only action is Check status, shows none.
+
