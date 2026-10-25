@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { Types } from "mongoose";
 import { env } from "../src/config/env";
 import { liquifia, LiquifiaError } from "../src/services/liquifia/client";
-import { availableBalance } from "../src/services/transfers";
+import { availableBalance, quoteFee } from "../src/services/transfers";
 import { startTestEnv, type TestEnv } from "./helpers";
 
 let t: TestEnv;
@@ -143,5 +143,44 @@ describe("other lookups", () => {
     // Numeric text is read as the number.
     routes["GET /virtual-accounts/va_1/balance"] = data({ balance: "250000" });
     expect((await availableBalance({ _id: new Types.ObjectId(), providerAccountId: "va_1" })).availableKobo).toBe(250_000);
+  });
+});
+
+describe("fee quotes", () => {
+  const quote = (over: Record<string, unknown>) => ({ amount: 5000, fee_bps: 0, flat_fee: 20, stamp_duty: 0, fee: 20, total: 5020, currency: "NGN", ...over });
+
+  test("a fee that's missing, null, not a number or below zero is an error, not NaN or ₦0", async () => {
+    const bodies = [
+      quote({ fee: undefined }),
+      quote({ fee: null }),
+      quote({ fee: "twenty" }),
+      quote({ fee: "" }),
+      quote({ fee: "1e999" }),
+      quote({ fee: -20 }),
+      quote({ stamp_duty: "fifty" }),
+      quote({ stamp_duty: -50 }),
+      [],
+      null,
+    ];
+    for (const body of bodies) {
+      routes["GET /payouts/fee"] = data(body);
+      expectUnknown(await failure(liquifia.quotePayoutFee(5000)));
+    }
+    // Numbers, or numeric text, are read as numbers; no stamp duty is none (it's part of the fee anyway).
+    routes["GET /payouts/fee"] = data(quote({ fee: "70", stamp_duty: "50" }));
+    expect(await liquifia.quotePayoutFee(10_000)).toMatchObject({ fee: 70, stamp_duty: 50 });
+    routes["GET /payouts/fee"] = data(quote({ stamp_duty: undefined }));
+    expect(await liquifia.quotePayoutFee(5000)).toMatchObject({ fee: 20, stamp_duty: 0 });
+  });
+
+  test("a bad quote isn't cached: the next good one is used", async () => {
+    const amountKobo = 4_321_00; // not quoted anywhere else in this file
+    routes["GET /payouts/fee"] = data(quote({ fee: undefined }));
+    expectUnknown(await failure(quoteFee(amountKobo)));
+    routes["GET /payouts/fee"] = data(quote({ fee: 20 }));
+    expect(await quoteFee(amountKobo)).toEqual({ feeKobo: 20_00, stampDutyKobo: 0 });
+    // And a good answer is cached as before.
+    routes["GET /payouts/fee"] = data(quote({ fee: null }));
+    expect(await quoteFee(amountKobo)).toEqual({ feeKobo: 20_00, stampDutyKobo: 0 });
   });
 });

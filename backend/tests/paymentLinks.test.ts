@@ -390,6 +390,48 @@ describe("matching transfers", () => {
   });
 });
 
+describe("linking a payment by hand across branches", () => {
+  test("only a payment into the checkout's or the invoice's own branch account can be linked", async () => {
+    const { owner, headOfficeId, kanoId, headVa, member } = await setup();
+    const kanoVa = (await VirtualAccountModel.findOne({ branch: kanoId }))!;
+    const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 6_000_00 });
+    const { body: started } = await startCheckout(link.slug);
+    const checkout = (await CheckoutModel.findOne({ token: started.token }))!;
+    const inv = await t.api("POST", "/api/invoices", { token: owner.token, body: { branch: headOfficeId, customer: { name: "Chidi" }, items: [{ description: "x", quantity: 1, unitPriceKobo: 6_000_00 }] } });
+    await t.api("POST", `/api/invoices/${inv.body._id}/send`, { token: owner.token, body: { email: false } });
+
+    // A payment into Kano's account, with no reference.
+    await receive(kanoVa, 6_000_00, { narration: "ankara" });
+    const kanoTx = (await TransactionModel.findOne({ virtualAccount: kanoVa._id, amountKobo: 6_000_00 }))!;
+    // A member who only sees the head office, and even the owner, who sees both: refused, as if it weren't there.
+    const headOnly = await member("finance", [headOfficeId]);
+    for (const token of [headOnly.token, owner.token]) {
+      const toCheckout = await t.api("POST", `/api/payment-links/checkouts/${checkout.id}/match`, { token, body: { transactionId: kanoTx.id } });
+      expect(toCheckout.status).toBe(404);
+      expect(toCheckout.body.code).toBe("TRANSACTION_NOT_FOUND");
+      const toInvoice = await t.api("POST", `/api/invoices/${inv.body._id}/payments`, { token, body: { transactionId: kanoTx.id } });
+      expect(toInvoice.status).toBe(404);
+      expect(toInvoice.body.code).toBe("TRANSACTION_NOT_FOUND");
+    }
+    const untouched = (await TransactionModel.findById(kanoTx._id))!;
+    expect(untouched.checkout).toBeUndefined();
+    expect(untouched.invoice).toBeUndefined();
+    // Nor is it suggested for the head office invoice, though the amount matches exactly.
+    const suggested = await t.api("GET", `/api/invoices/${inv.body._id}/suggested-payments`, { token: owner.token });
+    expect(suggested.body.items.map((i: { _id: string }) => i._id)).not.toContain(kanoTx.id);
+
+    // Payments into the head office's account still link, for the branch-limited member too.
+    await receive(headVa, 6_000_00, { narration: "ankara" });
+    await receive(headVa, 6_000_00, { narration: "ankara again" });
+    const [first, second] = await TransactionModel.find({ virtualAccount: headVa._id, amountKobo: 6_000_00 }).sort({ _id: 1 });
+    const matched = await t.api("POST", `/api/payment-links/checkouts/${checkout.id}/match`, { token: headOnly.token, body: { transactionId: first!.id } });
+    expect(matched.body).toMatchObject({ status: "paid", matchedBy: "manual" });
+    const paid = await t.api("POST", `/api/invoices/${inv.body._id}/payments`, { token: headOnly.token, body: { transactionId: second!.id } });
+    expect(paid.status).toBe(200);
+    expect(paid.body.status).toBe("paid");
+  });
+});
+
 describe("embedding on the business's website", () => {
   test("website addresses are normalised to origins, and matched with or without a subdomain wildcard", () => {
     expect(normalizeOrigin("shop.adaeze.ng/checkout?x=1")).toBe("https://shop.adaeze.ng");
@@ -439,7 +481,17 @@ describe("embedding on the business's website", () => {
     expect(embed.body.inline).toContain(`/pay/${link.slug}?embed=inline`);
     expect(embed.body.javascript).toContain(`link: "${link.slug}"`);
     // The server-side check binds the payment to this link, the order's amount and its id, not just "paid".
-    for (const check of [`/api/public/pay/${link.slug}/checkouts/<token>`, 'status is "paid"', 'mode is "live"', 'currency is "NGN"', "priceKobo is your order total", "clientReference is your order"]) {
+    for (const check of [
+      `/api/public/pay/${link.slug}/checkouts/<token>`,
+      'status is "paid"',
+      'mode is "live"',
+      'currency is "NGN"',
+      "priceKobo is your order total",
+      // Its own check: on a donation link "paid" can be less than the price.
+      "- paidKobo is at least your order total in kobo",
+      "clientReference is your order",
+      "overLimit is not true, if you have limited stock",
+    ]) {
       expect(embed.body.javascript.replace(/\n\s*\/\/\s*/g, " ")).toContain(check);
     }
     expect(embed.body.verifyUrl).toEndWith(`/api/public/pay/${link.slug}/checkouts/{token}`);
@@ -609,5 +661,66 @@ describe("pictures", () => {
     expect(await PaymentLinkImageModel.exists({ _id: stale._id })).toBeNull();
     expect(await PaymentLinkImageModel.exists({ _id: kept._id })).not.toBeNull();
     expect(await PaymentLinkImageModel.exists({ _id: used._id })).not.toBeNull();
+  });
+});
+
+describe("a link LinkPay has taken down", () => {
+  const png = (width: number, height: number, background: string) => sharp({ create: { width, height, channels: 3, background } }).png().toBuffer();
+  const uploadTo = async (path: string, token: string, data: Uint8Array) => {
+    const form = new FormData();
+    form.append("file", new Blob([data], { type: "image/png" }), "file.png");
+    const res = await fetch(`${t.url}${path}`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+    return (await res.json()) as any;
+  };
+  const get = (path: string) => fetch(`${t.url}${path}`);
+
+  test("keeps only its title public: no story, pictures, logo or donors, until it's restored", async () => {
+    const { owner, headOfficeId, headVa } = await setup();
+    expect((await uploadTo("/api/branding/logo", owner.token, await png(200, 100, "#0E7C66"))).logo).toBeTruthy();
+    const cover = await uploadTo("/api/payment-links/images", owner.token, await png(800, 600, "#C2410C"));
+    const link = await createLink(owner.token, {
+      branch: headOfficeId,
+      kind: "donation",
+      title: "Roof for Ikorodu school",
+      description: "Our school's roof blew off in the storm",
+      images: [cover._id],
+      successMessage: "God bless you",
+    });
+    const { body: gift } = await startCheckout(link.slug, { ...payer("giver"), amountKobo: 5_000_00, message: "For the children" });
+    await receive(headVa, gift.amountKobo);
+    const before = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
+    const imageUrl = before.link.images[0].url;
+    const logoUrl = before.business.logo.url;
+    expect((await get(imageUrl)).status).toBe(200);
+    expect((await get(logoUrl)).status).toBe(200);
+
+    expect((await t.api("POST", `/api/admin/payment-links/${link._id}/take-down`, { token: staffToken, body: { note: "Reported as a scam" } })).status).toBe(200);
+    const page = await t.api("GET", `/api/public/pay/${link.slug}`);
+    expect(page.status).toBe(200);
+    expect(page.body).toMatchObject({
+      business: { name: "Adaeze Fabrics Ltd", logo: null },
+      link: { slug: link.slug, kind: "donation", title: "Roof for Ikorodu school", description: null, images: [], customFields: [] },
+      donation: null,
+      available: false,
+      unavailableReason: "taken_down",
+    });
+    for (const gone of ["storm", "For the children", "Chidi", cover._id]) expect(JSON.stringify(page.body)).not.toContain(gone);
+    // The pictures, the logo and the donor list answer 404, even at their old addresses.
+    expect((await get(imageUrl)).status).toBe(404);
+    expect((await get(logoUrl)).status).toBe(404);
+    const donors = await t.api("GET", `/api/public/pay/${link.slug}/donations`);
+    expect(donors.status).toBe(404);
+    expect(donors.body.code).toBe("PAYMENT_LINK_TAKEN_DOWN");
+    // A donor's own checkout keeps its receipt, but not the link's picture, logo or message.
+    const receipt = (await t.api("GET", `/api/public/checkouts/${gift.token}`)).body;
+    expect(receipt).toMatchObject({ status: "paid", link: { title: "Roof for Ikorodu school", image: null }, business: { logo: null }, successMessage: null });
+
+    // Restored: everything is back.
+    expect((await t.api("POST", `/api/admin/payment-links/${link._id}/restore`, { token: staffToken, body: { note: "Verified" } })).status).toBe(200);
+    const back = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
+    expect(back).toMatchObject({ link: { description: "Our school's roof blew off in the storm" }, available: true });
+    expect(back.donation.recent.items[0]).toMatchObject({ message: "For the children" });
+    expect((await get(imageUrl)).status).toBe(200);
+    expect((await get(logoUrl)).status).toBe(200);
   });
 });

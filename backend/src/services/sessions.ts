@@ -87,14 +87,34 @@ function browserName(ua = "") {
   return os ? `${browser} on ${os}` : browser;
 }
 
+type PasswordStamp = { passwordChangedAt?: Date | null };
+
+/**
+ * Whether a session signed in before the user's latest password change or reset. Such a session is over even if
+ * nothing revoked it: a reset revokes every session, but a sign-in that had already checked the old password can
+ * open one a moment later, and this is what stops it.
+ */
+function predatesPassword(session: PasswordStamp, user: PasswordStamp | null) {
+  const changedAt = user?.passwordChangedAt?.getTime();
+  return changedAt !== undefined && (session.passwordChangedAt?.getTime() ?? 0) < changedAt;
+}
+
+/** Marks such a session revoked, so it leaves the sessions list too. */
+const endPredatingSession = (sessionId: Types.ObjectId) =>
+  SessionModel.updateOne({ _id: sessionId, revokedAt: null }, { revokedAt: new Date(), revokedReason: "signed_out_everywhere" });
+
 /**
  * Opens a browser session (the web dashboard) and returns its access token, which lasts the session's maximum age.
- * Each request through it counts as activity (see touchSession), and it ends like any other session.
+ * Each request through it counts as activity (see touchSession), and it ends like any other session. `signedInAs`
+ * is the user as the sign-in loaded them (see signInResponse); without it (scripts and tests) the session is
+ * stamped with the user's current password.
  */
 export async function startWebSession(
   userId: string,
   client: ClientInfo = {},
+  signedInAs?: PasswordStamp,
 ): Promise<{ accessToken: string; sessionId: string }> {
+  const stamp = signedInAs ?? (await UserModel.findById(userId).select("passwordChangedAt").lean());
   const now = Date.now();
   const _id = new Types.ObjectId();
   const accessToken = await signAccessToken(userId, _id.toString(), env.jwtExpiresIn);
@@ -106,6 +126,7 @@ export async function startWebSession(
     refreshTokenHash: hash(newRefreshToken()),
     device: { name: browserName(client.userAgent), platform: "web" },
     ...client,
+    passwordChangedAt: stamp?.passwordChangedAt ?? undefined,
     expiresAt: new Date(Math.min(now + WEB_SESSION_IDLE_MS, absoluteExpiresAt.getTime())),
     absoluteExpiresAt,
   });
@@ -123,13 +144,15 @@ async function tokensFor(session: SessionDocument, refreshToken: string) {
 /**
  * The body every sign-in returns. Without `device` a browser session is opened and only its access token is
  * returned; with it, a device session is created and the response also carries `refreshToken` and `sessionId`.
+ * `user` is the account as the sign-in loaded it to check the password or code: the session carries that load's
+ * passwordChangedAt, so a reset that lands while the sign-in is still running ends it too.
  */
 export async function signInResponse(req: Request, user: UserDocument, device: DeviceInfo) {
   // For staff looking at who is active on a business. A failure here mustn't block the sign-in.
   await UserModel.updateOne({ _id: user._id }, { lastSignInAt: new Date(), lastSignInIp: req.ip }).catch((err) =>
     console.error("Couldn't record the sign-in time:", err),
   );
-  if (!device) return { accessToken: (await startWebSession(user.id, clientInfo(req))).accessToken, user };
+  if (!device) return { accessToken: (await startWebSession(user.id, clientInfo(req), user)).accessToken, user };
 
   const now = Date.now();
   const refreshToken = newRefreshToken();
@@ -141,6 +164,7 @@ export async function signInResponse(req: Request, user: UserDocument, device: D
     installationId,
     device: deviceFields,
     ...clientInfo(req),
+    passwordChangedAt: user.passwordChangedAt ?? undefined,
     expiresAt: new Date(Math.min(now + env.sessionIdleDays * DAY, absoluteExpiresAt.getTime())),
     absoluteExpiresAt,
   });
@@ -165,9 +189,26 @@ const invalidRefresh = () => new HttpError(401, "Your session has ended. Sign in
 
 const isLive = (s: SessionDocument) => !s.revokedAt && s.expiresAt.getTime() > Date.now();
 
-/** Exchanges a refresh token for a new pair. The old token stops working (rotation). */
+/**
+ * Exchanges a refresh token for a new pair. The old token stops working (rotation).
+ *
+ * Each rotation is one update conditional on the token the session held when it was read, so two refreshes
+ * racing with the same token can't both rotate from it. The loser looks again and finds its token rotated away
+ * moments ago: it gets the one grace rotation, which retires the winner's new pair (presenting that later counts as
+ * reuse and ends the session), or, once that's used, it counts as reuse itself.
+ */
 export async function rotateSession(req: Request, refreshToken: string) {
   const presented = hash(refreshToken);
+  // Each lost race moves the token one step along (current, grace, retired), so a third look always settles it.
+  for (let look = 0; look < 3; look++) {
+    const rotated = await rotateOnce(req, presented);
+    if (rotated) return rotated;
+  }
+  throw invalidRefresh();
+}
+
+/** One look at the session: its new pair, or null if another request changed the session first. */
+async function rotateOnce(req: Request, presented: string) {
   let session = await SessionModel.findOne({ refreshTokenHash: presented });
 
   if (!session) {
@@ -178,16 +219,24 @@ export async function rotateSession(req: Request, refreshToken: string) {
     } else {
       // A token that was already rotated away is being replayed: someone else may hold a copy.
       const stolen = previous ?? (await SessionModel.findOne({ retiredTokenHashes: presented }));
-      if (stolen && !stolen.revokedAt) {
-        stolen.set({ revokedAt: new Date(), revokedReason: "reuse_detected" });
-        await stolen.save();
+      if (stolen) {
+        const revoked = await SessionModel.updateOne(
+          { _id: stolen._id, revokedAt: null },
+          { revokedAt: new Date(), revokedReason: "reuse_detected" },
+        );
         // Whoever holds the copy may have the rest of the phone's keychain too.
-        await revokeBiometricKeys(stolen.user, { installationId: stolen.installationId ?? undefined }, "reuse_detected");
+        if (revoked.modifiedCount) {
+          await revokeBiometricKeys(stolen.user, { installationId: stolen.installationId ?? undefined }, "reuse_detected");
+        }
       }
       throw invalidRefresh();
     }
   }
   if (!isLive(session)) throw invalidRefresh();
+  if (predatesPassword(session, await UserModel.findById(session.user).select("passwordChangedAt").lean())) {
+    await endPredatingSession(session._id);
+    throw invalidRefresh();
+  }
 
   const now = Date.now();
   const next = newRefreshToken();
@@ -195,37 +244,68 @@ export async function rotateSession(req: Request, refreshToken: string) {
   // Normal rotation: the presented token becomes the one-time grace token. Grace rotation: the pair the
   // client never received is retired along with the grace token, so neither works again.
   const retired = normal ? [session.previousTokenHash] : [session.refreshTokenHash, presented];
-  session.set({
-    previousTokenHash: normal ? presented : undefined,
-    retiredTokenHashes: [...retired.filter(Boolean), ...session.retiredTokenHashes].slice(0, RETIRED_TOKENS_KEPT),
-    refreshTokenHash: hash(next),
-    rotatedAt: new Date(now),
-    lastUsedAt: new Date(now),
-    expiresAt: new Date(Math.min(now + env.sessionIdleDays * DAY, session.absoluteExpiresAt.getTime())),
-    ...clientInfo(req),
-  });
-  await session.save();
-  return tokensFor(session, next);
+  const rotated = await SessionModel.findOneAndUpdate(
+    { _id: session._id, refreshTokenHash: session.refreshTokenHash, revokedAt: null },
+    {
+      $set: {
+        ...(normal && { previousTokenHash: presented }),
+        retiredTokenHashes: [...retired.filter(Boolean), ...session.retiredTokenHashes].slice(0, RETIRED_TOKENS_KEPT),
+        refreshTokenHash: hash(next),
+        rotatedAt: new Date(now),
+        lastUsedAt: new Date(now),
+        expiresAt: new Date(Math.min(now + env.sessionIdleDays * DAY, session.absoluteExpiresAt.getTime())),
+        ...clientInfo(req),
+      },
+      ...(!normal && { $unset: { previousTokenHash: 1 } }),
+    },
+    { returnDocument: "after" },
+  );
+  return rotated && tokensFor(rotated, next);
 }
 
 /** Whether an access token's session is still usable, without counting as activity (for long-lived streams). */
 export async function isSessionActive(sessionId: string, userId: string) {
-  const session = await SessionModel.findById(sessionId).select("user revokedAt expiresAt").lean();
-  return !!session && session.user.toString() === userId && !session.revokedAt && session.expiresAt.getTime() > Date.now();
+  const [session, user] = await Promise.all([
+    SessionModel.findById(sessionId).select("user revokedAt expiresAt passwordChangedAt").lean(),
+    UserModel.findById(userId).select("passwordChangedAt").lean(),
+  ]);
+  if (!session || session.user.toString() !== userId || session.revokedAt || session.expiresAt.getTime() <= Date.now()) return false;
+  return !predatesPassword(session, user);
 }
 
-/** Whether an access token's session is still usable. A browser session's idle expiry moves back with each request. */
-export async function touchSession(sessionId: string, userId: string) {
-  const session = await SessionModel.findById(sessionId).select("user kind revokedAt expiresAt absoluteExpiresAt lastUsedAt").lean();
+/**
+ * Whether an access token can be used: its session's kind ("device", the app, or "web", a browser) if so; "ended"
+ * if its session was signed out, revoked or expired, or signed in before the user's latest password change;
+ * "no_account" if the session outlived its account. A browser session's idle expiry moves back with each request.
+ */
+export async function touchSession(sessionId: string, userId: string): Promise<"device" | "web" | "ended" | "no_account"> {
+  const [session, user] = await Promise.all([
+    SessionModel.findById(sessionId).select("user kind revokedAt expiresAt absoluteExpiresAt lastUsedAt passwordChangedAt").lean(),
+    UserModel.findById(userId).select("passwordChangedAt").lean(),
+  ]);
   const now = Date.now();
-  if (!session || session.user.toString() !== userId || session.revokedAt || session.expiresAt.getTime() <= now) return false;
+  if (!session || session.user.toString() !== userId || session.revokedAt || session.expiresAt.getTime() <= now) return "ended";
+  if (predatesPassword(session, user)) {
+    await endPredatingSession(session._id);
+    return "ended";
+  }
+  if (!user) return "no_account";
   if (session.kind === "web" && now - (session.lastUsedAt?.getTime() ?? 0) >= WEB_TOUCH_INTERVAL_MS) {
     await SessionModel.updateOne(
       { _id: session._id, revokedAt: null },
       { lastUsedAt: new Date(now), expiresAt: new Date(Math.min(now + WEB_SESSION_IDLE_MS, session.absoluteExpiresAt.getTime())) },
     );
   }
-  return true;
+  // Older device sessions have no kind (the schema default doesn't apply to lean reads).
+  return session.kind === "web" ? "web" : "device";
+}
+
+/**
+ * A password change made from this session: it moves on to the new password (call before saving the user's new
+ * passwordChangedAt, so it never looks older than it) while every other session is ended by revokeOtherSessions.
+ */
+export async function carrySessionOver(sessionId: string | undefined, passwordChangedAt: Date) {
+  if (sessionId) await SessionModel.updateOne({ _id: sessionId }, { passwordChangedAt });
 }
 
 /** Ends the session an access token belongs to (the web signing out). An invalid or expired token is ignored. */

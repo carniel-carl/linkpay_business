@@ -30,6 +30,9 @@ const sessionSchema = new Schema(
       osVersion: { type: String, trim: true },
       appVersion: { type: String, trim: true },
     },
+    // The user's passwordChangedAt as it was when this session signed in (none if the password had never changed).
+    // Once the user's is later, the session is refused (services/sessions.ts).
+    passwordChangedAt: Date,
     ip: String,
     userAgent: String,
     lastUsedAt: { type: Date, default: () => new Date() },

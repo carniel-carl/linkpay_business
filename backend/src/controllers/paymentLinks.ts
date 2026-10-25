@@ -168,7 +168,7 @@ async function serializeLinks(req: Request, links: PaymentLinkDocument[]) {
 
 async function serializeCheckouts(req: Request, checkouts: CheckoutDocument[]) {
   const [links, branches, users] = await Promise.all([
-    PaymentLinkModel.find({ _id: { $in: checkouts.map((c) => c.link) } }).select("title slug"),
+    PaymentLinkModel.find({ _id: { $in: checkouts.map((c) => c.link) } }).select("title slug mode"),
     BranchModel.find({ _id: { $in: checkouts.map((c) => c.branch) } }).select("name isHeadOffice"),
     UserModel.find({ _id: { $in: checkouts.map((c) => c.matchedByUser).filter(Boolean) } }).select("name"),
   ]);
@@ -212,8 +212,8 @@ async function serializeCheckouts(req: Request, checkouts: CheckoutDocument[]) {
       createdAt: c.get("createdAt"),
       // A pending or expired checkout can be linked by hand to a payment the matcher missed.
       canMatch: canManage && c.status === "pending" && c.mode !== "test",
-      // A test checkout is paid by simulating the transfer instead.
-      canSimulate: canManage && c.status === "pending" && c.mode === "test",
+      // A test checkout is paid by simulating the transfer instead, while its link is still in test mode.
+      canSimulate: canManage && c.status === "pending" && c.mode === "test" && !c.testClearedAt && l?.mode === "test",
     };
   });
 }

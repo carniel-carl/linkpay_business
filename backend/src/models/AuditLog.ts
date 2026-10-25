@@ -29,6 +29,8 @@ export const AUDIT_ACTIONS = [
   "staff.invited",
   "staff.invite_resent",
   "staff.invite_revoked",
+  // Someone joined through an invite; by the new staff member, naming who invited them.
+  "staff.invite_accepted",
   "staff.role_changed",
   "staff.disabled",
   "staff.enabled",

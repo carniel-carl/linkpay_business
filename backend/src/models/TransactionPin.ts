@@ -15,6 +15,11 @@ const transactionPinSchema = new Schema(
     failedAttempts: { type: Number, default: 0 },
     // Set when failedAttempts reaches the limit; the PIN can't be used until then.
     lockedUntil: Date,
+    // Every wrong PIN over the last day, locks or not (a try is added before it's compared and taken back out if
+    // it was right; older ones drop out at the next try). Past the daily cap the PIN locks until it's reset.
+    recentFailures: { type: [{ at: { type: Date, required: true } }], default: [] },
+    // Set when recentFailures reached the daily cap. No timer ends it: only a reset (password + emailed code).
+    resetRequiredAt: Date,
     // When the PIN itself was last set, changed or reset.
     changedAt: { type: Date, required: true },
     lastUsedAt: Date,
@@ -24,6 +29,7 @@ const transactionPinSchema = new Schema(
     toJSON: {
       transform: (_doc, ret: Record<string, any>) => {
         delete ret.pinHash;
+        delete ret.recentFailures;
         delete ret.__v;
         return ret;
       },

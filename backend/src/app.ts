@@ -1,9 +1,11 @@
 import { env } from "./config/env";
+import { indexStatus } from "./config/db";
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import { accountsRouter } from "./routes/accounts";
 import { adminRouter } from "./routes/admin";
+import { appRouter } from "./routes/app";
 import { authRouter } from "./routes/auth";
 import { branchesRouter } from "./routes/branches";
 import { brandingRouter } from "./routes/branding";
@@ -25,6 +27,7 @@ import { transactionsRouter } from "./routes/transactions";
 import { transfersRouter } from "./routes/transfers";
 import { webhooksRouter } from "./routes/webhooks";
 import { usersRouter } from "./routes/users";
+import { requireSupportedApp } from "./middleware/appVersion";
 import { errorHandler, notFound } from "./middleware/errorHandler";
 
 export const app = express();
@@ -36,7 +39,36 @@ export const app = express();
 if (/^\s*(true|\d+)\s*$/i.test(env.trustProxy)) {
   throw new Error("TRUST_PROXY must list proxy addresses or subnets (e.g. 10.0.0.0/8), not true or a hop count");
 }
+for (const entry of env.trustProxy.split(",")) assertNarrowSubnet(entry.trim());
 app.set("trust proxy", env.trustProxy);
+
+/**
+ * A subnet in TRUST_PROXY wider than /8 (IPv4) or /16 (IPv6), such as 0.0.0.0/0 or ::/0, trusts nearly any
+ * address, which is `true` by another name. Netmasks (10.0.0.0/255.0.0.0) and IPv4-mapped IPv6 subnets
+ * (::ffff:0.0.0.0/96 is all of IPv4) are read the way Express reads them. Anything malformed is left for Express to refuse.
+ */
+function assertNarrowSubnet(entry: string) {
+  const slash = entry.indexOf("/");
+  if (slash < 0) return;
+  const address = entry.slice(0, slash).trim();
+  const range = entry.slice(slash + 1).trim();
+  let bits = /^\d+$/.test(range)
+    ? Number(range)
+    : /^\d+(\.\d+){3}$/.test(range)
+      ? range.split(".").reduce((n, octet) => n + [...(Number(octet) & 255).toString(2)].filter((b) => b === "1").length, 0)
+      : NaN;
+  let v6 = address.includes(":");
+  if (v6 && /^::ffff:\d+(\.\d+){3}$/i.test(address)) {
+    v6 = false;
+    bits -= 96;
+  }
+  const narrowest = v6 ? 16 : 8;
+  if (bits < narrowest) {
+    throw new Error(
+      `TRUST_PROXY subnet ${entry} is too wide: list the proxies' own addresses, or subnets of /${narrowest} or narrower for ${v6 ? "IPv6" : "IPv4"}, or any visitor could choose their own address`,
+    );
+  }
+}
 
 app.use(cors());
 // Before express.json(): webhook signatures need the raw body.
@@ -47,8 +79,14 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     db: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    // "failed": a declared index didn't build (the startup log names it), so a uniqueness rule may not be enforced.
+    indexes: indexStatus(),
   });
 });
+
+// A mobile app older than MIN_MOBILE_APP_VERSION is refused (APP_UPDATE_REQUIRED) on everything but signing out.
+app.use(requireSupportedApp);
+app.use("/api/app", appRouter);
 
 // Before /api/auth, so its own middleware never runs for these.
 app.use("/api/auth/password", passwordRouter);

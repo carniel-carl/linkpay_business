@@ -25,6 +25,9 @@ const consolePushProvider: PushProvider = {
   },
 };
 
+/** Where and how long: a slow or down Expo gives up after `timeoutMs` per request. Tests point `url` at a stub. */
+export const expoPush = { url: "https://exp.host/--/api/v2/push/send", timeoutMs: 10_000 };
+
 /** Expo's push service, which delivers to APNs (iOS) and FCM (Android). */
 export const expoPushProvider: PushProvider = {
   async send(messages) {
@@ -32,8 +35,9 @@ export const expoPushProvider: PushProvider = {
     // Expo takes at most 100 messages per request.
     for (let i = 0; i < messages.length; i += 100) {
       const chunk = messages.slice(i, i + 100);
-      const res = await fetch("https://exp.host/--/api/v2/push/send", {
+      const res = await fetch(expoPush.url, {
         method: "POST",
+        signal: AbortSignal.timeout(expoPush.timeoutMs),
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -70,6 +74,22 @@ async function activeTokens(userIds: string[]) {
   const [ok, stale] = [tokens.filter((t) => !t.session || live.has(String(t.session))), tokens.filter((t) => t.session && !live.has(String(t.session)))];
   if (stale.length) await PushTokenModel.deleteMany({ _id: { $in: stale.map((t) => t._id) } });
   return ok;
+}
+
+const inFlight = new Set<Promise<void>>();
+
+/**
+ * Starts pushToUsers without waiting for it, so a slow push service never holds up what caused the push (the
+ * inbound sync, payout follow-up, a request). It logs its own errors. flushPushes() waits for the ones started.
+ */
+export function pushInBackground(pushes: Parameters<typeof pushToUsers>[0]) {
+  const sending = pushToUsers(pushes).finally(() => inFlight.delete(sending));
+  inFlight.add(sending);
+}
+
+/** Resolves once every push started with pushInBackground has finished (tests, and shutdown). */
+export async function flushPushes() {
+  while (inFlight.size) await Promise.allSettled([...inFlight]);
 }
 
 /** Sends one push per phone of each user. Errors are logged, never thrown. */

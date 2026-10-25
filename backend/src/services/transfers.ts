@@ -1,10 +1,13 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Types } from "mongoose";
+import { env } from "../config/env";
+import { rateLimitSettings } from "../middleware/rateLimits";
 import { BeneficiaryModel } from "../models/Beneficiary";
 import { BranchModel } from "../models/Branch";
 import type { BusinessDocument } from "../models/Business";
 import { BusinessModel } from "../models/Business";
-import type { MembershipDocument } from "../models/Membership";
+import { MembershipModel, type MembershipDocument } from "../models/Membership";
+import { RateLimitHitModel } from "../models/RateLimitHit";
 import { TransactionModel } from "../models/Transaction";
 import {
   OPEN_TRANSFER_STATUSES,
@@ -36,7 +39,7 @@ import {
   levelsOf,
   type PlannedLevel,
 } from "./approvals";
-import { canAccessBranch } from "./team";
+import { canAccessBranch, ensureOwnerMembership, hasPermission } from "./team";
 
 // ---------------------------------------------------------------------------------------------------------
 // Banks, account lookup and fees
@@ -236,14 +239,104 @@ export async function resolveBranchRecipient(business: BusinessDocument, branchI
 const FEE_TTL_MS = 10 * 60 * 1000;
 const feeCache = new Map<number, { at: number; feeKobo: number; stampDutyKobo: number }>();
 
-/** Liquifia's fee for a payout of this amount, including the ₦50 stamp duty on ₦10,000 or more. */
+/** A fee in kobo we can hold and charge: a whole number, at least 0. */
+const isFeeKobo = (kobo: number) => Number.isSafeInteger(kobo) && kobo >= 0;
+
+/**
+ * Liquifia's fee for a payout of this amount, including the ₦50 stamp duty on ₦10,000 or more. The quote's shape
+ * is checked (liquifia.quotePayoutFee), and only a usable answer is cached: a NaN fee would pass the balance
+ * check (`total > available` is false) and be reused for 10 minutes.
+ */
 export async function quoteFee(amountKobo: number) {
   const cached = feeCache.get(amountKobo);
   if (cached && Date.now() - cached.at < FEE_TTL_MS) return { feeKobo: cached.feeKobo, stampDutyKobo: cached.stampDutyKobo };
   const quote = await liquifia.quotePayoutFee(toNaira(amountKobo));
-  const result = { feeKobo: toKobo(quote.fee), stampDutyKobo: toKobo(quote.stamp_duty ?? 0) };
+  const result = { feeKobo: toKobo(quote.fee), stampDutyKobo: toKobo(quote.stamp_duty) };
+  if (!isFeeKobo(result.feeKobo) || !isFeeKobo(result.stampDutyKobo)) {
+    throw new LiquifiaError(0, "UNEXPECTED_RESPONSE", `Liquifia's fee quote for ${amountKobo} kobo isn't a usable amount`);
+  }
   feeCache.set(amountKobo, { at: Date.now(), ...result });
   return result;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The name-check budget
+// ---------------------------------------------------------------------------------------------------------
+
+/**
+ * Name enquiries one member may cause in 15 minutes, across everything that asks the bank whose account it is
+ * and shows the answer: `resolve-account`, `resolve-accounts`, the bulk preview, and saving beneficiaries (one
+ * at a time or imported). 600 is three 200-row files' worth of new accounts: room to check an upload, fix it and
+ * check the fixes, or to import a payroll sheet, while one member can look up at most 2,400 names an hour and
+ * can't make Liquifia throttle every business. Answers the bulk review reuses from the 5-minute cache cost
+ * nothing, so checking the same rows again is free. Sending isn't counted: it needs the PIN, and a payment must
+ * never be refused because its rows were reviewed first.
+ */
+export const NAME_CHECKS_PER_WINDOW = 600;
+const NAME_CHECK_WINDOW_MS = 15 * 60_000;
+
+/** How many of these accounts a name enquiry would ask the bank about now: distinct, well-formed, not in the cache. */
+export function uncachedNameChecks(rows: { accountNumber: string; bankUuid: string }[]) {
+  const now = Date.now();
+  const keys = new Set(rows.filter((r) => /^\d{10}$/.test(r.accountNumber)).map((r) => `${r.bankUuid}:${r.accountNumber}`));
+  return [...keys].filter((key) => {
+    const hit = nameCache.get(key);
+    return !hit || now - hit.at >= NAME_TTL_MS;
+  }).length;
+}
+
+const nameChecksExhausted = (counter: { hits: number; resetAt: Date } | null, wanted: number) => {
+  const retryAt = counter?.resetAt ?? new Date(Date.now() + NAME_CHECK_WINDOW_MS);
+  const minutes = Math.max(1, Math.ceil((retryAt.getTime() - Date.now()) / 60_000));
+  return new HttpError(
+    429,
+    `You've checked a lot of accounts with the bank in the last few minutes. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+    "RATE_LIMITED",
+    { retryAt, limit: NAME_CHECKS_PER_WINDOW, remaining: Math.max(0, NAME_CHECKS_PER_WINDOW - (counter?.hits ?? 0)), requested: wanted },
+  );
+};
+
+/**
+ * Takes `n` name checks from the member's budget (NAME_CHECKS_PER_WINDOW per 15 minutes), all or nothing,
+ * before the bank is asked; refuses with 429 RATE_LIMITED (`details: { retryAt, limit, remaining, requested }`)
+ * when there isn't room, and nothing is checked. Counted in MongoDB next to the other rate limits
+ * (RateLimitHit), so it holds across restarts and instances; each write is a single conditional update, so
+ * requests at the same moment can't both take the last of it. Off in tests unless rate limits are turned on,
+ * and, like the other limits, lets requests through (logging it) if the counter can't be written.
+ */
+export async function spendNameChecks(userId: string, n: number) {
+  if (n <= 0 || (env.nodeEnv === "test" && !rateLimitSettings.enabledInTests)) return;
+  const key = `name-checks:${createHash("sha256").update(`user:${userId}`).digest("base64url")}`;
+  if (n > NAME_CHECKS_PER_WINDOW) throw nameChecksExhausted(null, n);
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // This instance's clock decides the window (an upsert can't filter on MongoDB's): a few seconds' drift
+      // between instances only moves where a 15-minute window ends.
+      const now = new Date();
+      // Room in the current window: add these to it.
+      const added = await RateLimitHitModel.updateOne(
+        { key, resetAt: { $gt: now }, hits: { $lte: NAME_CHECKS_PER_WINDOW - n } },
+        { $inc: { hits: n } },
+      );
+      if (added.matchedCount) return;
+      // No current window (none yet, or the last one is over): start one with these. If there is a current one,
+      // the insert hits its key, and it has no room (unless another request started it just now: look again).
+      try {
+        const started = await RateLimitHitModel.updateOne(
+          { key, resetAt: { $lte: now } },
+          { $set: { hits: n, resetAt: new Date(now.getTime() + NAME_CHECK_WINDOW_MS) } },
+          { upsert: true },
+        );
+        if (started.matchedCount || started.upsertedCount) return;
+      } catch (err: any) {
+        if (err?.code !== 11000) throw err;
+      }
+    }
+  } catch (err) {
+    console.error("The name-check budget can't reach MongoDB: name checks are NOT being limited.", err);
+    return;
+  }
+  throw nameChecksExhausted(await RateLimitHitModel.findOne({ key }).lean(), n);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -387,7 +480,10 @@ export async function planForRequest(opts: {
   return { plan: approvalPlan(opts.business, opts.membership, decidingKobo), earlierKobo, decidingKobo };
 }
 
-/** What an Idempotency-Key's request hash covers in each row: where the money goes, how much, and the narration. */
+/**
+ * What an Idempotency-Key's request hash covers in each row: where the money goes (the account and its bank),
+ * how much, and the narration. `beneficiary` is only for LEGACY_SEND_HASH records.
+ */
 export type KeyedRow = {
   accountNumber: string;
   bankUuid: string;
@@ -397,14 +493,34 @@ export type KeyedRow = {
 };
 
 /**
- * What a request asks for, so the same Idempotency-Key with different details is refused. The batch title is
- * left out: it moves no money, and a payout list's default title carries the date, so a retry after midnight
- * would be refused (and the client could then send it again under a new key). The account name a bulk row was
- * reviewed with is left out too: it's a check on the recipient (resolvePayoutRows), not part of the payment. A
- * retry after the name was checked again must replay the first batch, not be refused or sent twice. The shape
- * must not change: stored hashes are compared with it.
+ * What a request asks for, so the same Idempotency-Key with different details is refused: the account it's sent
+ * from, the payout list it runs (if any), and each row's account, bank, amount and narration. Left out:
+ * - the batch title: it moves no money, and a payout list's default title carries the date, so a retry after
+ *   midnight would be refused (and the client could then send it again under a new key);
+ * - the account name a row was reviewed with: a check on the recipient (resolvePayoutRows), not part of the
+ *   payment, so a retry after the name was checked again replays;
+ * - the saved beneficiary a row is paid as, and whether the request saves new ones (`saveBeneficiary`,
+ *   `saveBeneficiaries`): a row is the account it pays, whether it names a beneficiary or the account, and
+ *   whether or not saving gave it a beneficiary id on the first attempt. A retry that unticks (or ticks)
+ *   "save" must replay, not be refused and then sent again under a new key. The apps' keys follow the same
+ *   details (the account, recipient, amount and narration per row).
+ * The shape must not change: stored hashes are compared with it.
  */
 function sendRequestHash(branchId: Types.ObjectId, payoutList: Types.ObjectId | undefined, rows: KeyedRow[]) {
+  return requestHash({
+    v: 2,
+    branch: String(branchId),
+    payoutList: payoutList ? String(payoutList) : null,
+    rows: rows.map((r) => ({ accountNumber: r.accountNumber, bankUuid: r.bankUuid, amountKobo: r.amountKobo, narration: r.narration ?? null })),
+  });
+}
+
+/**
+ * The hash transfers stored until 2026-10-25, which also held each row's beneficiary id. Still accepted, so a
+ * retry of a request first sent before then replays (Liquifia and the apps retry within hours). It can go once
+ * no transfer from before then can be retried.
+ */
+function legacySendHash(branchId: Types.ObjectId, payoutList: Types.ObjectId | undefined, rows: KeyedRow[]) {
   return requestHash({
     branch: String(branchId),
     payoutList: payoutList ? String(payoutList) : null,
@@ -417,6 +533,12 @@ function sendRequestHash(branchId: Types.ObjectId, payoutList: Types.ObjectId | 
     })),
   });
 }
+
+/** The hashes a stored Idempotency-Key record may have for this request: today's shape, and the one before. */
+const acceptedSendHashes = (branchId: Types.ObjectId, payoutList: Types.ObjectId | undefined, rows: KeyedRow[]) => [
+  sendRequestHash(branchId, payoutList, rows),
+  legacySendHash(branchId, payoutList, rows),
+];
 
 /** The first transfer this member sent with this Idempotency-Key, if any. */
 const firstWithKey = (business: BusinessDocument, userId: string, clientKey: string) =>
@@ -441,13 +563,16 @@ async function sendingAccount(business: BusinessDocument, membership: Membership
 /**
  * A retry's answer, found before the recipients are looked up with the bank: a client retrying its
  * Idempotency-Key while the bank is down gets the replay of what it first sent (or IDEMPOTENCY_KEY_REUSED if
- * the details changed), not a 502. `rows` works out the hashed details from the database alone, and returns
- * null when it can't (a saved beneficiary is gone, say); the caller then carries on as usual, and
- * createTransfers checks the key again after the lookups and under the lock.
+ * the details changed), not a 502. When the key has been used, `rows` works out the hashed details from the
+ * request and `sent`, what the key created, never from beneficiaries or lists as they are now
+ * (keyedPayoutRows, keyedBranchRow, keyedTransferRow): a beneficiary the first request paid, or saved, may have
+ * been deleted or saved again since, and refusing the retry then (404, INVALID_ROWS or IDEMPOTENCY_KEY_REUSED)
+ * would have the client send it again under a new key and pay twice. With no transfer for the key yet, the
+ * caller carries on as usual, and createTransfers checks the key again after the lookups and under the lock.
  *
  * A payout list run can leave the account and the rows to the list, which may have changed or gone since:
  * then `branchId` is left out (the key's first transfer says where it was sent from) and `rows` reads them
- * from `sent`, what the key created (keyedTransferRow).
+ * from `sent` (keyedTransferRow).
  */
 export async function replayBeforeLookups(opts: {
   business: BusinessDocument;
@@ -456,7 +581,7 @@ export async function replayBeforeLookups(opts: {
   branchId?: string;
   payoutList?: Types.ObjectId;
   clientKey?: string;
-  rows: (sent: TransferDocument[]) => Promise<KeyedRow[] | null>;
+  rows: (sent: TransferDocument[]) => KeyedRow[] | Promise<KeyedRow[]>;
 }) {
   if (!opts.clientKey) return null;
   const first = await firstWithKey(opts.business, opts.userId, opts.clientKey);
@@ -465,9 +590,7 @@ export async function replayBeforeLookups(opts: {
   assertMoneyCanMove(opts.business);
   const { branch } = await sendingAccount(opts.business, opts.membership, opts.branchId ?? String(first.branch));
   const replay = await replayOf(first);
-  const rows = await opts.rows(replay.transfers);
-  if (!rows) return null;
-  assertSameRequest(first.requestHash, sendRequestHash(branch._id, opts.payoutList, rows));
+  assertSameRequest(first.requestHash, acceptedSendHashes(branch._id, opts.payoutList, await opts.rows(replay.transfers)));
   return replay;
 }
 
@@ -480,13 +603,30 @@ export const keyedTransferRow = (t: TransferDocument): KeyedRow => ({
   beneficiary: t.recipient!.beneficiary,
 });
 
-/** A transfer to one of the business's branches, as its Idempotency-Key hash saw it; null if that needs the bank list. */
-export async function keyedBranchRow(business: BusinessDocument, branchId: string, row: { amountKobo: number; narration?: string }) {
-  const branch = await BranchModel.findOne({ _id: branchId, business: business._id }).select("_id");
-  const account = branch && (await VirtualAccountModel.findOne({ branch: branch._id }).select("accountNumber bankUuid"));
-  // The first send stored the bank's id on the account (bankUuidForAccount); without it, only the bank list knows.
-  if (!account?.bankUuid) return null;
-  return { accountNumber: account.accountNumber, bankUuid: account.bankUuid, amountKobo: row.amountKobo, narration: row.narration } satisfies KeyedRow;
+/**
+ * A transfer to one of the business's own branches, as its Idempotency-Key hash saw it, from `sent` (what the
+ * key created): the branch account it was paid into. If the key paid something else, the account is left
+ * empty, so the hash can't match and the key is refused as reused.
+ */
+export function keyedBranchRow(branchId: string, row: { amountKobo: number; narration?: string }, sent: TransferDocument[]): KeyedRow {
+  const paid = sent[0]?.kind === "internal" && sent[0].recipient?.branch && String(sent[0].recipient.branch) === branchId ? sent[0].recipient : null;
+  return { accountNumber: paid?.accountNumber ?? "", bankUuid: paid?.bankUuid ?? "", amountKobo: row.amountKobo, narration: row.narration };
+}
+
+/**
+ * The business's approval rule and the member's membership read again (createTransfers does this under the
+ * account lock), refusing a member who has been removed (403 NOT_A_MEMBER), can no longer send (403
+ * PERMISSION_DENIED) or no longer has the branch (404, as when sending from it).
+ */
+async function currentSender(business: BusinessDocument, userId: string, branchId: Types.ObjectId) {
+  const fresh = (await BusinessModel.findById(business._id).select("owner transferApproval")) ?? business;
+  let membership = await MembershipModel.findOne({ business: business._id, user: userId });
+  // The owner's membership is made when it's first needed, so it can't be missing for them.
+  if (!membership && fresh.owner?.equals(userId)) membership = await ensureOwnerMembership(fresh);
+  if (!membership) throw new HttpError(403, "You're not a member of this business", "NOT_A_MEMBER");
+  if (!hasPermission(membership, "transfers.create")) throw new HttpError(403, "Your role doesn't allow this", "PERMISSION_DENIED");
+  if (!canAccessBranch(membership, branchId)) throw new HttpError(404, "Branch not found");
+  return { business: fresh, membership };
 }
 
 /**
@@ -508,26 +648,21 @@ export async function createTransfers(opts: {
   assertMoneyCanMove(business);
   const { branch, account } = await sendingAccount(business, membership, opts.branchId);
 
-  const hash = opts.clientKey
-    ? sendRequestHash(
-        branch._id,
-        opts.payoutList,
-        requests.map((r) => ({
-          accountNumber: r.recipient.accountNumber,
-          bankUuid: r.recipient.bankUuid,
-          amountKobo: r.amountKobo,
-          narration: r.narration,
-          beneficiary: r.beneficiary,
-        })),
-      )
-    : undefined;
+  const keyed: KeyedRow[] = requests.map((r) => ({
+    accountNumber: r.recipient.accountNumber,
+    bankUuid: r.recipient.bankUuid,
+    amountKobo: r.amountKobo,
+    narration: r.narration,
+    beneficiary: r.beneficiary,
+  }));
+  const hash = opts.clientKey ? sendRequestHash(branch._id, opts.payoutList, keyed) : undefined;
 
   /** What was created the first time this Idempotency-Key was used, if it was. */
   const replay = async () => {
     if (!opts.clientKey) return null;
     const first = await firstWithKey(business, userId, opts.clientKey);
     if (!first) return null;
-    assertSameRequest(first.requestHash, hash);
+    assertSameRequest(first.requestHash, acceptedSendHashes(branch._id, opts.payoutList, keyed));
     return replayOf(first);
   };
 
@@ -554,9 +689,13 @@ export async function createTransfers(opts: {
     const replayed = await replay();
     if (replayed) return replayed;
 
-    // Under the lock, so the member's 24-hour total includes anything they sent from this account just before.
-    plan = (await planForRequest({ business, membership, userId, branchId: branch._id, amountKobo })).plan;
-    await assertPlanReachable(business, branch._id, plan, userId);
+    // Under the lock, so the member's 24-hour total includes anything they sent from this account just before,
+    // and with the approval rule and the member's role as they are now: a big bulk transfer can take a minute
+    // or more to get here (200 name checks, fee quotes), and mustn't go out under a rule the owner has since
+    // tightened, or for someone who has since been removed or lost the right to send.
+    const sender = await currentSender(business, userId, branch._id);
+    plan = (await planForRequest({ business: sender.business, membership: sender.membership, userId, branchId: branch._id, amountKobo })).plan;
+    await assertPlanReachable(sender.business, branch._id, plan, userId);
 
     const { availableKobo } = await availableBalance(account);
     if (totalKobo > availableKobo) {
@@ -843,11 +982,25 @@ export async function decideTransfers(opts: {
   return [...decided, ...advanced];
 }
 
+/** The rows of a batch this member can decide now, and their total before fees: "Approve N (₦X)". */
+export function awaitingMember(transfers: TransferDocument[], membership: MembershipDocument, userId: string) {
+  const rows = transfers.filter((t) => canDecide(t, membership, userId));
+  return { rows, count: rows.length, amountKobo: rows.reduce((s, t) => s + t.amountKobo, 0) };
+}
+
 /**
  * Approves or rejects the rows of a batch that are waiting for this member (see `canDecide`) and leaves the
  * others as they are, so a batch partly approved one row at a time, or with rows at different levels, can
  * still be finished as a batch. `skipped` counts the rows that were waiting but not decided here, including
  * any someone else decided at the same moment.
+ *
+ * `expect` binds the decision to what the member was shown: the count and total (`awaitingMe`,
+ * `awaitingMeKobo`) of the rows they could decide then. If the rows they can decide now (in `transfers`, read
+ * for this request) aren't exactly that, it's refused with 409 BATCH_CHANGED (`details`: the count and total
+ * now) and nothing is decided. Otherwise exactly those rows, by id, are decided, each with a write conditional
+ * on it still being at the level read (decideTransfers). A row that reaches the member's level after the read
+ * isn't among them, and one someone else decides first is skipped, so the decision never covers more rows or
+ * money than the member confirmed, only less.
  */
 export async function decideBatchTransfers(opts: {
   transfers: TransferDocument[];
@@ -855,20 +1008,27 @@ export async function decideBatchTransfers(opts: {
   userId: string;
   decision: "approve" | "reject";
   note?: string;
+  expect?: { count: number; amountKobo: number };
 }) {
-  const { membership, userId } = opts;
-  const pending = opts.transfers.filter((t) => t.status === "pending_approval");
+  const { transfers, membership, userId, decision, note, expect } = opts;
+  const pending = transfers.filter((t) => t.status === "pending_approval");
   if (!pending.length) throw new HttpError(409, "Nothing in this batch is waiting for approval", "TRANSFER_NOT_PENDING");
-  const mine = pending.filter((t) => canDecide(t, membership, userId));
-  if (!mine.length) {
+  const mine = awaitingMember(pending, membership, userId);
+  if (!mine.count) {
     // A batch has one creator, so its creator can never decide any of it.
     if (pending.every((t) => t.createdBy.equals(userId))) {
       throw new HttpError(403, "Someone else has to approve a transfer you created", "CANNOT_APPROVE_OWN");
     }
     throw new HttpError(409, "Nothing in this batch is waiting for your approval", "NOTHING_TO_DECIDE", { pending: pending.length });
   }
+  if (expect && (mine.count !== expect.count || mine.amountKobo !== expect.amountKobo)) {
+    throw new HttpError(409, "This bulk transfer has changed since you opened it. Check what's waiting for you now.", "BATCH_CHANGED", {
+      count: mine.count,
+      amountKobo: mine.amountKobo,
+    });
+  }
   // decideTransfers updates each row only if it's still at the level read here, and returns those it changed.
-  const changed = await decideTransfers({ ...opts, transfers: mine });
+  const changed = await decideTransfers({ transfers: mine.rows, membership, userId, decision, note });
   return { decided: changed.length, skipped: pending.length - changed.length };
 }
 

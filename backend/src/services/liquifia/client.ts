@@ -171,7 +171,21 @@ export const liquifia = {
     }
     return { ...result, account_name: name } as LiquifiaAccountLookup;
   },
-  quotePayoutFee: (amountNaira: number) => request<LiquifiaFeeQuote>("GET", "/payouts/fee", { query: { amount: amountNaira } }),
+  /**
+   * The fee for a payout of this amount. `fee` must be a number (or numeric text) of at least 0, and so must
+   * `stamp_duty` when it's given: a missing fee would become NaN, which passes every balance check, and a null
+   * one 0, so the hold would miss the fee. An answer without `stamp_duty` is taken as none: the docs mark it
+   * optional, and it's part of `fee` anyway, so it never changes what's held.
+   */
+  quotePayoutFee: async (amountNaira: number): Promise<LiquifiaFeeQuote> => {
+    const result = await request<unknown>("GET", "/payouts/fee", { query: { amount: amountNaira } });
+    const what = `fee quote for ₦${amountNaira}`;
+    if (!isRecord(result)) throw unexpected(`${what} isn't an object`);
+    const fee = asAmount(result.fee, `${what}: fee`);
+    const stampDuty = result.stamp_duty == null ? 0 : asAmount(result.stamp_duty, `${what}: stamp_duty`);
+    if (fee < 0 || stampDuty < 0) throw unexpected(`${what} is below zero`);
+    return { ...result, fee, stamp_duty: stampDuty } as LiquifiaFeeQuote;
+  },
   /** The payout created (or replayed for this key). Without an id, or about another reference, it's an unknown outcome. */
   createPayout: async (body: LiquifiaPayoutInput, idempotencyKey: string) => {
     const payout = await request<unknown>("POST", "/payouts", { body: { country: "NG", currency: "NGN", ...body }, idempotencyKey });
@@ -216,13 +230,17 @@ export type LiquifiaBank = { uuid: string; name: string; code?: string; [key: st
 
 export type LiquifiaAccountLookup = { account_number: string; account_name: string; bank_name?: string; bank_code?: string };
 
-/** All amounts in naira. `fee` already includes `stamp_duty` (₦50 on payouts of ₦10,000 or more). */
+/**
+ * All amounts in naira. `fee` already includes `stamp_duty` (₦50 on payouts of ₦10,000 or more). quotePayoutFee
+ * checks `fee` and `stamp_duty` (finite, at least 0; `stamp_duty` 0 when Liquifia leaves it out); the other
+ * fields are as Liquifia sent them and aren't relied on.
+ */
 export type LiquifiaFeeQuote = {
   amount: number;
   fee: number;
   flat_fee?: number;
   fee_bps?: number;
-  stamp_duty?: number;
+  stamp_duty: number;
   total: number;
   currency: string;
 };

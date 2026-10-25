@@ -53,6 +53,13 @@ async function createLink(token: string, body: Record<string, unknown>) {
 const payer = (n: number | string) => ({ name: "Chidi Okonkwo", email: `chidi${n}@example.com` });
 const start = (slug: string, body: Record<string, unknown>, ip = "10.0.0.1") =>
   t.api("POST", `/api/public/pay/${slug}/checkouts`, { body, headers: { "X-Forwarded-For": ip } });
+const past = () => new Date(Date.now() - 1000);
+
+/** A transfer into `va` that Liquifia reports, then a sync. */
+async function receive(va: { providerAccountId: string }, amountKobo: number, narration: string | null = null) {
+  t.liquifia.inboundTransfers.unshift(inboundTransfer(va.providerAccountId, amountKobo, { narration, payer_name: "Chidi Okonkwo", created_at: new Date().toISOString() }));
+  expect((await t.api("POST", "/api/admin/transactions/sync", { token: staffToken })).status).toBe(200);
+}
 
 describe("open checkouts", () => {
   test("knowing a payer's email isn't enough to take over their checkout, and nothing they entered is overwritten", async () => {
@@ -93,7 +100,7 @@ describe("open checkouts", () => {
 });
 
 describe("the unique-amount pool", () => {
-  test("one address can hold only a slice of a price's amounts; IPv6 counts by /56", async () => {
+  test("one address can hold only a slice of a price's amounts; IPv6 counts by /48", async () => {
     const { owner, headOfficeId } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 6_000_00 });
     for (let n = 0; n < 10; n++) expect((await start(link.slug, payer(`ip${n}`), "10.1.0.1")).status).toBe(201);
@@ -103,9 +110,9 @@ describe("the unique-amount pool", () => {
     // Everyone else can still pay.
     expect((await start(link.slug, payer("ip-other"), "10.1.0.2")).status).toBe(201);
 
-    // Ten addresses in one /56 are one address.
-    for (let n = 0; n < 10; n++) expect((await start(link.slug, payer(`v6-${n}`), `2001:db8:aa:${(0x100 + n).toString(16)}::${n + 1}`)).status).toBe(201);
-    expect((await start(link.slug, payer("v6-more"), "2001:db8:aa:1ff::99")).body.code).toBe("TOO_MANY_OPEN_CHECKOUTS");
+    // Ten addresses in ten different /56s of one /48 are one address.
+    for (let n = 0; n < 10; n++) expect((await start(link.slug, payer(`v6-${n}`), `2001:db8:aa:${(n + 1).toString(16)}00::${n + 1}`)).status).toBe(201);
+    expect((await start(link.slug, payer("v6-more"), "2001:db8:aa:ff00::99")).body.code).toBe("TOO_MANY_OPEN_CHECKOUTS");
     expect((await start(link.slug, payer("v6-other"), "2001:db8:ab::1")).status).toBe(201);
 
     // Once a hold ends, the address can start again.
@@ -139,6 +146,63 @@ describe("the unique-amount pool", () => {
   });
 });
 
+describe("a late transfer after the hold on its amount", () => {
+  test("once the hold ends, the checkout shows neither the account nor the amount, live or test", async () => {
+    const { owner, headOfficeId, headVa } = await setup();
+    const live = await createLink(owner.token, { branch: headOfficeId, amountKobo: 2_500_00 });
+    const trial = await createLink(owner.token, { branch: headOfficeId, title: "Trial", amountKobo: 2_500_00, mode: "test" });
+    for (const link of [live, trial]) {
+      const open = (await start(link.slug, payer(`hold-${link.mode}`))).body;
+      // Past its 30 minutes but inside the hold: a late transfer still counts, so the details stay.
+      await CheckoutModel.updateOne({ token: open.token }, { expiresAt: past() });
+      const late = (await t.api("GET", `/api/public/checkouts/${open.token}`)).body;
+      expect(late).toMatchObject({ status: "expired", amountKobo: open.amountKobo });
+      expect(late.payTo).not.toBeNull();
+      // Past the hold: the amount may be someone else's now, so nothing to send is shown.
+      await CheckoutModel.updateOne({ token: open.token }, { holdUntil: past() });
+      for (const path of [`/api/public/checkouts/${open.token}`, `/api/public/pay/${link.slug}/checkouts/${open.token}`]) {
+        const after = (await t.api("GET", path)).body;
+        expect(after).toMatchObject({ status: "expired", payTo: null, amountKobo: null, reference: open.reference, priceKobo: 2_500_00 });
+        expect(JSON.stringify(after)).not.toContain(headVa.accountNumber);
+      }
+    }
+  });
+
+  test("an amount handed out again matches nothing on its own while the old checkout is open; the reference still pays its own", async () => {
+    const { owner, headOfficeId, headVa } = await setup();
+    const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 9_000_00 });
+    const old = (await start(link.slug, payer("old"), "10.9.0.1")).body;
+    // Its 30 minutes and its 2-hour hold pass with nothing sent.
+    await CheckoutModel.updateOne({ token: old.token }, { expiresAt: past(), holdUntil: past() });
+
+    // New payers get every other amount first...
+    for (let n = 0; n < 98; n++) {
+      const res = await start(link.slug, payer(`fill${n}`), `10.9.1.${n + 1}`);
+      expect(res.status).toBe(201);
+      expect(res.body.amountKobo).not.toBe(old.amountKobo);
+    }
+    // ...and the old one's amount only once the rest are taken.
+    const reused = (await start(link.slug, payer("new"), "10.9.2.1")).body;
+    expect(reused.amountKobo).toBe(old.amountKobo);
+
+    // The first payer sends that amount from an old tab, without the reference: it isn't taken as the new
+    // payer's payment (or the old one's). It waits to be linked by hand.
+    await receive(headVa, old.amountKobo);
+    expect((await t.api("GET", `/api/public/checkouts/${reused.token}`)).body.status).toBe("pending");
+    expect((await t.api("GET", `/api/public/checkouts/${old.token}`)).body.status).toBe("expired");
+
+    // With the reference, a late transfer pays its own checkout, after the hold, whoever has the amount now.
+    await receive(headVa, old.amountKobo, `Ankara ${old.reference}`);
+    expect((await t.api("GET", `/api/public/checkouts/${old.token}`)).body).toMatchObject({ status: "paid", paidKobo: old.amountKobo });
+    expect((await t.api("GET", `/api/public/checkouts/${reused.token}`)).body.status).toBe("pending");
+
+    // Now the new payer's is the only open checkout at that amount: their transfer matches on it.
+    await receive(headVa, reused.amountKobo);
+    expect((await t.api("GET", `/api/public/checkouts/${reused.token}`)).body.status).toBe("paid");
+    expect((await CheckoutModel.findOne({ token: reused.token }))!.matchedBy).toBe("amount");
+  });
+});
+
 describe("a payment limit", () => {
   test("counts payers still within their time to pay, so the last place isn't sold twice", async () => {
     const { owner, headOfficeId } = await setup();
@@ -160,6 +224,37 @@ describe("a payment limit", () => {
     expect((await start(link.slug, payer("c"), "10.3.0.3")).status).toBe(201);
   });
 
+  test("one address or email holds only a small share of the places, across every price on the link", async () => {
+    const { owner, headOfficeId } = await setup();
+    // The payer chooses the amount, so each price has its own 99 amounts, but not its own places.
+    const link = await createLink(owner.token, { branch: headOfficeId, maxPayments: 20 });
+    let kobo = 1_000_00;
+    const at = (who: string, ip: string) => start(link.slug, { ...payer(who), amountKobo: (kobo += 100_00) }, ip);
+
+    // 10% of 20 places: two each.
+    const mine = [await at("a1", "10.6.0.1"), await at("a2", "10.6.0.1")];
+    expect(mine.map((r) => r.status)).toEqual([201, 201]);
+    const third = await at("a3", "10.6.0.1");
+    expect(third.status).toBe(429);
+    expect(third.body.code).toBe("TOO_MANY_OPEN_CHECKOUTS");
+    // The same email from other addresses.
+    expect([(await at("e", "10.6.1.1")).status, (await at("e", "10.6.1.2")).status, (await at("e", "10.6.1.3")).status]).toEqual([201, 201, 429]);
+    // One IPv6 /48 is one address, whichever /56 inside it.
+    expect([(await at("v1", "2001:db8:77:100::1")).status, (await at("v2", "2001:db8:77:200::1")).status]).toEqual([201, 201]);
+    expect((await at("v3", "2001:db8:77:ff00::1")).status).toBe(429);
+    expect((await at("v4", "2001:db8:78::1")).status).toBe(201);
+    // Once one of theirs runs out of time, the address can start another.
+    await CheckoutModel.updateOne({ token: mine[0]!.body.token }, { expiresAt: past() });
+    expect((await at("a4", "10.6.0.1")).status).toBe(201);
+
+    // A big limit still caps one address at the usual 10, counted across every price.
+    const big = await createLink(owner.token, { branch: headOfficeId, title: "Big sale", maxPayments: 1000 });
+    for (let n = 0; n < 10; n++) {
+      expect((await start(big.slug, { ...payer(`big${n}`), amountKobo: 2_000_00 + n * 100_00 }, "10.6.2.1")).status).toBe(201);
+    }
+    expect((await start(big.slug, { ...payer("big-more"), amountKobo: 9_900_00 }, "10.6.2.1")).body.code).toBe("TOO_MANY_OPEN_CHECKOUTS");
+  });
+
   test("a payment that lands after its place went to someone else is recorded, but flagged and the team told", async () => {
     const { owner, headOfficeId, headVa } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 3_000_00, maxPayments: 1 });
@@ -176,6 +271,10 @@ describe("a payment limit", () => {
     // Then the first payer's transfer lands, still inside the hold on their amount: it's theirs, so it's matched.
     await pay(late);
     expect((await t.api("GET", `/api/public/checkouts/${late.token}`)).body.status).toBe("paid");
+    // The business's server sees it on the verify route: still "paid" (the money arrived), but over the limit.
+    const verify = (token: string) => t.api("GET", `/api/public/pay/${link.slug}/checkouts/${token}`);
+    expect((await verify(late.token)).body).toMatchObject({ status: "paid", overLimit: true });
+    expect((await verify(onTime.body.token)).body).toMatchObject({ status: "paid", overLimit: false });
 
     const received = await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&status=received`, { token: owner.token });
     const flags = Object.fromEntries(received.body.items.map((c: any) => [c.payer.email, c.overLimit]));

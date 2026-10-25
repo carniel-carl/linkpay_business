@@ -8,9 +8,14 @@ import { HttpError } from "./HttpError";
  */
 export const requestHash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-/** Refuses to replay a key that was first used for a different request. Records from before hashes replay as before. */
-export function assertSameRequest(stored: string | null | undefined, hash: string | undefined) {
-  if (stored && hash && stored !== hash) {
+/**
+ * Refuses to replay a key that was first used for a different request. Records from before hashes replay as
+ * before. `hash` can list several: the request in each shape a stored record may have (when a hash's shape
+ * changed, the old one is accepted for records made before).
+ */
+export function assertSameRequest(stored: string | null | undefined, hash: string | readonly string[] | undefined) {
+  const accepted = typeof hash === "string" ? [hash] : (hash ?? []);
+  if (stored && accepted.length && !accepted.includes(stored)) {
     throw new HttpError(
       422,
       "This Idempotency-Key was already used for a different request. Send a new key for a new request.",

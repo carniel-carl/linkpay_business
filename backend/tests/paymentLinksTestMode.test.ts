@@ -107,7 +107,7 @@ describe("test mode", () => {
     expect(match.body.code).toBe("CHECKOUT_IS_TEST");
   });
 
-  test("the payer simulates the payment: paid, a notification marked as a test, no receipt email, and no totals", async () => {
+  test("the payer simulates the payment: paid, no receipt email or notification, and no totals; the team's simulation tells them", async () => {
     const { owner, headOfficeId } = await setup();
     const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 25_000_00, mode: "test", redirectUrl: "https://adaeze.ng/thanks", maxPayments: 1 });
     const checkout = (await start(link.slug, { ...payer(), clientReference: "ORDER-7" })).body;
@@ -122,13 +122,14 @@ describe("test mode", () => {
     // The business's server sees it's a test when it confirms.
     expect((await t.api("GET", `/api/public/checkouts/${checkout.token}`)).body).toMatchObject({ status: "paid", mode: "test", clientReference: "ORDER-7" });
 
-    // Anyone can start a test checkout with anyone's email, so a payment simulated on the public page emails nobody.
+    // Anyone can start a test checkout with anyone's name and email, so a payment simulated on the public page
+    // emails nobody and tells (pushes to) nobody on the team.
     expect(outbox.filter((m) => m.to === payer().email)).toHaveLength(0);
-    expect((await CheckoutModel.findOne({ token: checkout.token }))!.receiptSentAt).toBeUndefined();
-    const note = await NotificationModel.findOne({ recipient: owner.user._id, type: "payment_link.paid" }).sort({ _id: -1 });
-    expect(note!.title).toContain("(test)");
+    const simulated = (await CheckoutModel.findOne({ token: checkout.token }))!;
+    expect(simulated.receiptSentAt).toBeUndefined();
+    expect(await NotificationModel.exists({ type: "payment_link.paid", "data.checkoutId": simulated.id })).toBeNull();
 
-    // A team member simulating it from the dashboard still sends the test receipt, so they can see it.
+    // A team member simulating it from the dashboard still sends the test receipt and the notification, so they can see them.
     const second = (await start(link.slug, payer(2))).body;
     const secondId = (await CheckoutModel.findOne({ token: second.token }))!.id;
     expect((await t.api("POST", `/api/payment-links/checkouts/${secondId}/simulate`, { token: owner.token, body: { outcome: "paid" } })).status).toBe(200);
@@ -136,6 +137,8 @@ describe("test mode", () => {
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.subject).toStartWith("[Test] ");
     expect(receipts[0]!.text).toContain("No money was sent");
+    const note = await NotificationModel.findOne({ recipient: owner.user._id, type: "payment_link.paid", "data.checkoutId": secondId });
+    expect(note!.title).toContain("(test)");
 
     // Totals, the 30-day summary and the payment limit only count live payments.
     const after = (await t.api("GET", `/api/payment-links/${link._id}`, { token: owner.token })).body;
@@ -162,6 +165,30 @@ describe("test mode", () => {
     const refused = await t.api("POST", `/api/public/checkouts/${live.token}/simulate`, { body: {} });
     expect(refused.status).toBe(409);
     expect(refused.body.code).toBe("CHECKOUT_IS_LIVE");
+  });
+
+  test("a test checkout can't be simulated once its link has gone live, even after it's back in test mode", async () => {
+    const { owner, headOfficeId } = await setup();
+    const link = await createLink(owner.token, { branch: headOfficeId, amountKobo: 4_000_00, mode: "test" });
+    const checkout = (await start(link.slug, payer("cleared"))).body;
+    const id = (await CheckoutModel.findOne({ token: checkout.token }))!.id;
+    const fromPage = () => t.api("POST", `/api/public/checkouts/${checkout.token}/simulate`, { body: {} });
+    const fromDashboard = () => t.api("POST", `/api/payment-links/checkouts/${id}/simulate`, { token: owner.token, body: {} });
+
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "live" } })).status).toBe(200);
+    for (const res of [await fromPage(), await fromDashboard()]) {
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("CHECKOUT_CLEARED");
+    }
+    expect((await t.api("GET", `/api/payment-links/checkouts/${id}`, { token: owner.token })).body).toMatchObject({ status: "pending", canSimulate: false });
+    expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "test" } })).status).toBe(200);
+    expect((await fromPage()).body.code).toBe("CHECKOUT_CLEARED");
+
+    // A test checkout on a link that isn't in test mode any more, even one not marked cleared.
+    const other = (await start(link.slug, payer("not-cleared"))).body;
+    await PaymentLinkModel.updateOne({ _id: link._id }, { mode: "live" });
+    expect((await t.api("POST", `/api/public/checkouts/${other.token}/simulate`, { body: {} })).body.code).toBe("CHECKOUT_CLEARED");
+    expect(await CheckoutModel.countDocuments({ link: link._id, status: { $ne: "pending" } })).toBe(0);
   });
 
   test("going live keeps the slug and clears the test payments; new checkouts are live and the old test checkout isn't handed back", async () => {

@@ -423,14 +423,39 @@ const SCHEDULE = [
   { kind: "overdue_10", offset: 10, tone: "overdue" },
 ] as const;
 
+/** An invoice more than this many days overdue gets no more automatic reminders (overdue_10 is the last step). */
+const REMINDER_WINDOW_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The invoices with a step to send today: for each step, the due dates for which it's the latest step reached
+ * (before_due 1 to 3 days ahead, due_today on the day and the 2 after, overdue_3 from day 3 to 9, overdue_10 from
+ * day 10 to REMINDER_WINDOW_DAYS), and only where that step hasn't gone yet. Invoices between steps or done with
+ * the schedule never match, so the batch limit can't fill up with them and starve the rest. Each branch is a
+ * range on the { status, dueDate } index.
+ */
+function dueStepFilter(today: string) {
+  return SCHEDULE.map((step, i) => {
+    const next = SCHEDULE[i + 1];
+    const oldest = next ? addDays(today, 1 - next.offset) : addDays(today, -REMINDER_WINDOW_DAYS);
+    return { dueDate: { $gte: oldest, $lte: addDays(today, -step.offset) }, "reminders.sent": { $ne: step.kind } };
+  });
+}
+
 /** Sends the reminders that are due. Runs in the background a few times a day; safe to run more often, or twice at once. */
 export async function sendScheduledReminders(today = todayInLagos()) {
-  const candidates = await InvoiceModel.find({
+  // Suspended and closed businesses send no reminders (checked again below), so their invoices don't take up the batch.
+  const restricted = await BusinessModel.distinct("_id", { "compliance.status": { $nin: [null, "active"] } });
+  const due: Record<string, unknown> = {
     status: { $in: UNPAID_INVOICE_STATUSES },
     "reminders.enabled": true,
     "customer.email": { $exists: true, $ne: null },
-    dueDate: { $lte: addDays(today, 3) },
-  }).limit(500);
+    // Not issued in the last day (checked again below).
+    issuedAt: { $not: { $gt: new Date(Date.now() - DAY_MS) } },
+    ...(restricted.length ? { business: { $nin: restricted } } : {}),
+    $or: dueStepFilter(today),
+  };
+  const candidates = await InvoiceModel.find(due).limit(500);
   let sent = 0;
   const businesses = new Map<string, BusinessDocument | null>();
   for (const invoice of candidates) {
@@ -439,7 +464,7 @@ export async function sendScheduledReminders(today = todayInLagos()) {
     const step = [...SCHEDULE].reverse().find((s) => age >= s.offset);
     if (!step || invoice.reminders?.sent?.includes(step.kind)) continue;
     // Don't remind about an invoice issued in the last day (e.g. issued two days before it's due).
-    if (invoice.issuedAt && Date.now() - invoice.issuedAt.getTime() < 24 * 60 * 60 * 1000) continue;
+    if (invoice.issuedAt && Date.now() - invoice.issuedAt.getTime() < DAY_MS) continue;
     const key = String(invoice.business);
     if (!businesses.has(key)) businesses.set(key, await BusinessModel.findById(invoice.business));
     const business = businesses.get(key);
@@ -583,13 +608,24 @@ export type PaymentInput =
   | { transactionId: string }
   | { amountKobo: number; method: (typeof PAYMENT_METHODS)[number]; paidAt?: Date; note?: string };
 
-/** Records a payment by hand (cash, POS) or links an incoming transfer that the matcher missed. */
+/**
+ * Records a payment by hand (cash, POS) or links an incoming transfer that the matcher missed. A linked
+ * transfer must have come into the invoice's branch's account: one into another branch's is "not found", so a
+ * member limited to some branches can't move, or learn about, another branch's money.
+ */
 export async function addPayment(business: BusinessDocument, invoice: InvoiceDocument, userId: string, input: PaymentInput) {
   if (!UNPAID_INVOICE_STATUSES.includes(invoice.status as any)) {
     throw new HttpError(409, invoice.status === "draft" ? "Send or mark the invoice as sent first" : "This invoice isn't waiting for payment", "INVOICE_NOT_UNPAID");
   }
   if ("transactionId" in input) {
-    const tx = await TransactionModel.findOne({ _id: input.transactionId, business: business._id, direction: "credit", status: "success" });
+    const accounts = await VirtualAccountModel.find({ business: business._id, branch: invoice.branch }).select("_id");
+    const tx = await TransactionModel.findOne({
+      _id: input.transactionId,
+      business: business._id,
+      $or: [{ branch: invoice.branch }, { virtualAccount: { $in: accounts.map((a) => a._id) } }],
+      direction: "credit",
+      status: "success",
+    });
     if (!tx) throw new HttpError(404, "Payment not found", "TRANSACTION_NOT_FOUND");
     // Claim it atomically so the same payment can't count towards two invoices.
     const claimed = await TransactionModel.findOneAndUpdate(
@@ -619,8 +655,12 @@ export async function removePayment(invoice: InvoiceDocument, paymentId: string)
 export async function suggestPayments(invoice: InvoiceDocument) {
   const balance = balanceDue(invoice);
   const words = invoice.customer!.name.split(/\s+/).filter((w) => w.length >= 3).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // Only payments into the invoice's own branch, the same ones addPayment would accept: a member limited to
+  // one branch mustn't see another branch's incoming payments here.
+  const accounts = await VirtualAccountModel.find({ business: invoice.business, branch: invoice.branch }).select("_id");
   return TransactionModel.find({
     business: invoice.business,
+    $and: [{ $or: [{ branch: invoice.branch }, { virtualAccount: { $in: accounts.map((a) => a._id) } }] }],
     direction: "credit",
     status: "success",
     invoice: { $exists: false },

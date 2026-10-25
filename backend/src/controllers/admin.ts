@@ -203,11 +203,24 @@ export const approveBusiness: RequestHandler<IdParams> = async (req, res) => {
   await sendBusinessOverview(res, (await BusinessModel.findById(business._id))!, { audience: "admin" });
 };
 
-export const retryAccountProvisioning: RequestHandler<IdParams> = async (req, res) => {
-  const business = await findBusiness(req.params.id);
+/**
+ * An approved business whose account setup the signed-in staff member may retry: not their own (an account is
+ * what lets it take money), and not a closed one.
+ */
+async function findProvisionableBusiness(id: string, staffId: string) {
+  const business = await findBusiness(id);
+  await assertNoConflictOfInterest(staffId, business);
+  if (business.compliance?.status === "banned") {
+    throw new HttpError(409, "This business is closed (banned). Lift the ban before setting up its accounts.", "BUSINESS_BANNED");
+  }
   if (business.status !== "approved") {
     throw new HttpError(409, "Only approved businesses get an account", "NOT_APPROVED");
   }
+  return business;
+}
+
+export const retryAccountProvisioning: RequestHandler<IdParams> = async (req, res) => {
+  const business = await findProvisionableBusiness(req.params.id, req.staffId!);
   await audit(await staffActor(req), {
     action: "account.provision_retried",
     business: business._id,
@@ -219,10 +232,7 @@ export const retryAccountProvisioning: RequestHandler<IdParams> = async (req, re
 };
 
 export const retryBranchAccountProvisioning: RequestHandler<BranchParams> = async (req, res) => {
-  const business = await findBusiness(req.params.id);
-  if (business.status !== "approved") {
-    throw new HttpError(409, "Only approved businesses get an account", "NOT_APPROVED");
-  }
+  const business = await findProvisionableBusiness(req.params.id, req.staffId!);
   const branch = await findBranch(business._id, req.params.branchId);
   await audit(await staffActor(req), {
     action: "account.provision_retried",

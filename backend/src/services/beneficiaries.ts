@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { BeneficiaryModel, type BeneficiaryDocument } from "../models/Beneficiary";
 import type { BusinessDocument } from "../models/Business";
+import type { TransferDocument } from "../models/Transfer";
 import { HttpError } from "../utils/HttpError";
 import { inPool } from "../utils/pool";
 import {
@@ -15,6 +16,14 @@ import {
 
 /** Saved beneficiaries per business. */
 export const MAX_BENEFICIARIES = 2000;
+
+export const beneficiaryLimit = () =>
+  new HttpError(409, `You can save up to ${MAX_BENEFICIARIES} beneficiaries. Remove some to add more.`, "BENEFICIARY_LIMIT");
+
+/** How many more beneficiaries the business can save. Checked before asking the bank about new accounts. */
+export async function roomForBeneficiaries(business: BusinessDocument) {
+  return Math.max(0, MAX_BENEFICIARIES - (await BeneficiaryModel.countDocuments({ business: business._id })));
+}
 
 /**
  * Adds a recipient (already checked with the bank) to the business's address book, or returns the one
@@ -32,9 +41,7 @@ export async function saveBeneficiary(
   const key = { business: business._id, accountNumber: recipient.accountNumber, bankUuid: recipient.bankUuid };
   const existing = await BeneficiaryModel.findOne(key);
   if (existing) return { beneficiary: existing, created: false };
-  if ((await BeneficiaryModel.countDocuments({ business: business._id })) >= MAX_BENEFICIARIES) {
-    throw new HttpError(409, `You can save up to ${MAX_BENEFICIARIES} beneficiaries. Remove some to add more.`, "BENEFICIARY_LIMIT");
-  }
+  if ((await roomForBeneficiaries(business)) <= 0) throw beneficiaryLimit();
   try {
     const beneficiary = await BeneficiaryModel.create({
       ...key,
@@ -67,6 +74,19 @@ export async function findBeneficiary(business: BusinessDocument, id: string) {
   const beneficiary = Types.ObjectId.isValid(id) ? await BeneficiaryModel.findOne({ _id: id, business: business._id }) : null;
   if (!beneficiary) throw new HttpError(404, "Beneficiary not found", "BENEFICIARY_NOT_FOUND");
   return beneficiary;
+}
+
+/**
+ * The transfers that are a saved beneficiary's payment history (`GET /transfers?beneficiary=`): every transfer
+ * from this business to its account number and bank. Payments made to the beneficiary carry those (which never
+ * change), so this also finds payments to the account from before it was saved, or typed in by hand, without
+ * rewriting past transfers. For a beneficiary that's been deleted (or isn't this business's), the transfers paid
+ * to it as a beneficiary, as before. Always limited to `business`; branch scoping is the caller's.
+ */
+export async function paymentsToBeneficiary(business: BusinessDocument, id: string) {
+  const saved = await BeneficiaryModel.findOne({ _id: id, business: business._id }).select("accountNumber bankUuid");
+  if (!saved) return { business: business._id, "recipient.beneficiary": new Types.ObjectId(id) };
+  return { business: business._id, "recipient.accountNumber": saved.accountNumber, "recipient.bankUuid": saved.bankUuid };
 }
 
 export type PayoutRow = ({ beneficiary: string } | { accountNumber: string; bankUuid: string }) & {
@@ -120,30 +140,33 @@ export async function checkPayoutRows(business: BusinessDocument, rows: PayoutRo
 }
 
 /**
- * Rows as an Idempotency-Key's request hash saw them, from the database alone (no name enquiry), for the
- * replay check that runs before the bank lookups (replayBeforeLookups). With `save`, a new account was paid as
- * the beneficiary saved for it then. Null when a saved beneficiary named in a row is gone.
+ * Rows as an Idempotency-Key's request hash sees them (each row's account, bank, amount and narration), for the
+ * replay check that runs before the bank lookups (replayBeforeLookups): what each row asks for, matched with
+ * `sent`, the transfers the key's first request created, row by row. An account row is its account. A
+ * beneficiary row is the account it was paid at when its sent transfer paid that beneficiary (the account
+ * never changes, and the beneficiary may have been deleted since), and otherwise the account it's saved with
+ * now (paid the first time as the account typed in, say); one that's gone and wasn't paid has no account, so
+ * the hash can't match. `beneficiary` (for hashes stored before 2026-10-25, which held it) is what the row was
+ * paid as. A retry therefore replays however the first request named or saved its recipients, and a key reused
+ * for a different payment still doesn't match.
  */
-export async function keyedPayoutRows(business: BusinessDocument, rows: PayoutRow[], opts: { save?: boolean } = {}): Promise<KeyedRow[] | null> {
-  const ids = rows.flatMap((r) => ("beneficiary" in r ? [r.beneficiary] : [])).filter((id) => Types.ObjectId.isValid(id));
-  const accounts = opts.save ? rows.flatMap((r) => ("beneficiary" in r ? [] : [{ accountNumber: r.accountNumber, bankUuid: r.bankUuid }])) : [];
-  const [named, savedForAccount] = await Promise.all([
-    ids.length ? BeneficiaryModel.find({ _id: { $in: ids }, business: business._id }) : [],
-    accounts.length ? BeneficiaryModel.find({ business: business._id, $or: accounts }) : [],
-  ]);
-  const keyed: KeyedRow[] = [];
-  for (const row of rows) {
+export async function keyedPayoutRows(business: BusinessDocument, rows: PayoutRow[], sent: TransferDocument[]): Promise<KeyedRow[]> {
+  const paidAs = (i: number, id: string) => {
+    const paid = sent[i]?.recipient;
+    return paid?.beneficiary && String(paid.beneficiary) === id ? paid : null;
+  };
+  const unmatched = rows.flatMap((r, i) => ("beneficiary" in r && !paidAs(i, r.beneficiary) && Types.ObjectId.isValid(r.beneficiary) ? [r.beneficiary] : []));
+  const saved = unmatched.length ? await BeneficiaryModel.find({ _id: { $in: unmatched }, business: business._id }).select("accountNumber bankUuid") : [];
+  return rows.map((row, i) => {
     const { amountKobo, narration } = row;
     if ("beneficiary" in row) {
-      const saved = named.find((b) => b.id === row.beneficiary);
-      if (!saved) return null;
-      keyed.push({ accountNumber: saved.accountNumber, bankUuid: saved.bankUuid, amountKobo, narration, beneficiary: saved._id });
-    } else {
-      const saved = savedForAccount.find((b) => b.accountNumber === row.accountNumber && b.bankUuid === row.bankUuid);
-      keyed.push({ accountNumber: row.accountNumber, bankUuid: row.bankUuid, amountKobo, narration, beneficiary: saved?._id });
+      const at = paidAs(i, row.beneficiary) ?? saved.find((b) => b.id === row.beneficiary);
+      return { accountNumber: at?.accountNumber ?? "", bankUuid: at?.bankUuid ?? "", amountKobo, narration, beneficiary: row.beneficiary };
     }
-  }
-  return keyed;
+    const paid = sent[i]?.recipient;
+    const same = paid && paid.accountNumber === row.accountNumber && paid.bankUuid === row.bankUuid ? paid : null;
+    return { accountNumber: row.accountNumber, bankUuid: row.bankUuid, amountKobo, narration, beneficiary: same?.beneficiary };
+  });
 }
 
 /**

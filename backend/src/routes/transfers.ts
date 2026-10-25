@@ -38,7 +38,9 @@ const approve = requirePermission("transfers.approve");
 // don't: they only stop money moving.
 const pin = requireTransactionPin;
 // The bulk review's lookups move no money, so no PIN, but each call can ask the bank about 200 accounts:
-// limited per member (15-minute window), with room to check and fix a 200-row upload several times over.
+// limited per member (15-minute window), with room to check and fix a 200-row upload several times over. The
+// accounts they (and resolve-account) ask the bank about also come from the member's name-check budget, shared
+// with saving beneficiaries (spendNameChecks in services/transfers.ts: 600 per 15 minutes).
 const reviewLimit = (name: string) => limiter(name, { limit: 60, keyGenerator: (req) => `user:${req.userId}` });
 
 transfersRouter.get("/banks", create, getBanks);

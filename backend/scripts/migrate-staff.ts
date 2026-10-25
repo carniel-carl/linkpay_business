@@ -91,10 +91,12 @@ export async function migrateStaff({ apply = false } = {}): Promise<StaffMigrati
 }
 
 if (import.meta.main) {
-  const { connectDB, disconnectDB } = await import("../src/config/db");
+  const { connectScriptDB, disconnectDB } = await import("../src/config/db");
   const apply = process.argv.includes("--apply");
-  await connectDB();
-  await StaffModel.syncIndexes();
+  // No automatic index builds or collections: the dry run reads only. --apply makes sure the unique email index
+  // is there before creating staff.
+  await connectScriptDB();
+  if (apply) await StaffModel.syncIndexes();
   const r = await migrateStaff({ apply });
   const list = (emails: string[]) => (emails.length ? emails.join(", ") : "none");
   console.log(`${apply ? "Applied" : "Dry run (pass --apply to write)"} on database "${mongoose.connection.name}"`);

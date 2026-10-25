@@ -7,7 +7,7 @@ import { BusinessModel, type BusinessDocument } from "../models/Business";
 import { MembershipModel } from "../models/Membership";
 import { NotificationModel, type NotificationDocument } from "../models/Notification";
 import { StaffModel } from "../models/Staff";
-import { pushToUsers } from "./push";
+import { pushInBackground } from "./push";
 import { branchScope, canAccessBranch, permissionsFor } from "./team";
 
 type Id = Types.ObjectId | string;
@@ -104,8 +104,10 @@ async function deliver(
   )) as unknown as NotificationDocument[];
   for (const doc of docs) publishToRecipient(audience, doc.recipient, { kind: "notification", notification: serializeNotification(doc) });
 
+  // Not awaited: the notifications are saved, and a push service that's slow or down (each Expo call gives up after
+  // 10 s) mustn't hold up the job or request behind it. Failures are logged.
   if (audience === "user" && NOTIFICATION_TYPES[content.type].push) {
-    await pushToUsers(
+    pushInBackground(
       docs.map((doc) => ({
         userId: String(doc.recipient),
         title: content.title,

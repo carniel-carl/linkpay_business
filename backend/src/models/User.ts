@@ -9,6 +9,10 @@ const userSchema = new Schema(
     password: { type: String, select: false },
     // Whether `password` is set, for clients (the hash is never sent). Older accounts all have one.
     hasPassword: { type: Boolean, default: true },
+    // The last password change or reset. Every session carries the value it signed in under, and one signed in
+    // before the latest change can't be used (services/sessions.ts): a sign-in that checked the old password
+    // just before a reset can't open a session after it. Absent until the first change.
+    passwordChangedAt: { type: Date },
     emailVerified: { type: Boolean, default: false },
     // Until the email is verified: proves who chose the password. Only the sign-up's own client has the token.
     registration: {
@@ -37,6 +41,7 @@ const userSchema = new Schema(
         delete ret.password;
         delete ret.registration;
         delete ret.signUpNoticeAt;
+        delete ret.passwordChangedAt;
         delete ret.__v;
         // Older documents carry a staff `role` until scripts/migrate-staff.ts unsets it.
         delete ret.role;

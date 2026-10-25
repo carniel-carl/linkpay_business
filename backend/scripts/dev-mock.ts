@@ -2,7 +2,7 @@
 // Never touches live services. Run with `bun run dev:mock` (which skips backend/.env entirely).
 // Emails, including sign-in and verification codes, are printed to this console.
 process.env.NODE_ENV = "development";
-process.env.JWT_SECRET = "dev-secret-for-simulator";
+process.env.JWT_SECRET = "dev-secret-for-simulator-not-for-production";
 process.env.STAFF_JWT_SECRET = "dev-staff-secret-for-simulator-not-for-production";
 process.env.ENCRYPTION_KEY = "0".repeat(64);
 process.env.LIQUIFIA_SECRET_KEY = "sk_test_mock";

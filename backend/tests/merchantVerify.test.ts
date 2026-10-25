@@ -121,13 +121,17 @@ describe("the embed guidance", () => {
       'status is "paid"',
       'mode is "live"',
       'currency is "NGN"',
-      "priceKobo is your order total in kobo (paidKobo is at least that)",
+      "priceKobo is your order total in kobo",
+      // Its own check, not a parenthetical: on a donation link "paid" can be less than the price.
+      "- paidKobo is at least your order total in kobo",
       "clientReference is your order id",
+      "- overLimit is not true, if you have limited stock",
       "mark the order paid, so the same checkout can't be used twice",
     ]) {
       expect(text).toContain(check);
     }
     expect(text).not.toContain("/api/public/checkouts/");
+    expect(text).not.toContain("(paidKobo is at least that)");
     expect(embedSnippets({ slug: "adaeze-shop", title: "Shop", amountKobo: null }).verifyUrl).toEndWith("/api/public/pay/adaeze-shop/checkouts/{token}");
   });
 });

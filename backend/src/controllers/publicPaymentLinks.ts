@@ -1,13 +1,13 @@
 import type { RequestHandler, Response } from "express";
 import { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
-import { DONATION_LIMITS, EMBED_LIMITS, LINK_REPORT_LIMITS, LINK_REPORT_REASON_KEYS, PAYMENT_LINK_LIMITS } from "../config/paymentLinks";
+import { CHECKOUT_RULES, DONATION_LIMITS, EMBED_LIMITS, LINK_REPORT_LIMITS, LINK_REPORT_REASON_KEYS, PAYMENT_LINK_LIMITS } from "../config/paymentLinks";
 import { DONATION_SORTS, listPublicDonations, publicDonationProgress, reportLink } from "../services/donations";
 import { BusinessModel, type BusinessDocument } from "../models/Business";
 import { CHECKOUT_SOURCES, CheckoutModel, PaymentLinkModel, type CheckoutDocument, type PaymentLinkDocument } from "../models/PaymentLink";
 import { VirtualAccountModel } from "../models/VirtualAccount";
 import { accentPalette } from "../services/branding";
-import { checkoutStatus, originAllowed, simulateCheckoutPayment, startCheckout, testPayTo, unavailableReason } from "../services/paymentLinks";
+import { checkoutPayable, checkoutStatus, originAllowed, simulateCheckoutPayment, startCheckout, testPayTo, unavailableReason } from "../services/paymentLinks";
 import { PaymentLinkImageModel } from "../models/PaymentLink";
 import { describePublicImage, linkImages, sendLinkImage } from "../services/paymentLinkImages";
 import { syncIfStale } from "../services/transactions";
@@ -37,12 +37,18 @@ async function findPublicLink(slug: string) {
   return { link, business };
 }
 
-function describeBusiness(business: BusinessDocument, slug: string) {
-  const logo = business.branding?.logo;
+/**
+ * LinkPay staff took the link down (often a scam fundraiser): its address still answers with the title and
+ * "no longer available", but its story, pictures, logo and donors are no longer published.
+ */
+const isTakenDown = (link: PaymentLinkDocument) => !!link.takenDown?.at;
+
+function describeBusiness(business: BusinessDocument, link: PaymentLinkDocument) {
+  const logo = isTakenDown(link) ? undefined : business.branding?.logo;
   return {
     name: business.name,
     // Relative to the API; the web proxies it at /pay/:slug/logo.
-    logo: logo?.key ? { url: `/api/public/pay/${slug}/logo?v=${logo.updatedAt?.getTime() ?? 0}`, width: logo.width, height: logo.height } : null,
+    logo: logo?.key ? { url: `/api/public/pay/${link.slug}/logo?v=${logo.updatedAt?.getTime() ?? 0}`, width: logo.width, height: logo.height } : null,
     palette: accentPalette(business.branding?.accentColor),
   };
 }
@@ -50,23 +56,28 @@ function describeBusiness(business: BusinessDocument, slug: string) {
 /**
  * The payer's view of a checkout: what to send, where, and whether it has arrived. The business's server
  * also confirms a payment with this, through GET pay/:slug/checkouts/:token (which only answers for its own
- * link): it must check `status`, `mode`, `priceKobo`/`paidKobo`, `currency` and `clientReference` against its
- * own order (see `embedSnippets`). The older GET checkouts/:token answers for any link, so `link.slug` too.
+ * link): it must check `status`, `mode`, `priceKobo`, `paidKobo`, `currency`, `clientReference` and (limited
+ * stock) `overLimit` against its own order (see `embedSnippets`). The older GET checkouts/:token answers for any
+ * link, so `link.slug` too.
  */
 async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDocument, business: BusinessDocument) {
   const status = checkoutStatus(checkout);
   const received = status === "paid" || status === "underpaid";
+  const test = checkout.mode === "test";
+  const takenDown = isTakenDown(link);
+  // Once the hold on its amount ends, a pending checkout shows neither the account nor the amount: the amount
+  // can be handed to another payer's checkout, and a transfer of it would then pay theirs.
+  const payable = checkoutPayable(checkout);
   // Only while waiting for the money, and never for a business that's been suspended since or a link LinkPay
   // has taken down. Test checkouts show placeholder details, never the branch's real account.
-  const test = checkout.mode === "test";
-  const waiting = checkout.status === "pending" && !isRestricted(business) && !link.takenDown?.at;
+  const waiting = payable && !isRestricted(business) && !takenDown;
   const account =
     waiting && !test && checkout.virtualAccount
       ? await VirtualAccountModel.findById(checkout.virtualAccount).select("accountNumber accountName bankName")
       : null;
-  const [cover] = await linkImages({ images: (link.images ?? []).slice(0, 1) });
+  const [cover] = takenDown ? [] : await linkImages({ images: (link.images ?? []).slice(0, 1) });
   let redirectUrl: string | null = null;
-  if (status === "paid" && link.redirectUrl) {
+  if (status === "paid" && link.redirectUrl && !takenDown) {
     const url = new URL(link.redirectUrl);
     url.searchParams.set("reference", checkout.reference);
     url.searchParams.set("status", "paid");
@@ -80,9 +91,10 @@ async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDoc
     status,
     // "test": nothing to send; the page offers to simulate the payment. A business's server must only fulfil "live".
     mode: checkout.mode ?? "live",
-    // Send exactly `amountKobo` (the price plus a few kobo, so we can tell this transfer apart).
+    // Send exactly `amountKobo` (the price plus a few kobo, so we can tell this transfer apart). null on a
+    // pending checkout whose hold has ended: the payer starts again.
     priceKobo: checkout.priceKobo,
-    amountKobo: checkout.amountKobo,
+    amountKobo: checkout.status === "pending" && !payable ? null : checkout.amountKobo,
     currency: "NGN",
     payTo:
       waiting && test
@@ -91,8 +103,12 @@ async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDoc
           ? { accountNumber: account.accountNumber, accountName: account.accountName ?? null, bankName: account.bankName ?? null }
           : null,
     expiresAt: checkout.expiresAt,
+    // What arrived. On a donation link any amount is a whole gift ("paid"), so it can be less than the price.
     paidKobo: checkout.paidKobo ?? null,
     paidAt: checkout.paidAt ?? null,
+    // Paid after the link's payment limit was reached: still "paid" (the money arrived), but a business with
+    // limited stock shouldn't fulfil it without deciding to.
+    overLimit: !!checkout.overLimit,
     payer: { name: checkout.payer!.name, email: checkout.payer!.email },
     // How it was started, and what the business's website attached (its server checks these when confirming).
     source: checkout.source ?? "page",
@@ -101,8 +117,8 @@ async function describeCheckout(checkout: CheckoutDocument, link: PaymentLinkDoc
     link: { slug: link.slug, title: link.title, kind: link.kind ?? "payment", image: cover ? describePublicImage(link.slug, cover) : null },
     // Donation links: how the donation will show on the page.
     donor: link.kind === "donation" ? { anonymous: !!checkout.donor?.anonymous, message: checkout.donor?.message ?? null } : null,
-    business: describeBusiness(business, link.slug),
-    successMessage: received ? (link.successMessage ?? null) : null,
+    business: describeBusiness(business, link),
+    successMessage: received && !takenDown ? (link.successMessage ?? null) : null,
     redirectUrl,
   };
 }
@@ -118,13 +134,39 @@ async function describeDonation(link: PaymentLinkDocument) {
 
 /**
  * What the payer sees at WEB_URL/pay/:slug. No internal ids or team members; totals only for donation
- * links, whose page shows what's been raised.
+ * links, whose page shows what's been raised. A taken-down link shows only its title and why it's unavailable.
  */
 export const getPublicPaymentLink: RequestHandler<SlugParams> = async (req, res) => {
   const { link, business } = await findPublicLink(req.params.slug);
+  res.setHeader("Cache-Control", "private, no-store");
+  if (isTakenDown(link)) {
+    res.json({
+      business: describeBusiness(business, link),
+      link: {
+        slug: link.slug,
+        kind: link.kind ?? "payment",
+        title: link.title,
+        description: null,
+        amountKobo: null,
+        minAmountKobo: null,
+        maxAmountKobo: null,
+        currency: "NGN",
+        phone: "off",
+        customFields: [],
+        images: [],
+      },
+      // Still the link's own, so the page keeps its frame-ancestors.
+      embed: { allowedOrigins: link.allowedOrigins ?? [] },
+      mode: link.mode ?? "live",
+      donation: null,
+      available: false,
+      unavailableReason: "taken_down",
+    });
+    return;
+  }
   const [reason, pictures, donation] = await Promise.all([unavailableReason(link), linkImages(link), describeDonation(link)]);
-  res.setHeader("Cache-Control", "private, no-store").json({
-    business: describeBusiness(business, link.slug),
+  res.json({
+    business: describeBusiness(business, link),
     link: {
       slug: link.slug,
       kind: link.kind ?? "payment",
@@ -165,6 +207,8 @@ export const getPublicDonations: RequestHandler<SlugParams> = async (req, res) =
     .parse(req.query);
   const { link } = await findPublicLink(req.params.slug);
   if (link.kind !== "donation") throw new HttpError(404, "This link doesn't take donations", "NOT_A_DONATION_LINK");
+  // Its donors' names and words are no longer published either.
+  if (isTakenDown(link)) throw new HttpError(404, "This fundraiser is no longer available", "PAYMENT_LINK_TAKEN_DOWN");
   const page = await listPublicDonations(link, query);
   res.setHeader("Cache-Control", "private, no-store").json({ ...page, progress: await publicDonationProgress(link) });
 };
@@ -296,8 +340,9 @@ export const startPublicCheckout: RequestHandler<SlugParams> = async (req, res) 
       embedOrigin,
       clientReference: body.clientReference,
       metadata: body.metadata,
-      // The payer's address (the web forwards it), with IPv6 grouped by /56 like the rate limits.
-      clientIp: req.ip ? ipKeyGenerator(req.ip) : undefined,
+      // The payer's address (the web forwards it), for the caps on open checkouts, with IPv6 grouped by /48
+      // (CHECKOUT_RULES.ipv6Subnet): coarser than the rate limits' /56, as one customer often has a whole /48.
+      clientIp: req.ip ? ipKeyGenerator(req.ip, CHECKOUT_RULES.ipv6Subnet) : undefined,
       resumeKey: body.resumeKey,
     },
   );
@@ -342,8 +387,9 @@ export const getPublicLinkCheckout: RequestHandler<SlugParams & TokenParams> = a
 
 /**
  * Test mode only: the payer (usually the business trying its own page or website) pays the checkout with a
- * simulated transfer. `{ outcome: "paid" | "underpaid" }`. 409 `CHECKOUT_IS_LIVE` on a live checkout. No
- * receipt email: anyone can start a test checkout with anyone's email.
+ * simulated transfer. `{ outcome: "paid" | "underpaid" }`. 409 `CHECKOUT_IS_LIVE` on a live checkout,
+ * `CHECKOUT_CLEARED` once the link has gone live. No receipt email and no notification to the team: anyone can
+ * start a test checkout with anyone's email and any name.
  */
 export const simulatePublicCheckout: RequestHandler<TokenParams> = async (req, res) => {
   const body = z.object({ outcome: z.enum(["paid", "underpaid"]).default("paid") }).parse(req.body ?? {});
@@ -357,16 +403,18 @@ export const simulatePublicCheckout: RequestHandler<TokenParams> = async (req, r
   res.setHeader("Cache-Control", "private, no-store").json(await describeCheckout(settled, link, business));
 };
 
+/** The business's logo next to the link's page (and in its emails); not once the link is taken down. */
 export const getPublicPaymentLinkLogo: RequestHandler<SlugParams> = async (req, res) => {
-  const { business } = await findPublicLink(req.params.slug);
+  const { link, business } = await findPublicLink(req.params.slug);
+  if (isTakenDown(link)) throw new HttpError(404, "No logo", "LOGO_NOT_FOUND");
   await sendLogo(res, business);
 };
 
-/** One of the link's pictures. Only pictures attached to this link; never the uploaded file. */
+/** One of the link's pictures. Only pictures attached to this link; never the uploaded file; none once it's taken down. */
 export const getPublicPaymentLinkImage: RequestHandler<SlugParams & { imageId: string }> = async (req, res) => {
   const { link } = await findPublicLink(req.params.slug);
   const notFound = new HttpError(404, "Picture not found", "IMAGE_NOT_FOUND");
-  if (!/^[a-f0-9]{24}$/.test(req.params.imageId)) throw notFound;
+  if (!/^[a-f0-9]{24}$/.test(req.params.imageId) || isTakenDown(link)) throw notFound;
   const image = await PaymentLinkImageModel.findOne({ _id: req.params.imageId, link: link._id });
   if (!image) throw notFound;
   // URLs carry ?v=, so a picture never changes under the same URL.

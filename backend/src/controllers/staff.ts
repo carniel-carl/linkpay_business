@@ -85,6 +85,14 @@ async function sendInvite(invite: StaffInviteDocument, token: string, inviterId:
   });
 }
 
+/** changeStaffAccess cancels the open invites of someone who stops managing staff; their audit entry says so. */
+const revokedCount = (staff: StaffDocument) => Number(staff.$locals.invitesRevoked ?? 0);
+const invitesCancelled = (staff: StaffDocument) => {
+  const n = revokedCount(staff);
+  return n ? `, and cancelled the ${n === 1 ? "invite" : `${n} invites`} they had sent` : "";
+};
+const invitesRevokedDetail = (staff: StaffDocument) => (revokedCount(staff) ? { invitesRevoked: revokedCount(staff) } : {});
+
 // ---- Roles ----
 
 /** Any signed-in staff member can read the roles, so the console can label them. */
@@ -119,8 +127,8 @@ export const updateStaff: RequestHandler<IdParams> = async (req, res) => {
     await audit(actor, {
       action: "staff.role_changed",
       target: { kind: "staff", id: staff._id },
-      summary: `Changed ${staff.name}'s role from ${staffRoleLabel(previous)} to ${staffRoleLabel(role)}`,
-      details: { from: previous, to: role },
+      summary: `Changed ${staff.name}'s role from ${staffRoleLabel(previous)} to ${staffRoleLabel(role)}${invitesCancelled(staff)}`,
+      details: { from: previous, to: role, ...invitesRevokedDetail(staff) },
     });
     await staffRoleChanged(staff._id, role, actor.name);
   }
@@ -130,7 +138,12 @@ export const updateStaff: RequestHandler<IdParams> = async (req, res) => {
 export const disableStaff: RequestHandler<IdParams> = async (req, res) => {
   const staff = await changeStaffAccess(await findOtherStaff(req), { status: "disabled" });
   await revokeStaffSessions(staff._id);
-  await audit(await staffActor(req), { action: "staff.disabled", target: { kind: "staff", id: staff._id }, summary: `Turned off ${staff.name}'s access` });
+  await audit(await staffActor(req), {
+    action: "staff.disabled",
+    target: { kind: "staff", id: staff._id },
+    summary: `Turned off ${staff.name}'s access${invitesCancelled(staff)}`,
+    details: invitesRevokedDetail(staff),
+  });
   res.json((await serializeStaffList([staff], req.staffId!))[0]);
 };
 

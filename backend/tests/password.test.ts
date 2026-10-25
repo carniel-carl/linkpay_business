@@ -81,6 +81,17 @@ describe("registration (H1)", () => {
     expect(stored?.registration?.tokenHash).toBeUndefined();
   });
 
+  test("an account with no password can't be signed in to with any password", async () => {
+    const email = nextEmail("nopass");
+    await UserModel.create({ name: "No Password", email, emailVerified: true, hasPassword: false });
+    // Including the string the timing dummy once hashed: there's no hash, so nothing can match.
+    for (const guess of ["dummy-password-for-timing", PW.standard, " "]) {
+      const res = await login(email, guess);
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("INVALID_CREDENTIALS");
+    }
+  });
+
   test("verifying without the sign-up's token verifies the email but drops its password", async () => {
     const victim = nextEmail("cfo");
     const attacker = await register(victim, PW.attacker);

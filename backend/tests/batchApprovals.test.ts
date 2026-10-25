@@ -232,6 +232,7 @@ describe("batch list", () => {
       totalKobo: 2_000_00 + item.feeKobo,
       statusCounts: { pending_approval: 2, rejected: 0, cancelled: 0, processing: 0, success: 0, failed: 0 },
       awaitingMe: 0,
+      awaitingMeKobo: 0,
       levels: [{ level: 1, of: 2, waiting: 2, awaitingMe: 0 }],
     });
     expect(all.body.items[2]).toMatchObject({ statusCounts: { processing: 2 }, awaitingMe: 0, levels: [] });
@@ -295,5 +296,189 @@ describe("batch list", () => {
     expect((await listBatches(owner.token, "?take=101")).status).toBe(400);
     expect((await listBatches(owner.token, "?take=0")).status).toBe(400);
     expect((await listBatches(owner.token, "?approval=maybe")).status).toBe(400);
+  });
+});
+
+describe("transfers list without bulk transfers' rows", () => {
+  /** One transfer of ₦1,000 to a new account. */
+  async function single(token: string, branch: string) {
+    const recipient = { type: "bank", accountNumber: String(1_200_000_000 + ++account), bankUuid: "BANK-GTB" };
+    const res = await t.api("POST", "/api/transfers", { token, body: { branch, amountKobo: 1_000_00, recipient } });
+    expect(res.status).toBe(201);
+    return res.body._id as string;
+  }
+  const list = (token: string, query: string) => t.api("GET", `/api/transfers?${query}`, { token });
+
+  test("?batch=none lists only transfers sent on their own, with total and paging to match", async () => {
+    const { owner, second, admin, finance, headOfficeId, kanoId } = await setup();
+    const s1 = await single(finance.token, headOfficeId);
+    const b1 = await bulk(finance.token, headOfficeId, 3);
+    const s2 = await single(finance.token, kanoId);
+    await bulk(finance.token, kanoId, 2);
+    const s3 = await single(admin.token, headOfficeId);
+
+    const singles = await list(owner.token, "batch=none");
+    expect(singles.status).toBe(200);
+    expect(singles.body).toMatchObject({ total: 3, skip: 0, take: 20 });
+    expect(ids(singles)).toEqual([s3, s2, s1]);
+    expect(singles.body.items.every((i: any) => i.batch === null)).toBe(true);
+    expect((await list(owner.token, "")).body.total).toBe(8);
+
+    expect(await list(owner.token, "batch=none&take=2")).toMatchObject({ body: { total: 3, items: [{ _id: s3 }, { _id: s2 }] } });
+    expect(ids(await list(owner.token, "batch=none&skip=2&take=2"))).toEqual([s1]);
+    expect((await list(owner.token, "batch=none&skip=3")).body).toMatchObject({ items: [], total: 3 });
+
+    // One bulk transfer's rows, as before.
+    const rows = await list(owner.token, `batch=${b1._id}`);
+    expect(rows.body.total).toBe(3);
+    expect(ids(rows).sort()).toEqual(b1.items.map((i) => i._id).sort());
+
+    for (const bad of ["nope", "", "None", "null"]) expect((await list(owner.token, `batch=${bad}`)).status).toBe(400);
+    expect((await list(second.token, "batch=none&batch=none")).status).toBe(400);
+  });
+
+  test("?batch=none combines with the approval tabs, awaiting=me, branch and search", async () => {
+    const { owner, second, kano, admin, finance, headOfficeId, kanoId } = await setup();
+    const s1 = await single(finance.token, headOfficeId);
+    const b1 = await bulk(finance.token, headOfficeId, 3);
+    const s2 = await single(finance.token, kanoId);
+    const b2 = await bulk(finance.token, kanoId, 2);
+    const s3 = await single(finance.token, headOfficeId);
+    await bulk(admin.token, headOfficeId, 2);
+    const s4 = await single(admin.token, headOfficeId);
+    // A transfer and a bulk transfer declined.
+    expect((await t.api("POST", `/api/transfers/${s3}/reject`, { token: second.token, body: {} })).status).toBe(200);
+    expect((await rejectBatch(second.token, b2._id)).status).toBe(200);
+
+    // Fund approvals tabs.
+    expect(ids(await list(owner.token, "approval=pending&batch=none"))).toEqual([s4, s2, s1]);
+    expect((await list(owner.token, "approval=pending&batch=none")).body.total).toBe(3);
+    expect((await list(owner.token, "approval=pending")).body.total).toBe(3 + 3 + 2);
+    expect(ids(await list(owner.token, "approval=rejected&batch=none"))).toEqual([s3]);
+    expect((await list(owner.token, "approval=rejected")).body.total).toBe(3);
+    expect((await list(owner.token, "approval=approved&batch=none")).body.total).toBe(0);
+
+    // Waiting for me, with the maker rule and the levels.
+    expect(ids(await list(second.token, "awaiting=me&batch=none"))).toEqual([s4, s2, s1]);
+    expect((await list(second.token, "awaiting=me")).body.total).toBe(3 + 3 + 2);
+    expect(ids(await list(admin.token, "awaiting=me&batch=none"))).toEqual([s2, s1]);
+    expect((await list(owner.token, "awaiting=me&batch=none")).body.total).toBe(0);
+    expect((await list(finance.token, "awaiting=me&batch=none")).body).toEqual({ items: [], total: 0, skip: 0, take: 20 });
+
+    // Branches: chosen, and a member limited to Kano.
+    expect(ids(await list(owner.token, `batch=none&branch=${kanoId}`))).toEqual([s2]);
+    expect(ids(await list(kano.token, "batch=none"))).toEqual([s2]);
+    expect(ids(await list(kano.token, "awaiting=me&batch=none"))).toEqual([s2]);
+    expect((await list(kano.token, `batch=none&branch=${headOfficeId}`)).status).toBe(404);
+
+    // Search: a bulk transfer's rows with the same narration stay out.
+    await TransferModel.updateMany({ _id: { $in: [s1, ...b1.items.map((i) => i._id)] } }, { narration: "Diesel for the generator" });
+    expect((await list(owner.token, "q=diesel")).body.total).toBe(4);
+    expect(ids(await list(owner.token, "q=diesel&batch=none"))).toEqual([s1]);
+    expect(ids(await list(second.token, "q=diesel&batch=none&awaiting=me&approval=pending"))).toEqual([s1]);
+  });
+});
+
+describe("approving what was shown (expect)", () => {
+  /** A bulk transfer with one row per amount, each to a different account. */
+  async function bulkOf(token: string, branch: string, amounts: number[]) {
+    const items = amounts.map((amountKobo) => ({ accountNumber: String(1_200_000_000 + ++account), bankUuid: "BANK-GTB", amountKobo }));
+    const res = await t.api("POST", "/api/transfers/bulk", { token, body: { branch, title: "Shown", items } });
+    expect(res.status).toBe(201);
+    return res.body.batch as { _id: string; items: { _id: string }[] };
+  }
+  const decide = (action: "approve" | "reject", token: string, id: string, body: object) =>
+    t.api("POST", `/api/transfers/batches/${id}/${action}`, { token, body });
+  const approveOne = async (token: string, id: string) => expect((await t.api("POST", `/api/transfers/${id}/approve`, { token, body: {} })).status).toBe(200);
+  const shown = (b: { awaitingMe: number; awaitingMeKobo: number }) => [b.awaitingMe, b.awaitingMeKobo];
+
+  test("awaitingMeKobo is the total of the rows the caller can decide, on the batch, the list and the answers", async () => {
+    const { owner, first, second, finance, headOfficeId } = await setup();
+    const batch = await bulkOf(finance.token, headOfficeId, [1_000_00, 2_000_00, 3_000_00]);
+    expect(shown(await getBatch(second.token, batch._id))).toEqual([3, 6_000_00]);
+    // One row moves on to level 2 (the owner's) on its own.
+    await approveOne(first.token, batch.items[0]!._id);
+    expect(shown(await getBatch(second.token, batch._id))).toEqual([2, 5_000_00]);
+    expect(shown(await getBatch(owner.token, batch._id))).toEqual([1, 1_000_00]);
+    expect(shown(await getBatch(finance.token, batch._id))).toEqual([0, 0]);
+    // The list says the same, for each viewer.
+    expect(shown((await listBatches(second.token)).body.items[0])).toEqual([2, 5_000_00]);
+    expect(shown((await listBatches(owner.token, "?awaiting=me")).body.items[0])).toEqual([1, 1_000_00]);
+    expect(shown((await listBatches(finance.token)).body.items[0])).toEqual([0, 0]);
+
+    // What was shown, sent back: decided.
+    const decided = await decide("approve", second.token, batch._id, { expect: { count: 2, amountKobo: 5_000_00 } });
+    expect(decided.status).toBe(200);
+    expect(decided.body).toMatchObject({ decided: 2, skipped: 1, awaitingMe: 0, awaitingMeKobo: 0 });
+    expect(shown(await getBatch(owner.token, batch._id))).toEqual([3, 6_000_00]);
+    const payouts = t.liquifia.payouts.length;
+    const all = await decide("approve", owner.token, batch._id, { note: "Checked", expect: { count: 3, amountKobo: 6_000_00 } });
+    expect(all.body).toMatchObject({ decided: 3, skipped: 0, statusCounts: { processing: 3 } });
+    expect(t.liquifia.payouts.length).toBe(payouts + 3);
+  });
+
+  test("rows that reached the caller after the screen loaded: 409 BATCH_CHANGED, and nothing is decided", async () => {
+    const { owner, first, second, finance, headOfficeId } = await setup();
+    const batch = await bulkOf(finance.token, headOfficeId, [1_000_00, 2_000_00, 3_000_00]);
+    await approveOne(first.token, batch.items[0]!._id);
+    // The owner's screen: one row, ₦1,000.
+    const screen = await getBatch(owner.token, batch._id);
+    expect(shown(screen)).toEqual([1, 1_000_00]);
+    // Before they enter the PIN, another row reaches their level.
+    await approveOne(second.token, batch.items[1]!._id);
+
+    const payouts = t.liquifia.payouts.length;
+    const stale = await decide("approve", owner.token, batch._id, { expect: { count: screen.awaitingMe, amountKobo: screen.awaitingMeKobo } });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ code: "BATCH_CHANGED", details: { count: 2, amountKobo: 3_000_00 } });
+    // The same count with another total is a change too; so is a reject.
+    expect((await decide("approve", owner.token, batch._id, { expect: { count: 2, amountKobo: 2_000_00 } })).body.code).toBe("BATCH_CHANGED");
+    expect((await decide("reject", owner.token, batch._id, { expect: { count: 1, amountKobo: 1_000_00 } })).body.code).toBe("BATCH_CHANGED");
+    const rows = (await getBatch(owner.token, batch._id)).items;
+    expect(rows.map((i: any) => [i.status, i.approval.current])).toEqual([
+      ["pending_approval", 2],
+      ["pending_approval", 2],
+      ["pending_approval", 1],
+    ]);
+    expect(t.liquifia.payouts.length).toBe(payouts);
+
+    // Shown again, and confirmed: those two go.
+    const fresh = await getBatch(owner.token, batch._id);
+    const ok = await decide("approve", owner.token, batch._id, { expect: { count: fresh.awaitingMe, amountKobo: fresh.awaitingMeKobo } });
+    expect(ok.body).toMatchObject({ decided: 2, skipped: 1 });
+    expect(t.liquifia.payouts.length).toBe(payouts + 2);
+  });
+
+  test("without expect it decides what's waiting now, as before; a bad expect is a 400", async () => {
+    const { second, finance, headOfficeId } = await setup();
+    const batch = await bulkOf(finance.token, headOfficeId, [1_000_00, 2_000_00]);
+    for (const expect_ of [{ count: "2", amountKobo: 3_000_00 }, { count: 2 }, { count: 2, amountKobo: -1 }, { count: 2, amountKobo: 3_000_00, rows: [] }, { count: 1.5, amountKobo: 3_000_00 }]) {
+      expect((await decide("approve", second.token, batch._id, { expect: expect_ })).status).toBe(400);
+    }
+    expect((await decide("approve", second.token, batch._id, {})).body).toMatchObject({ decided: 2, skipped: 0 });
+  });
+
+  test("only the rows checked are decided: none that arrive before the writes, fewer if someone else decides first", async () => {
+    const { business, owner, first, second, finance, headOfficeId } = await setup();
+    const batch = await bulkOf(finance.token, headOfficeId, [1_000_00, 2_000_00, 3_000_00]);
+    await approveOne(first.token, batch.items[0]!._id);
+    const ownerMembership = (await MembershipModel.findOne({ business: business._id, user: owner.user._id }))!;
+    // The owner's request has read the rows and matched them with what they were shown (one row, ₦1,000)...
+    const read = await TransferModel.find({ batch: batch._id }).sort({ _id: 1 });
+    // ...when another row reaches their level.
+    await approveOne(second.token, batch.items[1]!._id);
+    const result = await decideBatchTransfers({ transfers: read, membership: ownerMembership, userId: owner.id, decision: "approve", expect: { count: 1, amountKobo: 1_000_00 } });
+    expect(result).toEqual({ decided: 1, skipped: 2 });
+    const rows = await TransferModel.find({ batch: batch._id }).sort({ _id: 1 });
+    expect(rows.map((r) => r.status)).toEqual(["processing", "pending_approval", "pending_approval"]);
+    expect(rows[1]!.approval!.current).toBe(1);
+
+    // The other way round: a row of the ones checked is decided by someone else first, so fewer go, never more.
+    const next = await bulkOf(finance.token, headOfficeId, [1_000_00, 2_000_00, 3_000_00]);
+    const secondMembership = (await MembershipModel.findOne({ business: business._id, user: second.user._id }))!;
+    const seen = await TransferModel.find({ batch: next._id }).sort({ _id: 1 });
+    await approveOne(first.token, next.items[2]!._id);
+    const fewer = await decideBatchTransfers({ transfers: seen, membership: secondMembership, userId: second.id, decision: "approve", expect: { count: 3, amountKobo: 6_000_00 } });
+    expect(fewer).toEqual({ decided: 2, skipped: 1 });
   });
 });

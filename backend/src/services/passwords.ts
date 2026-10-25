@@ -24,15 +24,28 @@ const hash = (token: string) => new Bun.CryptoHasher("sha256").update(token).dig
 const newRegistrationToken = () => `lprg_${Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url")}`;
 
 /**
- * Emails a fresh code. Within the resend cooldown the code already sent is still valid, so nothing goes out
- * and the caller can't tell, which keeps a cooldown from showing that an account exists.
+ * Sends an email without waiting for it, for answers that must look the same whether or not an account exists:
+ * a slow or failing email provider would otherwise show up, as a delay or a 500, only for real accounts. A failed
+ * send is logged; whoever asked can ask again once the resend cooldown is over.
+ */
+export function sendInBackground(what: string, send: () => Promise<unknown>) {
+  (async () => send())().catch((err) => console.error(`Couldn't send the ${what} email:`, err));
+}
+
+/**
+ * Emails a fresh code, without waiting for the email (see sendInBackground). Within the resend cooldown the code
+ * already sent is still valid, so nothing goes out and the caller can't tell, which keeps a cooldown from showing
+ * that an account exists.
  */
 export async function sendCodeIgnoringCooldown(email: string, purpose: OtpPurpose, send: (to: string, code: string) => Promise<unknown>) {
+  let code: string;
   try {
-    await send(email, await createOtp(email, purpose));
+    code = await createOtp(email, purpose);
   } catch (err) {
-    if (!(err instanceof HttpError && err.code === "OTP_COOLDOWN")) throw err;
+    if (err instanceof HttpError && err.code === "OTP_COOLDOWN") return;
+    throw err;
   }
+  sendInBackground(`${purpose.replaceAll("_", " ")} code`, () => send(email, code));
 }
 
 /**
@@ -75,7 +88,7 @@ async function noteSignUpAttempt(email: string) {
     },
     { signUpNoticeAt: new Date() },
   );
-  if (claimed.modifiedCount) await sendAccountExistsEmail(email);
+  if (claimed.modifiedCount) sendInBackground("account exists", () => sendAccountExistsEmail(email));
 }
 
 /**

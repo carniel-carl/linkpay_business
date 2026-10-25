@@ -223,7 +223,7 @@ const moveBody = z.object({ amountKobo, note: z.string().trim().max(100).optiona
 export const depositToPocket: RequestHandler<IdParams> = async (req, res) => {
   const body = moveBody.parse(req.body);
   const pocket = await findPocket(req, req.params.id);
-  if (pocket.status !== "active") throw new HttpError(409, "This pocket is closed", "POCKET_CLOSED");
+  // A closed pocket is refused by movePocketMoney, after a retry of this Idempotency-Key is answered.
   const { movement, replayed } = await movePocketMoney({
     pocket,
     kind: "deposit",
@@ -240,7 +240,7 @@ export const depositToPocket: RequestHandler<IdParams> = async (req, res) => {
 export const withdrawFromPocket: RequestHandler<IdParams> = async (req, res) => {
   const body = moveBody.parse(req.body);
   const pocket = await findPocket(req, req.params.id);
-  if (pocket.status !== "active") throw new HttpError(409, "This pocket is closed", "POCKET_CLOSED");
+  // A closed pocket is refused by movePocketMoney, after a retry of this Idempotency-Key is answered.
   const { movement, replayed } = await movePocketMoney({
     pocket,
     kind: "withdrawal",

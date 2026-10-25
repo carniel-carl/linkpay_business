@@ -138,6 +138,30 @@ describe("pockets", () => {
     expect(again.body.pocket.balanceKobo).toBe(10_000_00);
   });
 
+  test("a retried move replays after the pocket is closed; a new one is refused", async () => {
+    const { owner, create } = await setup();
+    const move = (pocketId: string, path: string, amountKobo: number, key?: string) =>
+      t.api("POST", `/api/pockets/${pocketId}/${path}`, { token: owner.token, body: { amountKobo }, ...(key && { headers: { "Idempotency-Key": key } }) });
+    const saving = (await create({ name: "Rent" })).body;
+    const deposit = await move(saving._id, "deposit", 10_000_00, "dep-closed-1234");
+    expect(deposit.status).toBe(201);
+    const spending = (await create({ name: "Stock" })).body;
+    await move(spending._id, "deposit", 20_000_00);
+    const withdrawal = await move(spending._id, "withdraw", 5_000_00, "wd-closed-1234");
+    expect(withdrawal.status).toBe(201);
+    for (const p of [saving, spending]) expect((await t.api("POST", `/api/pockets/${p._id}/close`, { token: owner.token })).status).toBe(200);
+
+    const again = await move(saving._id, "deposit", 10_000_00, "dep-closed-1234");
+    expect(again.status).toBe(200);
+    expect(again.body.movement._id).toBe(deposit.body.movement._id);
+    expect(again.body.pocket).toMatchObject({ status: "closed", balanceKobo: 0 });
+    expect((await move(spending._id, "withdraw", 5_000_00, "wd-closed-1234")).body.movement._id).toBe(withdrawal.body.movement._id);
+    // Other details under the key are refused as reused; a new move is refused as closed.
+    expect((await move(saving._id, "deposit", 11_000_00, "dep-closed-1234")).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await move(saving._id, "deposit", 10_000_00, "dep-closed-5678")).body.code).toBe("POCKET_CLOSED");
+    expect((await move(saving._id, "deposit", 10_000_00)).body.code).toBe("POCKET_CLOSED");
+  });
+
   test("closing returns the money and frees the name", async () => {
     const { owner, headOfficeId, create } = await setup();
     const pocket = (await create({ name: "Tax" })).body;

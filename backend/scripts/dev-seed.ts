@@ -428,7 +428,13 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   for (const [accountNumber, amountKobo] of [["0123456789", 4_200_000_00], ["2222222222", 3_500_000_00]] as const) {
     const res = await fetch(`${apiUrl}/api/transfers`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${swiftToken}`, "Content-Type": "application/json", "X-Transaction-Pin": DEMO_PIN },
+      headers: {
+        Authorization: `Bearer ${swiftToken}`,
+        "Content-Type": "application/json",
+        "X-Transaction-Pin": DEMO_PIN,
+        // Required on sends, so a retry can never pay twice.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({ branch: String(swift.account.branch), amountKobo, narration: "Stock", recipient: { type: "bank", accountNumber, bankUuid: "BANK-GTB" } }),
     });
     if (!res.ok) throw new Error(`Seeding a Swift Gadgets transfer failed: ${res.status} ${await res.text()}`);

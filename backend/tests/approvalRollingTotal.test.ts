@@ -1,10 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { BusinessModel } from "../src/models/Business";
 import { MembershipModel } from "../src/models/Membership";
 import { TransferModel } from "../src/models/Transfer";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
+import { liquifia } from "../src/services/liquifia/client";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
 import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
@@ -194,5 +195,64 @@ describe("a member's 24-hour total decides approval", () => {
     const [a, b] = await Promise.all([send(owner.token, headOfficeId, JUST_UNDER), send(owner.token, headOfficeId, JUST_UNDER)]);
     expect([a.status, b.status]).toEqual([201, 201]);
     expect([a.body.status, b.body.status].sort()).toEqual(["pending_approval", "processing"]);
+  });
+});
+
+describe("the rule and the member's role are read again when the money is held", () => {
+  /**
+   * A two-row bulk transfer of ₦1,000 each from the head office by `token`, with `change` made while its rows
+   * are being name-checked: after the request arrived, before the account lock (as during a long bulk).
+   */
+  async function bulkWhile(token: string, branch: string, change: () => Promise<unknown>) {
+    const original = liquifia.validateAccount;
+    let changed = false;
+    const spy = spyOn(liquifia, "validateAccount").mockImplementation(async (...args: Parameters<typeof original>) => {
+      if (!changed) {
+        changed = true;
+        await change();
+      }
+      return original(...args);
+    });
+    try {
+      const items = ["0123456789", "1234567890"].map((accountNumber) => ({ accountNumber, bankUuid: "BANK-GTB", amountKobo: 1_000_00 }));
+      return await t.api("POST", "/api/transfers/bulk", { token, body: { branch, items } });
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  test("an approval rule tightened meanwhile applies: the rows wait for approval instead of going", async () => {
+    const { business, headOfficeId, member } = await setup();
+    const admin = await member("admin");
+    const payouts = t.liquifia.payouts.length;
+    const res = await bulkWhile(admin.token, headOfficeId, () => BusinessModel.updateOne({ _id: business._id }, { "transferApproval.mode": "always" }));
+    expect(res.status).toBe(201);
+    expect(res.body.batch.statusCounts.pending_approval).toBe(2);
+    expect(t.liquifia.payouts.length).toBe(payouts);
+  });
+
+  test("a member who lost the right to approve meanwhile needs an approval", async () => {
+    const { business, headOfficeId, member } = await setup();
+    const admin = await member("admin");
+    const res = await bulkWhile(admin.token, headOfficeId, () => MembershipModel.updateOne({ business: business._id, user: admin.user._id }, { role: "finance" }));
+    expect(res.status).toBe(201);
+    expect(res.body.batch.statusCounts.pending_approval).toBe(2);
+  });
+
+  test("a member removed, made a viewer or moved to another branch meanwhile is refused, and nothing is created", async () => {
+    const { business, headOfficeId, kanoId, member } = await setup();
+    type Member = Awaited<ReturnType<typeof member>>;
+    const cases: ["admin" | "finance", (m: Member) => Promise<unknown>, number, string | undefined][] = [
+      ["admin", (m) => MembershipModel.deleteOne({ business: business._id, user: m.user._id }), 403, "NOT_A_MEMBER"],
+      ["finance", (m) => MembershipModel.updateOne({ business: business._id, user: m.user._id }, { role: "viewer" }), 403, "PERMISSION_DENIED"],
+      ["finance", (m) => MembershipModel.updateOne({ business: business._id, user: m.user._id }, { branches: [kanoId] }), 404, undefined],
+    ];
+    for (const [role, change, status, code] of cases) {
+      const m = await member(role);
+      const res = await bulkWhile(m.token, headOfficeId, () => change(m));
+      expect(res.status).toBe(status);
+      expect(res.body.code).toBe(code);
+    }
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(0);
   });
 });
