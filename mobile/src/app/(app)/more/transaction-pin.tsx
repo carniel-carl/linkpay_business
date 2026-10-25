@@ -21,6 +21,7 @@ import {
   lockedMessage,
   lockedUntilOf,
   pinStatusQuery,
+  resetRequiredOf,
   setTransactionPin,
   useTransactionPinStatus,
   wrongPinMessage,
@@ -118,7 +119,7 @@ function StatusCard({ status: s, locked }: { status: TransactionPinStatus; locke
         {!s.isSet
           ? "LinkPay asks for these 4 digits before money is sent, approved, locked or taken out of savings, and before your team or approval rule changes."
           : locked
-            ? lockedMessage(s.lockedUntil)
+            ? lockedMessage(s.lockedUntil, s.resetRequired)
             : `${s.changedAt ? `Last changed ${formatDate(s.changedAt)}. ` : ""}LinkPay asks for it before money moves or your team changes.${tries}`}
       </Text>
     </View>
@@ -292,7 +293,8 @@ function ChangePin({ onDone, onForgot }: { onDone: () => void; onForgot: () => v
       if (isApiCode(err, "TRANSACTION_PIN_LOCKED")) {
         // The page switches to the lock and Reset PIN straight away.
         const lockedUntil = lockedUntilOf(err);
-        qc.setQueryData<TransactionPinStatus>(pinStatusQuery.queryKey, (s) => s && { ...s, locked: true, lockedUntil, attemptsLeft: 0 });
+        const resetRequired = resetRequiredOf(err);
+        qc.setQueryData<TransactionPinStatus>(pinStatusQuery.queryKey, (s) => s && { ...s, locked: true, lockedUntil, attemptsLeft: 0, resetRequired });
         refreshStatus();
       } else if (isApiCode(err, "INCORRECT_PASSWORD")) setPasswordError(friendlyMessage(err));
       else if (isApiCode(err, "TRANSACTION_PIN_REQUIRED")) refreshStatus();

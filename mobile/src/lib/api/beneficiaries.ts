@@ -1,10 +1,13 @@
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { api } from "./client";
-import type { BeneficiaryList } from "./types";
+import { ApiError } from "./errors";
+import { idSegment } from "./paths";
+import type { Beneficiary, BeneficiaryList } from "./types";
 
 // /api/beneficiaries (docs/briefs/bulk-payouts.md): the business's saved recipients, name-checked once when saved.
-// Mobile only picks from them for now (bulk transfers); adding, renaming and importing stay on the web.
+// Mobile picks from them (bulk transfers, payout lists) and adds one while building a payout list; renaming,
+// deleting and importing stay on the web.
 
 const PAGE = 100;
 
@@ -22,4 +25,19 @@ export function useBeneficiaries(q?: string) {
     getNextPageParam: (last) => (last.skip + last.items.length < last.total ? last.skip + last.items.length : undefined),
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * Saves an account for the whole team (transfers.create, no PIN). The API checks it with the bank again and keeps
+ * the name the bank gives. An account that's already saved (BENEFICIARY_EXISTS) comes back as that beneficiary,
+ * with `existed`, as on the web.
+ */
+export async function saveBeneficiary(body: { accountNumber: string; bankUuid: string; nickname?: string }) {
+  try {
+    return { beneficiary: await api<Beneficiary>("/api/beneficiaries", { method: "POST", json: body }), existed: false };
+  } catch (err) {
+    const existing = err instanceof ApiError && err.code === "BENEFICIARY_EXISTS" ? (err.details as { beneficiaryId?: unknown } | undefined)?.beneficiaryId : undefined;
+    if (typeof existing !== "string") throw err;
+    return { beneficiary: await api<Beneficiary>(`/api/beneficiaries/${idSegment(existing)}`), existed: true };
+  }
 }

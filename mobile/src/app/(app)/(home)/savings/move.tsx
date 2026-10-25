@@ -11,9 +11,8 @@ import { NairaField } from "@/components/ui/naira-field";
 import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { useAccounts } from "@/lib/api/banking";
-import { idempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { usePocket, usePocketChange, usePocketMoved, withdrawFromPocket } from "@/lib/api/savings";
+import { pocketMoveKeys, usePocket, usePocketChange, usePocketMoved, withdrawFromPocket } from "@/lib/api/savings";
 import type { Pocket } from "@/lib/api/types";
 import { formatNaira, formatNairaShort } from "@/lib/format";
 import { koboToInput } from "@/lib/invoices";
@@ -24,8 +23,8 @@ const MAX_KOBO = 10_000_000_000;
 /**
  * Add money (from the branch's available balance into the pocket) or Withdraw (back to available). Nothing
  * leaves the account, but taking money out of savings needs the transaction PIN; adding it doesn't. One
- * Idempotency-Key per amount and note, kept through errors and PIN retries, so a retry after a dropped
- * connection can't move the money twice.
+ * Idempotency-Key per pocket, direction, amount and note, kept through errors, PIN retries and leaving the screen
+ * (pocketMoveKeys), so a retry after a dropped connection can't move the money twice.
  */
 export default function MovePocketMoney() {
   const { id, direction } = useLocalSearchParams<{ id: string; direction: "deposit" | "withdraw" }>();
@@ -58,7 +57,6 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  const [keyFor] = useState(() => idempotencyKeys());
   const deposit = direction === "deposit";
   const branchName = pocket.branch?.name ?? "the branch";
 
@@ -100,12 +98,19 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
     setSubmitted(true);
     if (amountError || kobo === undefined) return;
     const move = { amountKobo: kobo, note: note.trim() || undefined };
+    const idempotencyKey = pocketMoveKeys.keyFor({ pocket: pocket._id, direction, ...move });
     const done = () => {
+      // The next move is a new request.
+      pocketMoveKeys.reset();
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
     };
+    // The key was used for other details: a deliberate retry is a new request.
+    const refused = (err: unknown) => {
+      if (err instanceof ApiError && err.code === "IDEMPOTENCY_KEY_REUSED") pocketMoveKeys.reset();
+    };
     if (deposit) {
-      change.mutate({ kind: "deposit", id: pocket._id, ...move, idempotencyKey: keyFor(move) }, { onSuccess: done });
+      change.mutate({ kind: "deposit", id: pocket._id, ...move, idempotencyKey }, { onSuccess: done, onError: refused });
       return;
     }
     setWithdrawError(undefined);
@@ -115,12 +120,15 @@ function Form({ pocket, direction }: { pocket: Pocket; direction: "deposit" | "w
       subtitle: `Enter your transaction PIN to move ${shown} from ${pocket.name} back to ${branchName}'s available balance.`,
       pending: "Withdrawing…",
       // A corrected PIN keeps the key: the PIN is a header, not part of what's sent.
-      run: (entered) => withdrawFromPocket(pocket._id, move, keyFor(move), entered),
+      run: (entered) => withdrawFromPocket(pocket._id, move, idempotencyKey, entered),
       onSuccess: (next) => {
         moved(next);
         done();
       },
-      onError: (err) => setWithdrawError(err),
+      onError: (err) => {
+        refused(err);
+        setWithdrawError(err);
+      },
     });
   }
 
@@ -219,6 +227,9 @@ function moveError(err: unknown, branchName: string) {
   }
   if (err instanceof ApiError && err.code === "TIMEOUT") {
     return "That took too long, so the money may already have moved. Check the pocket's activity before you try again.";
+  }
+  if (err instanceof ApiError && err.code === "IDEMPOTENCY_KEY_REUSED") {
+    return "These details changed after they were first sent. Check the pocket's activity to see whether the money moved before you try again.";
   }
   return friendlyMessage(err);
 }

@@ -61,7 +61,7 @@ export default function FundApprovals() {
   const [q, setQ] = useState<string>();
   const qc = useQueryClient();
   const business = useBusinessContext((s) => s.businessId ?? "default");
-  const transfers = useApprovals(tab, q);
+  const transfers = useApprovals(tab, { q, singles: !q });
   const batches = useTransferBatches(tab, !q);
   const list = useTransfersWithBatches(transfers, q ? undefined : batches);
   const items = list.entries;

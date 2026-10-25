@@ -11,6 +11,8 @@ import { LaunchOverlay } from "@/components/brand/launch-overlay";
 import { PushBridge } from "@/components/notifications/push-bridge";
 import { LockScreen } from "@/components/security/lock-screen";
 import { PrivacyCover } from "@/components/security/privacy-cover";
+import { UpdateRequired } from "@/components/security/update-required";
+import { checkAppVersion, useAppUpdate } from "@/lib/app-update";
 import { useAuth } from "@/lib/auth/store";
 import { usePendingInvite } from "@/lib/pending-invite";
 import { queryClient } from "@/lib/query";
@@ -40,10 +42,16 @@ function Navigator() {
   const boot = useAuth((s) => s.boot);
   const { colors, scheme } = useTheme();
   const { covered, onTouch } = useAppLock();
+  const updateRequired = useAppUpdate((s) => s.required);
 
   useEffect(() => {
     void boot();
   }, [boot]);
+
+  // A version the server no longer works with shows the update screen before anything fails.
+  useEffect(() => {
+    void checkAppVersion();
+  }, []);
 
   // An invite opened before signing in picks up where it left off once the app is open.
   const pendingInvite = usePendingInvite((s) => s.token);
@@ -85,7 +93,10 @@ function Navigator() {
         }}
       >
         {/* accessibilityViewIsModal is iOS-only; this hides the screens behind the lock from TalkBack too. */}
-        <View style={{ flex: 1 }} importantForAccessibility={status === "locked" || covered ? "no-hide-descendants" : "auto"}>
+        <View
+          style={{ flex: 1 }}
+          importantForAccessibility={status === "locked" || covered || updateRequired ? "no-hide-descendants" : "auto"}
+        >
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Protected guard={status === "signedOut"}>
             <Stack.Screen name="(auth)" />
@@ -100,7 +111,8 @@ function Navigator() {
           <Stack.Screen name="invite/[token]" options={{ contentStyle: { backgroundColor: colors.band } }} />
         </Stack>
         </View>
-        {status === "locked" && <LockScreen />}
+        {/* Over everything, the lock included: an outdated app can only be updated or signed out. */}
+        {updateRequired ? <UpdateRequired /> : status === "locked" && <LockScreen />}
         {covered && <PrivacyCover />}
         <LaunchOverlay />
         <PushBridge />

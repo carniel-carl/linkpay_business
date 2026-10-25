@@ -4,6 +4,7 @@ import { Platform, Share } from "react-native";
 import { getAccessToken, invalidateAccessToken, refreshSession } from "@/lib/auth/session";
 import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
 import { API_URL } from "@/lib/config";
+import { APP_HEADERS } from "@/lib/device";
 import type { InvoiceTab } from "@/lib/invoices";
 import { api } from "./client";
 import { idSegment } from "./paths";
@@ -178,7 +179,7 @@ export async function openInvoicePdf(invoice: Pick<Invoice, "_id" | "number" | "
   const get = async (token: string) => {
     const businessId = currentBusinessId();
     return fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, ...(businessId && { "X-Business-Id": businessId }) },
+      headers: { ...APP_HEADERS, Authorization: `Bearer ${token}`, ...(businessId && { "X-Business-Id": businessId }) },
     });
   };
   let res: Response;

@@ -9,8 +9,11 @@ import { amountProblem } from "@/lib/bulk-csv";
  * row editor and the review. Memory only, like the single-transfer draft.
  */
 
-/** The parts of a saved beneficiary a row shows and sends. */
-export type SavedRecipient = Pick<Beneficiary, "_id" | "accountName" | "accountNumber" | "bankName" | "nickname">;
+/**
+ * The parts of a saved beneficiary a row shows and sends. `bankUuid` where it's known (the beneficiary picker), for the
+ * Idempotency-Key: a payout list's rows don't carry it.
+ */
+export type SavedRecipient = Pick<Beneficiary, "_id" | "accountName" | "accountNumber" | "bankName" | "nickname"> & { bankUuid?: string };
 
 export type BulkRow = {
   /** Local only, for editing and removing. */
@@ -24,6 +27,8 @@ export type BulkRow = {
   bankText?: string;
   bankError?: string;
   amountKobo: number | null;
+  /** A CSV line's amount that couldn't be read as written (25,000 without quotes), and why. Gone once one is typed. */
+  amountError?: string;
   narration?: string;
   /** The CSV line it came from. */
   line?: number;
@@ -60,8 +65,9 @@ type State = {
   serverErrors: Record<string, string>;
   form: RowForm;
   /**
-   * The Idempotency-Key for a send, by what's sent: the same rows from the same account keep their key (after a
-   * lost answer, a wrong PIN, or a changed name checked again), so they can't be paid twice.
+   * The Idempotency-Key for a send, by what's sent (keyedBody): the same rows from the same account keep their key
+   * (after a lost answer, a wrong PIN, a changed name checked again, or "Remove all" and the same rows added again),
+   * so they can't be paid twice. New only after a bulk transfer went, or the key was refused for other details.
    */
   keyFor: (body: unknown) => string;
 };
@@ -72,8 +78,12 @@ type Actions = {
    * unless it belongs to another business. `from` picks the account if none is chosen yet.
    */
   open: (business: string, from?: string) => void;
-  /** After a bulk transfer is sent, or "Remove all": a fresh draft, with its own keys. */
+  /** After a bulk transfer is sent, and on signing out: a fresh draft, with its own keys. */
   start: (business?: string, from?: string) => void;
+  /** "Remove all": an empty list, with the same keys. */
+  clear: (from?: string) => void;
+  /** After IDEMPOTENCY_KEY_REUSED (the key went with other details): a deliberate retry is a new request. */
+  freshKeys: () => void;
   set: (d: Partial<Pick<State, "from" | "title">>) => void;
   addRows: (rows: Omit<BulkRow, "id">[]) => void;
   /** Replaces the row with the same id, or adds it. */
@@ -119,7 +129,7 @@ export function rowProblem(r: BulkRow) {
     if (!/^\d{10}$/.test(r.accountNumber)) return "Account numbers are 10 digits.";
     if (!r.bank) return r.bankError ?? "Choose the bank.";
   }
-  if (r.amountKobo === null) return "Add the amount.";
+  if (r.amountKobo === null) return r.amountError ?? "Add the amount.";
   return amountProblem(r.amountKobo);
 }
 
@@ -130,23 +140,34 @@ export const rowName = (r: BulkRow, names: Record<string, Checked>) => (r.benefi
 export const apiItems = (rows: BulkRow[], names: Record<string, Checked>): BulkRowInput[] =>
   rows.map((r) =>
     r.beneficiary
-      ? { beneficiary: r.beneficiary._id, amountKobo: r.amountKobo!, narration: r.narration, accountName: r.beneficiary.accountName }
-      : { accountNumber: r.accountNumber, bankUuid: r.bank!.uuid, amountKobo: r.amountKobo!, narration: r.narration, accountName: names[lookupKey(r)]?.data?.accountName },
+      ? { beneficiary: r.beneficiary._id, amountKobo: r.amountKobo!, narration: r.narration?.trim() || undefined, accountName: r.beneficiary.accountName }
+      : {
+          accountNumber: r.accountNumber,
+          bankUuid: r.bank!.uuid,
+          amountKobo: r.amountKobo!,
+          narration: r.narration?.trim() || undefined,
+          accountName: names[lookupKey(r)]?.data?.accountName,
+        },
   );
 
 /**
- * What the Idempotency-Key follows: the account and each row's recipient, amount and narration. The names are
- * left out, as the API leaves them out of its request hash: sending again after checking a changed name must
- * replay a batch that already went, not pay twice. So is the title, which the hash also ignores, so renaming the
- * batch after a send whose answer was lost can't pay the same people again.
+ * What the Idempotency-Key follows: what the API's request hash compares a repeat with, which is the account it's
+ * sent from and each row's account number and bank, amount and narration. A saved beneficiary counts as its account
+ * number and bank (the API matches it with what the key paid), so the same account added by its number instead
+ * can't get a new key, as on the web. The names are left out, as the hash leaves them out: sending again after
+ * checking a changed name must replay a batch that already went, not pay twice. So is the title, which the hash
+ * also ignores, so renaming the batch after a send whose answer was lost can't pay the same people again.
  */
 export const keyedBody = (branch: string, rows: BulkRow[]) => ({
   branch,
-  items: rows.map((r) =>
-    r.beneficiary
-      ? { beneficiary: r.beneficiary._id, amountKobo: r.amountKobo, narration: r.narration ?? null }
-      : { accountNumber: r.accountNumber, bankUuid: r.bank?.uuid, amountKobo: r.amountKobo, narration: r.narration ?? null },
-  ),
+  items: rows.map((r) => {
+    const to = r.beneficiary
+      ? r.beneficiary.bankUuid
+        ? { accountNumber: r.beneficiary.accountNumber, bankUuid: r.beneficiary.bankUuid }
+        : { beneficiary: r.beneficiary._id }
+      : { accountNumber: r.accountNumber, bankUuid: r.bank?.uuid };
+    return { ...to, amountKobo: r.amountKobo, narration: r.narration?.trim() || null };
+  }),
 });
 
 /** What a preview was worked out for: the account and the rows, but not the names (they can be checked again). */
@@ -157,6 +178,8 @@ export const useBulkDraft = create<State & Actions>((set) => ({
   ...blank(),
   open: (business, from) => set((s) => (s.business === business ? { from: s.from ?? from } : blank(business, from))),
   start: (business, from) => set(blank(business, from)),
+  clear: (from) => set((s) => ({ ...blank(s.business, from), keyFor: s.keyFor })),
+  freshKeys: () => set({ keyFor: idempotencyKeys() }),
   set: (d) => set(d),
   addRows: (rows) => set((s) => ({ rows: [...s.rows, ...rows.map((r) => ({ ...r, id: newId() }))] })),
   saveRow: (row) =>

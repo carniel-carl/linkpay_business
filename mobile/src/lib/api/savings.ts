@@ -1,7 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
-import { api, MONEY_TIMEOUT_MS } from "./client";
+import { api, keptIdempotencyKeys, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
 import { pinHeader } from "./transaction-pin";
 import type { Pocket, PocketActivity, PocketColor, PocketIcon, PocketList, PocketMovement } from "./types";
@@ -87,6 +87,14 @@ type Change =
   | { kind: "deposit"; id: string; amountKobo: number; note?: string; idempotencyKey: string };
 
 type Movement = { amountKobo: number; note?: string };
+
+/**
+ * Add money and Withdraw's Idempotency-Keys, by the pocket, the direction, the amount and the note (the pocket scopes
+ * the key; the rest is what the API's request hash covers). Kept outside the screen, so a move whose answer was
+ * lost, filled in again after leaving it, keeps its key and moves the money once. New after a move went, or
+ * IDEMPOTENCY_KEY_REUSED.
+ */
+export const pocketMoveKeys = keptIdempotencyKeys();
 
 const move = async (kind: "deposit" | "withdraw", id: string, m: Movement, headers: Record<string, string>) =>
   (

@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { queryClient } from "@/lib/query";
-import { api, MONEY_TIMEOUT_MS } from "./client";
+import { api, keptIdempotencyKeys, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
 import { pinHeader } from "./transaction-pin";
 import type { Safelock, SafelockLimits, SafelockList } from "./types";
@@ -60,6 +60,13 @@ export function useSafelock(id: string | undefined) {
 }
 
 export type SafelockInput = { branch: string; title: string; amountKobo: number; unlockOn: string };
+
+/**
+ * The New Safelock form's Idempotency-Keys, by its input (the branch, name, amount and unlock date: what the API's
+ * request hash covers). Kept outside the screen, so a lock whose answer was lost, filled in again after leaving
+ * the form, keeps its key and locks the money once. New after a lock is made, or IDEMPOTENCY_KEY_REUSED.
+ */
+export const safelockKeys = keptIdempotencyKeys();
 
 /**
  * Locks money, with the transaction PIN as this request's header (a plain call, so the PIN stays out of

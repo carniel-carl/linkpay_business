@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { getAccessToken } from "@/lib/auth/session";
 import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
 import { API_URL } from "@/lib/config";
+import { APP_HEADERS } from "@/lib/device";
 import { discardFile } from "@/lib/document-file";
 import { api } from "./client";
 import type { Branding } from "./types";
@@ -115,7 +116,7 @@ export function useLogoSource(logo: Branding["logo"] | undefined) {
   const businessId = currentBusinessId();
   return {
     uri: `${API_URL}${logo.url}`,
-    headers: { Authorization: `Bearer ${token}`, ...(businessId && { "X-Business-Id": businessId }) },
+    headers: { ...APP_HEADERS, Authorization: `Bearer ${token}`, ...(businessId && { "X-Business-Id": businessId }) },
     // The URL carries ?v=<updated>, so a new logo is a new cache key.
     cacheKey: `${businessId ?? "default"}:${logo.url}`,
   };

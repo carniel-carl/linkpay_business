@@ -2,13 +2,25 @@ import * as Crypto from "expo-crypto";
 import { API_URL } from "@/lib/config";
 import { getAccessToken, invalidateAccessToken, refreshSession } from "@/lib/auth/session";
 import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
+import { APP_HEADERS } from "@/lib/device";
 import { ApiError } from "./errors";
+
+// The server no longer works with this version (APP_UPDATE_REQUIRED): the update screen takes over (lib/app-update.ts).
+let onUpdateRequired: (minVersion?: string) => void = () => {};
+export const setUpdateRequiredHandler = (fn: typeof onUpdateRequired) => void (onUpdateRequired = fn);
 
 /**
  * For requests that move money. The server can wait 30 s on the payment partner inside one request, so the
  * app waits longer than that before calling it a timeout.
  */
 export const MONEY_TIMEOUT_MS = 45_000;
+
+/**
+ * For a bulk transfer and a payout list run. Before anything is held, the server checks every row's account with
+ * its bank again (up to 200), which the preview doesn't (it reuses recent answers), so the send waits longer than
+ * the preview's 60 s. A timeout still keeps the key and says it may already have gone.
+ */
+export const BULK_MONEY_TIMEOUT_MS = 90_000;
 
 /**
  * Idempotency-Keys for one form, by request body. Sending exactly the same thing again reuses its key, so a
@@ -25,6 +37,25 @@ export function idempotencyKeys() {
     return key;
   };
 }
+
+/** Every keptIdempotencyKeys(), so signing out can forget them all. */
+const kept: { reset: () => void }[] = [];
+
+/**
+ * Idempotency-Keys for a form that closes and opens again (a Safelock, a pocket move), kept here rather than in
+ * its screen: the same details filled in again after a lost answer keep their key, so the money moves once. Pass
+ * `keyFor` what the API's request hash covers, and what scopes the key (the pocket). `reset()` only after a
+ * success, or IDEMPOTENCY_KEY_REUSED (the key went with other details). Signing out resets them all.
+ */
+export function keptIdempotencyKeys() {
+  let keyFor = idempotencyKeys();
+  const keys = { keyFor: (body: unknown) => keyFor(body), reset: () => void (keyFor = idempotencyKeys()) };
+  kept.push(keys);
+  return keys;
+}
+
+/** On signing out: whoever signs in next on this phone starts with new keys. */
+export const forgetKeptIdempotencyKeys = () => kept.forEach((k) => k.reset());
 
 type Options = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -50,6 +81,7 @@ async function send(path: string, opts: Options, token?: string) {
       method: opts.method ?? (opts.json === undefined && !opts.form ? "GET" : "POST"),
       headers: {
         Accept: "application/json",
+        ...APP_HEADERS,
         ...(opts.json !== undefined && { "Content-Type": "application/json" }),
         ...(token && { Authorization: `Bearer ${token}` }),
         ...(opts.businessId && { "X-Business-Id": opts.businessId }),
@@ -74,6 +106,10 @@ async function parse<T>(res: Response): Promise<T> {
   const body = text ? safeJson(text) : undefined;
   if (!res.ok) {
     const b = (body ?? {}) as { error?: string; code?: string; details?: unknown };
+    if (b.code === "APP_UPDATE_REQUIRED") {
+      const min = (b.details as { minVersion?: unknown } | undefined)?.minVersion;
+      onUpdateRequired(typeof min === "string" ? min : undefined);
+    }
     throw new ApiError(res.status, b.error ?? (text || res.statusText), b.code, b.details);
   }
   return body as T;

@@ -10,22 +10,24 @@ import { useBanks } from "@/lib/api/transfers";
 import type { Bank } from "@/lib/api/types";
 import { useBulkDraft } from "@/lib/bulk-draft";
 import { LIST_PERFORMANCE } from "@/lib/list";
+import { useListDraft } from "@/lib/payout-list-draft";
 import { useSendDraft } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
 
 const bankKey = (b: Bank) => b.uuid;
 
 /**
- * Every bank the payout partner supports, searchable. Choosing one goes back to the form: Send money's, or with
- * `?for=bulk` a bulk transfer row's.
+ * Every bank the payout partner supports, searchable. Choosing one goes back to the form: Send money's, with
+ * `?for=bulk` a bulk transfer row's, or with `?for=beneficiary` a payout list's "Add a new account".
  */
 export default function Banks() {
   const { colors } = useTheme();
   const banks = useBanks();
-  const bulk = useLocalSearchParams<{ for?: string }>().for === "bulk";
+  const target = useLocalSearchParams<{ for?: string }>().for;
   const sendBank = useSendDraft((s) => s.draft.bank);
   const bulkBank = useBulkDraft((s) => s.form.bank);
-  const selected = bulk ? bulkBank : sendBank;
+  const accountBank = useListDraft((s) => s.account.bank);
+  const selected = target === "bulk" ? bulkBank : target === "beneficiary" ? accountBank : sendBank;
   const [q, setQ] = useState("");
   const list = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -75,7 +77,8 @@ export default function Banks() {
               accessibilityRole="radio"
               accessibilityState={{ checked: selected?.uuid === item.uuid }}
               onPress={() => {
-                if (bulk) useBulkDraft.getState().updateForm({ bank: item, bankText: undefined, bankError: undefined });
+                if (target === "bulk") useBulkDraft.getState().updateForm({ bank: item, bankText: undefined, bankError: undefined });
+                else if (target === "beneficiary") useListDraft.getState().updateAccount({ bank: item });
                 else useSendDraft.getState().update({ bank: item });
                 router.back();
               }}

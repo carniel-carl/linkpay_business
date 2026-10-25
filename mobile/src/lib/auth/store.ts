@@ -1,5 +1,6 @@
 import { File, Paths } from "expo-file-system";
 import { create } from "zustand";
+import { forgetKeptIdempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import type { DeviceSession, TwoFactorMethod, User } from "@/lib/api/types";
 import { loadBusinessId, useBusinessContext } from "@/lib/business-context";
@@ -10,11 +11,13 @@ import { failedAttempts, hasPasscode, MAX_ATTEMPTS, resetAttempts } from "@/lib/
 import { createBiometricKey, endBiometricKey, signInWithBiometricKey } from "./api";
 import { DEVICE_KEYS, KEYS, secureDelete, secureGet, secureSet, secureWipe } from "./secure-storage";
 import {
-  endSessionOnServer,
   forgetSession,
   hasStoredSession,
+  notePendingLogout,
+  pendingLogoutFor,
   retryPendingLogouts,
   saveSession,
+  sendNotedLogout,
   setSessionEndedHandler,
   setUnlocked,
   storedRefreshToken,
@@ -93,6 +96,15 @@ export const useAuth = create<AuthState>((set, get) => ({
         installed.create();
       }
       await Promise.all([loadInstallationId(), loadBusinessId()]);
+      // A sign-out the app was closed in the middle of: noted for the server, but the session still stored here.
+      // It finishes now, as it would have, and retryPendingLogouts sends it.
+      const stored = await storedRefreshToken();
+      const interrupted = stored ? await pendingLogoutFor(stored) : undefined;
+      if (interrupted) {
+        await forgetSession();
+        if (interrupted.forgetDevice) await secureWipe({ keepInstallation: true });
+        useBusinessContext.getState().setBusinessId(undefined);
+      }
       void retryPendingLogouts();
       // hasPasscode() also drops passcodes in an older format.
       const [session, passcode, rawProfile, flags, attempts] = await Promise.all([
@@ -209,11 +221,15 @@ export const useAuth = create<AuthState>((set, get) => ({
     // Kept in memory to tell the server afterwards. An expired or revoked session has already ended there.
     const live = reason === "signedOut" || reason === "tooManyAttempts" || reason === "noPasscode";
     const refreshToken = live ? await storedRefreshToken().catch(() => null) : null;
-    // The phone forgets everything first, so no network call can hold up the wipe or, if the app is closed, skip it.
+    // Noted down for the server first, on this phone only, so a sign-out the app is closed in the middle of still
+    // ends the session there (and its pushes): the next launch finishes it. Only the keychain, no network.
+    const noted = refreshToken ? await notePendingLogout(refreshToken, { forgetDevice: !keep }) : null;
+    // Then the phone forgets everything, so no network call can hold up the wipe or, if the app is closed, skip it.
     await forgetSession();
     if (!keep) await secureWipe({ keepInstallation: true });
     useBusinessContext.getState().setBusinessId(undefined);
     queryClient.clear();
+    forgetKeptIdempotencyKeys();
     set({
       status: "signedOut",
       challenge: undefined,
@@ -221,7 +237,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       ...(!keep && { profile: undefined, biometrics: false, biometricSignIn: false }),
     });
     // Ending the session also stops this phone getting the account's pushes (the server drops its tokens).
-    if (refreshToken) void endSessionOnServer(refreshToken, { forgetDevice: !keep });
+    if (noted) void sendNotedLogout(noted);
     await forgetPush();
   },
 

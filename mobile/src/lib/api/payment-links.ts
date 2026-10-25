@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { getAccessToken } from "@/lib/auth/session";
 import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
 import { API_URL } from "@/lib/config";
+import { APP_HEADERS } from "@/lib/device";
 import { discardFile } from "@/lib/document-file";
 import type { CheckoutTab, LinkTab } from "@/lib/payment-links";
 import { api } from "./client";
@@ -244,7 +245,7 @@ export function useLinkImageSource(image: Pick<PaymentLinkImage, "url"> | undefi
   const businessId = currentBusinessId();
   return {
     uri: `${API_URL}${url}`,
-    headers: { Authorization: `Bearer ${token}`, ...(businessId && { "X-Business-Id": businessId }) },
+    headers: { ...APP_HEADERS, Authorization: `Bearer ${token}`, ...(businessId && { "X-Business-Id": businessId }) },
     // Each picture's id is new when it changes, so the URL is a stable cache key.
     cacheKey: `${businessId ?? "default"}:${url}`,
   };
