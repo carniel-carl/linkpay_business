@@ -39,7 +39,11 @@ Chosen for the first deploy (2026-10-25).
   - PRs and merges happen in `carniel-carl/linkpay_business`.
   - Render deploys from a private mirror, `Temitayo-spec/linkpay-business` (git remote `deploy`).
   - After a merge, publish it with `git push deploy main`, then deploy from Render's dashboard. Auto-deploy is off, so nothing goes out by itself.
-- **Render web service.**
+- **Render web service:** `linkpay-business-api`, created 2026-10-26, at https://linkpay-business-api.onrender.com.
+  - It's set up as described below.
+  - Its first deploys stop on purpose at `Missing required env var` until the secrets are in.
+  - **Setting variables through Render's API (or its MCP tool) starts a deploy.** Once the secrets are in, change variables only in the dashboard, with **Save only**.
+- **Render web service settings.**
   - Docker, Frankfurt, Starter (512 MB), one instance, no autoscaling.
   - Docker context `backend`, Dockerfile `backend/Dockerfile` (Bun 1.4.4, runs as the `bun` user).
   - Health check path `/health`. Render sets `PORT=10000`, which the API reads.
