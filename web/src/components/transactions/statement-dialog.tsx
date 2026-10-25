@@ -138,8 +138,8 @@ export function StatementDialog({ accounts, defaultBranchId }: { accounts: State
         <DialogHeader>
           <DialogTitle>Download a statement</DialogTitle>
           <DialogDescription>
-            Every completed payment into and out of one account, with totals, in Lagos time. Statements don&apos;t show
-            opening or closing balances.
+            Every completed payment into and out of one account, with totals, in Lagos time. Opening and closing
+            balances appear where the bank reported them, from the first day they were recorded.
           </DialogDescription>
         </DialogHeader>
         <FormError message={error} />

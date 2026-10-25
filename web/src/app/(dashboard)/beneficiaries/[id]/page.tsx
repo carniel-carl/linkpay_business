@@ -74,18 +74,21 @@ export default async function BeneficiaryPage({ params, searchParams }: PageProp
         }
         actions={
           canManage && (
-            // Disabled, with the reason, while the business is suspended.
-            <WriteGate>
+            <>
+              {/* Disabled, with the reason, while the business is suspended. */}
               {sources.length > 0 && (
-                <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId} beneficiary={beneficiary}>
-                  <Button>
-                    <Send data-icon="inline-start" aria-hidden />
-                    Pay
-                  </Button>
-                </NewTransferDialog>
+                <WriteGate>
+                  <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId} beneficiary={beneficiary}>
+                    <Button>
+                      <Send data-icon="inline-start" aria-hidden />
+                      Pay
+                    </Button>
+                  </NewTransferDialog>
+                </WriteGate>
               )}
+              {/* The menu opens either way; its items are dimmed while suspended (`write`). */}
               <BeneficiaryMenu beneficiary={beneficiary} />
-            </WriteGate>
+            </>
           )
         }
       />

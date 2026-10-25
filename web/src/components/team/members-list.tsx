@@ -121,18 +121,19 @@ function MemberRow({ member, actor, roles, branches, businessName }: Shared & { 
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem onSelect={() => setDialog("role")}>
+              {/* Every item changes access: dimmed, with the reason, while the business is suspended. */}
+              <DropdownMenuItem write onSelect={() => setDialog("role")}>
                 <UserCog aria-hidden />
                 Change role
               </DropdownMenuItem>
               {branchLimited && (
-                <DropdownMenuItem onSelect={() => setDialog("branches")}>
+                <DropdownMenuItem write onSelect={() => setDialog("branches")}>
                   <Store aria-hidden />
                   Change branches
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => setDialog("remove")}>
+              <DropdownMenuItem write variant="destructive" onSelect={() => setDialog("remove")}>
                 <UserMinus aria-hidden />
                 Remove from team
               </DropdownMenuItem>

@@ -400,7 +400,7 @@ export function PayoutListRun({
                 </div>
               )}
             </div>
-            <Button onClick={review} disabled={!accounts.length || previewing}>
+            <Button write onClick={review} disabled={!accounts.length || previewing}>
               {previewing && !reviewing ? <Spinner /> : <Send data-icon="inline-start" aria-hidden />}
               Review payment
             </Button>

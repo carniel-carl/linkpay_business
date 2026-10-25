@@ -100,11 +100,11 @@ export function BatchDecisionButtons({
 
   return (
     <>
-      <Button size={size} disabled={!!busy} onClick={() => decide("approve")}>
+      <Button write size={size} disabled={!!busy} onClick={() => decide("approve")}>
         {busy === "approve" && <Spinner />}
         Approve {awaitingMe} · <span className="figure">{amount}</span>
       </Button>
-      <Button size={size} variant="outline" disabled={!!busy} onClick={() => setRejecting(true)}>
+      <Button write size={size} variant="outline" disabled={!!busy} onClick={() => setRejecting(true)}>
         Reject {awaitingMe}
       </Button>
 

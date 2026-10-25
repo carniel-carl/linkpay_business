@@ -18,7 +18,11 @@ export const STATEMENT_PERIOD_LABELS: Record<StatementPeriod, string> = {
 
 export const STATEMENT_FORMATS: { value: StatementFormat; label: string; description: string }[] = [
   { value: "pdf", label: "PDF", description: "A formatted statement to print, share or send to your accountant. Up to 5,000 transactions." },
-  { value: "csv", label: "CSV", description: "One row per transaction, for Excel, Google Sheets or accounting software. Up to 20,000 transactions." },
+  {
+    value: "csv",
+    label: "CSV",
+    description: "The balances, then one row per transaction, for Excel, Google Sheets or accounting software. Up to 20,000 transactions.",
+  },
 ]
 
 /** The same day `months` months earlier, or that month's last day when it's shorter (31 May less 3 months is 28 Feb). */

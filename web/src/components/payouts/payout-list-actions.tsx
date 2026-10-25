@@ -54,7 +54,7 @@ export function PayoutListMenu({ list, leaveTo, showEdit = true }: { list: Pick<
         <DropdownMenuContent align="end" className="w-48">
           {showEdit && (
             <>
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem write asChild>
                 <Link href={`/payout-lists/${list._id}/edit`}>
                   <Pencil aria-hidden />
                   Edit list
@@ -63,7 +63,7 @@ export function PayoutListMenu({ list, leaveTo, showEdit = true }: { list: Pick<
               <DropdownMenuSeparator />
             </>
           )}
-          <DropdownMenuItem variant="destructive" onSelect={() => setConfirming(true)}>
+          <DropdownMenuItem write variant="destructive" onSelect={() => setConfirming(true)}>
             <Trash2 aria-hidden />
             Delete list
           </DropdownMenuItem>

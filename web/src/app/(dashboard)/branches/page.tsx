@@ -96,7 +96,7 @@ function BranchCard({ branch, viewing, canEdit }: { branch: Branch; viewing: boo
           </div>
           {canEdit && (
             <BranchFormDialog branch={branch}>
-              <Button variant="ghost" size="icon-sm" aria-label={`Edit ${branch.name}`}>
+              <Button write variant="ghost" size="icon-sm" aria-label={`Edit ${branch.name}`}>
                 <Pencil aria-hidden />
               </Button>
             </BranchFormDialog>

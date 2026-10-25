@@ -176,11 +176,11 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
                 </FieldDescription>
               </Field>
               <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" disabled={!!pending} onClick={() => act("reject")}>
+                <Button write="block" className="w-full" variant="outline" disabled={!!pending} onClick={() => act("reject")}>
                   {pending === "reject" && <Spinner />}
                   Reject
                 </Button>
-                <Button disabled={!!pending} onClick={() => act("approve")}>
+                <Button write="block" className="w-full" disabled={!!pending} onClick={() => act("approve")}>
                   {pending === "approve" && <Spinner />}
                   {finalLevel ? "Approve and send" : `Approve level ${current}`}
                 </Button>
@@ -188,12 +188,13 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
             </>
           )}
           {t.canCancel && (
-            <Button variant="outline" disabled={!!pending} onClick={() => act("cancel")}>
+            <Button write="block" variant="outline" disabled={!!pending} onClick={() => act("cancel")}>
               {pending === "cancel" && <Spinner />}
               Cancel transfer
             </Button>
           )}
           {t.status === "processing" && (
+            // Only asks the bank how the payout is doing, so the API allows it while the business is suspended.
             <Button variant="outline" disabled={checking} onClick={check}>
               {checking ? <Spinner /> : <RotateCw data-icon="inline-start" aria-hidden />}
               Check status now

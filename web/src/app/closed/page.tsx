@@ -4,9 +4,10 @@ import { LogOut, Mail } from "lucide-react"
 import { signOut } from "@/app/(auth)/actions"
 import { AuthFrame } from "@/components/auth/auth-frame"
 import type { Ledger } from "@/components/auth/ledgers"
-import { OtherBusinesses, RefreshWhenVisible } from "@/components/shell/closed-business"
+import { LeaveClosedBusiness, OtherBusinesses, RefreshWhenVisible } from "@/components/shell/closed-business"
 import { Button } from "@/components/ui/button"
 import { getMemberships, getOverview } from "@/lib/data"
+import { isOwner } from "@/lib/permissions"
 import { isClosed } from "@/lib/restriction"
 import { SUPPORT_EMAIL } from "@/lib/support"
 
@@ -36,6 +37,8 @@ export default async function ClosedBusinessPage() {
 
   const { name } = overview.business
   const others = memberships.filter((m) => m.business._id !== overview.business._id)
+  // The owner can't leave (OWNER_CANNOT_LEAVE); everyone else can, even though the business is closed.
+  const canLeave = !!overview.membership && !isOwner(overview.membership)
 
   return (
     <AuthFrame
@@ -72,6 +75,18 @@ export default async function ClosedBusinessPage() {
               Your other {others.length === 1 ? "business" : "businesses"}
             </h3>
             <OtherBusinesses memberships={others} />
+          </section>
+        )}
+
+        {canLeave && (
+          <section aria-labelledby="closed-leave" className="grid gap-3">
+            <h3 id="closed-leave" className="text-sm font-medium">
+              Leave this business
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              You&apos;re a member of {name}, so you can leave it. Only an invite can bring you back.
+            </p>
+            <LeaveClosedBusiness businessId={overview.business._id} businessName={name} />
           </section>
         )}
 

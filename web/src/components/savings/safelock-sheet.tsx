@@ -90,7 +90,7 @@ function Details({ lock: s }: { lock: Safelock }) {
           )}
         </p>
         {s.canRename && !renaming && (
-          <Button variant="ghost" size="sm" className="w-fit" onClick={() => setRenaming(true)}>
+          <Button write variant="ghost" size="sm" className="w-fit" onClick={() => setRenaming(true)}>
             <Pencil data-icon="inline-start" aria-hidden />
             Rename
           </Button>

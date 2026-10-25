@@ -118,10 +118,9 @@ function ListCard({ list: l, canManage, showBranch }: { list: PayoutList; canMan
           </div>
         </div>
         {canManage && (
+          // The menu opens either way; its items are dimmed while suspended (`write`).
           <div className="relative z-10">
-            <WriteGate>
-              <PayoutListMenu list={l} />
-            </WriteGate>
+            <PayoutListMenu list={l} />
           </div>
         )}
       </div>

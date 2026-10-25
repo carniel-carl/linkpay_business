@@ -104,7 +104,7 @@ function InviteRow({ invite, manageable, roles }: { invite: Invite; manageable: 
       </div>
       {manageable && (
         <div className="-ml-3 flex items-center gap-1 md:ml-0">
-          <Button variant="ghost" size="sm" onClick={resend} disabled={resending || coolingDown}>
+          <Button write variant="ghost" size="sm" onClick={resend} disabled={resending || coolingDown}>
             {resending ? <Spinner /> : <RotateCw data-icon="inline-start" aria-hidden />}
             {coolingDown ? "Sent" : "Resend"}
           </Button>
@@ -133,7 +133,7 @@ function RevokeButton({ invite }: { invite: Invite }) {
   return (
     <AlertDialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
       <AlertDialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">
+        <Button write variant="ghost" size="sm" className="text-destructive hover:text-destructive">
           <X data-icon="inline-start" aria-hidden />
           Revoke
         </Button>

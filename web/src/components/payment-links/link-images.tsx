@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { ImagePlus, RotateCw, Star, X } from "lucide-react"
 import { uploadPaymentLinkImage } from "@/app/(dashboard)/payment-links/actions"
+import { useReadOnly, WriteGate } from "@/components/shell/write-gate"
 import { Spinner } from "@/components/ui/spinner"
 import type { PaymentLinkImage } from "@/lib/api/types"
 import { IMAGE_TYPES, LIMITS, linkImageSrc } from "@/lib/payment-links"
@@ -68,6 +69,8 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
   const [dragging, setDragging] = useState(false)
   const [notice, setNotice] = useState<string>()
   const left = LIMITS.maxImages - value.length
+  // A dropped file uploads straight away too, so dropping is off while the business is suspended, like the add buttons.
+  const { readOnly } = useReadOnly()
 
   // Local previews are blob: URLs; let them go when the form goes away.
   const blobs = useRef(new Set<string>())
@@ -116,7 +119,7 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
 
   const dropProps = {
     onDragOver: (e: React.DragEvent) => {
-      if (left <= 0 || !e.dataTransfer.types.includes("Files")) return
+      if (readOnly || left <= 0 || !e.dataTransfer.types.includes("Files")) return
       e.preventDefault()
       setDragging(true)
     },
@@ -124,7 +127,7 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
     onDrop: (e: React.DragEvent) => {
       e.preventDefault()
       setDragging(false)
-      if (left > 0) add(e.dataTransfer.files)
+      if (!readOnly && left > 0) add(e.dataTransfer.files)
     },
   }
 
@@ -148,6 +151,8 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
     return (
       <div className="grid gap-2">
         {picker}
+        {/* Each picture uploads as soon as it's added, so adding is gated while the business is suspended. */}
+        <WriteGate block>
         <button
           type="button"
           onClick={() => input.current?.click()}
@@ -166,6 +171,7 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
             </span>
           </span>
         </button>
+        </WriteGate>
         {(notice || error) && <p className="text-sm text-destructive">{error ?? notice}</p>}
       </div>
     )
@@ -214,6 +220,7 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
         ))}
         {left > 0 && (
           <li>
+            <WriteGate block>
             <button
               type="button"
               onClick={() => input.current?.click()}
@@ -227,6 +234,7 @@ export function LinkImages({ value, onChange, error }: { value: Picture[]; onCha
                 Add ({left} left)
               </span>
             </button>
+            </WriteGate>
           </li>
         )}
       </ul>

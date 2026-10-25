@@ -2,8 +2,10 @@
 
 import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, LogOut } from "lucide-react"
 import { openBusiness } from "@/app/(dashboard)/business-actions"
+import { LeaveBusinessDialog } from "@/components/team/leave-business"
+import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import type { MembershipSummary } from "@/lib/api/types"
 import { initials } from "@/lib/format"
@@ -58,6 +60,25 @@ export function OtherBusinesses({ memberships }: { memberships: MembershipSummar
         )
       })}
     </ul>
+  )
+}
+
+/**
+ * The closed page's way out for a member who isn't the owner: the API lets them leave a closed business. It leaves the
+ * business the page showed, then goes on to their next business, or onboarding if there's none.
+ */
+export function LeaveClosedBusiness({ businessId, businessName }: { businessId: string; businessName: string }) {
+  return (
+    <LeaveBusinessDialog
+      businessId={businessId}
+      businessName={businessName}
+      description="It won't be listed with your businesses any more. If it opens again, someone on its team will have to invite you back."
+    >
+      <Button variant="outline" className="w-full text-destructive hover:text-destructive">
+        <LogOut data-icon="inline-start" aria-hidden />
+        Leave this business
+      </Button>
+    </LeaveBusinessDialog>
   )
 }
 

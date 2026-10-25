@@ -67,7 +67,7 @@ export default async function TeamPage() {
         </div>
         {!isOwner(membership) && (
           <div style={{ "--i": 2 } as React.CSSProperties}>
-            <LeaveBusiness businessName={business.name} />
+            <LeaveBusiness businessId={business._id} businessName={business.name} />
           </div>
         )}
       </div>
@@ -96,7 +96,7 @@ function NotAManager({ overview, membership }: { overview: Overview; membership:
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
-        <LeaveBusiness businessName={business.name} />
+        <LeaveBusiness businessId={business._id} businessName={business.name} />
       </div>
     </>
   )

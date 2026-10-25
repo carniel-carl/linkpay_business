@@ -218,7 +218,8 @@ export function PayoutListEditor({
               description="We check the account with its bank, save it as a beneficiary for your whole team and add it to this list."
               submitLabel="Save and add"
             >
-              <Button type="button" variant="outline" disabled={room <= 0}>
+              {/* Saves a beneficiary straight away (and checks the account with a POST), so it's a write. */}
+              <Button write type="button" variant="outline" disabled={room <= 0}>
                 <UserPlus data-icon="inline-start" aria-hidden />
                 Add a new account
               </Button>
@@ -307,7 +308,8 @@ export function PayoutListEditor({
         <Button type="button" variant="ghost" asChild>
           <Link href={editing ? `/payout-lists/${list._id}` : "/payout-lists"}>Cancel</Link>
         </Button>
-        <Button type="submit" disabled={busy}>
+        {/* Also reached straight from its URL, so gated here as well as at the links to it. */}
+        <Button write type="submit" disabled={busy}>
           {busy && <Spinner />}
           {editing ? "Save changes" : "Save list"}
         </Button>

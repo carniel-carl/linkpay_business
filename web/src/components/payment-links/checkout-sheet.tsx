@@ -212,12 +212,12 @@ function SimulatePayment({ checkout }: { checkout: LinkCheckout }) {
       </div>
       <FormError message={error} />
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => simulate("paid")} disabled={!!busy}>
+        <Button write onClick={() => simulate("paid")} disabled={!!busy}>
           {busy === "paid" ? <Spinner /> : <FlaskConical data-icon="inline-start" aria-hidden />}
           {donation ? "Simulate the gift" : "Simulate payment"}
         </Button>
         {!donation && (
-          <Button variant="outline" onClick={() => simulate("underpaid")} disabled={!!busy}>
+          <Button write variant="outline" onClick={() => simulate("underpaid")} disabled={!!busy}>
             {busy === "underpaid" && <Spinner />}
             Simulate part payment
           </Button>
@@ -316,7 +316,7 @@ function LinkPayment({ checkout }: { checkout: LinkCheckout }) {
                 </li>
               ))}
             </ul>
-            <Button onClick={link} disabled={!picked || busy}>
+            <Button write onClick={link} disabled={!picked || busy}>
               {busy ? <Spinner /> : <Link2 data-icon="inline-start" aria-hidden />}
               Link this payment
             </Button>

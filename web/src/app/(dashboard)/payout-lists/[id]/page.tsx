@@ -82,15 +82,18 @@ export default async function PayoutListPage({ params }: PageProps<"/payout-list
         }
         actions={
           canRun && (
-            <WriteGate>
-              <Button variant="outline" asChild>
-                <Link href={`/payout-lists/${list._id}/edit`}>
-                  <Pencil data-icon="inline-start" aria-hidden />
-                  Edit list
-                </Link>
-              </Button>
+            <>
+              <WriteGate>
+                <Button variant="outline" asChild>
+                  <Link href={`/payout-lists/${list._id}/edit`}>
+                    <Pencil data-icon="inline-start" aria-hidden />
+                    Edit list
+                  </Link>
+                </Button>
+              </WriteGate>
+              {/* The menu opens either way; its items are dimmed while suspended (`write`). */}
               <PayoutListMenu list={list} leaveTo="/payout-lists" showEdit={false} />
-            </WriteGate>
+            </>
           )
         }
       />

@@ -7,7 +7,6 @@ import { Ellipsis, ExternalLink, FlaskConical, Pencil, Power, PowerOff, Rocket, 
 import { toast } from "sonner"
 import { deletePaymentLink, updatePaymentLink } from "@/app/(dashboard)/payment-links/actions"
 import { CopyButton } from "@/components/accounts/copy-button"
-import { WriteGate } from "@/components/shell/write-gate"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -95,7 +94,7 @@ export function TestModeBanner({ link }: { link: PaymentLink }) {
         No money moves. Test payments show apart from real ones and are cleared when you go live.
       </AlertDescription>
       {link.canManage && (
-        <Button size="sm" onClick={() => mode.ask("live")} className="col-start-2 mt-2.5 justify-self-start">
+        <Button write size="sm" onClick={() => mode.ask("live")} className="col-start-2 mt-2.5 justify-self-start">
           <Rocket data-icon="inline-start" aria-hidden />
           Go live
         </Button>
@@ -141,15 +140,13 @@ export function LinkActions({ link }: { link: PaymentLink }) {
       <CopyButton value={link.url} message="Link copied. Paste it into WhatsApp, SMS or an email." label="Copy link" variant="default" size="default">
         Copy link
       </CopyButton>
-      {/* Disabled, with the reason, while the business is suspended. Copying the link still works. */}
-      <WriteGate>
-        <Button variant="outline" asChild>
-          <Link href={`/payment-links/${link._id}/edit`}>
-            <Pencil data-icon="inline-start" aria-hidden />
-            Edit
-          </Link>
-        </Button>
-      </WriteGate>
+      {/* `write`: disabled, with the reason, while the business is suspended. Copying and opening the link still work. */}
+      <Button write variant="outline" asChild>
+        <Link href={`/payment-links/${link._id}/edit`}>
+          <Pencil data-icon="inline-start" aria-hidden />
+          Edit
+        </Link>
+      </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="icon" aria-label="More actions">
@@ -164,25 +161,25 @@ export function LinkActions({ link }: { link: PaymentLink }) {
             </a>
           </DropdownMenuItem>
           {link.mode === "test" ? (
-            <DropdownMenuItem onSelect={() => mode.ask("live")}>
+            <DropdownMenuItem write onSelect={() => mode.ask("live")}>
               <Rocket aria-hidden />
               Go live
             </DropdownMenuItem>
           ) : (
-            <DropdownMenuItem onSelect={() => mode.ask("test")}>
+            <DropdownMenuItem write onSelect={() => mode.ask("test")}>
               <FlaskConical aria-hidden />
               Switch to test mode
             </DropdownMenuItem>
           )}
           {active ? (
-            <DropdownMenuItem onSelect={() => setConfirm("off")}>
+            <DropdownMenuItem write onSelect={() => setConfirm("off")}>
               <PowerOff aria-hidden />
               Turn off
             </DropdownMenuItem>
           ) : (
             // A link LinkPay paused can only be turned back on by LinkPay.
             !link.takenDown && (
-              <DropdownMenuItem disabled={busy} onSelect={() => setStatus("active")}>
+              <DropdownMenuItem write disabled={busy} onSelect={() => setStatus("active")}>
                 <Power aria-hidden />
                 Turn on
               </DropdownMenuItem>
@@ -191,7 +188,7 @@ export function LinkActions({ link }: { link: PaymentLink }) {
           {!used && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => setConfirm("delete")}>
+              <DropdownMenuItem write variant="destructive" onSelect={() => setConfirm("delete")}>
                 <Trash2 aria-hidden />
                 Delete
               </DropdownMenuItem>

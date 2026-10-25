@@ -61,7 +61,8 @@ export default async function InvoicesPage({ searchParams }: PageProps<"/invoice
         actions={
           canManage && (
             <>
-              <Button variant="outline" asChild>
+              {/* Branding is only edited there; Settings still shows it, with its save disabled. */}
+              <Button write variant="outline" asChild>
                 <Link href="/settings/branding">
                   <Palette data-icon="inline-start" aria-hidden />
                   Branding

@@ -22,12 +22,12 @@ export function BeneficiaryMenu({ beneficiary }: { beneficiary: Beneficiary }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem onSelect={() => setActing("rename")}>
+          <DropdownMenuItem write onSelect={() => setActing("rename")}>
             <Pencil aria-hidden />
             {beneficiary.nickname ? "Change nickname" : "Add a nickname"}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setActing("delete")}>
+          <DropdownMenuItem write variant="destructive" onSelect={() => setActing("delete")}>
             <Trash2 aria-hidden />
             Delete
           </DropdownMenuItem>
@@ -49,6 +49,7 @@ export function NicknameEdit({ beneficiary }: { beneficiary: Beneficiary }) {
   return (
     <>
       <Button
+        write
         variant="ghost"
         size="sm"
         className="-my-1.5 h-7 px-2"

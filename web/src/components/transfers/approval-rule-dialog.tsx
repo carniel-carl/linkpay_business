@@ -84,7 +84,7 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
     >
       <DialogTrigger asChild>
         {/* An icon only on phones, beside Transfers' other header buttons. */}
-        <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
+        <Button write variant="outline" className="max-sm:w-9 max-sm:px-0!">
           <ShieldCheck data-icon="inline-start" aria-hidden />
           <span className="max-sm:sr-only">Approval rule</span>
         </Button>
@@ -140,7 +140,7 @@ export function ApprovalRuleDialog({ settings }: { settings: TransferSettings })
               </Link>
             </Button>
           ) : (
-            <Button onClick={save} disabled={busy}>
+            <Button write onClick={save} disabled={busy}>
               {busy && <Spinner />}
               Save rule
             </Button>

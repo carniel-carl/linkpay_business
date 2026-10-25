@@ -582,7 +582,8 @@ export function LinkEditor({
             <Button type="button" variant="ghost" asChild>
               <Link href={editing ? `/payment-links/${link._id}` : "/payment-links"}>Cancel</Link>
             </Button>
-            <Button type="submit" disabled={busy || uploading}>
+            {/* The editor is also reached straight from its URL, so the save is gated here too. */}
+            <Button write type="submit" disabled={busy || uploading}>
               {busy && <Spinner />}
               {editing ? "Save changes" : "Create link"}
             </Button>

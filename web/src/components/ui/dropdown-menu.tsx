@@ -4,6 +4,9 @@ import * as React from "react"
 import { cn } from "cn"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 import { CheckIcon, ChevronRightIcon } from "lucide-react"
+import { useReadOnly } from "@/components/shell/write-gate"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 function DropdownMenu({
   ...props
@@ -57,26 +60,66 @@ function DropdownMenuGroup({
   )
 }
 
+const stopEvent = (e: React.SyntheticEvent) => {
+  e.preventDefault()
+  e.stopPropagation()
+}
+
 function DropdownMenuItem({
   className,
   inset,
   variant = "default",
+  write = false,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
   inset?: boolean
   variant?: "default" | "destructive"
+  /**
+   * The item changes the business. While the dashboard is read-only (a suspended business, see WriteGate) it shows
+   * dimmed with the reason as a tooltip, stays focusable, and does nothing when chosen: the menu stays open.
+   */
+  write?: boolean
 }) {
-  return (
+  const readOnly = useReadOnly()
+  const gated = write && readOnly.readOnly
+  const item = (
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
       data-inset={inset}
       data-variant={variant}
       className={cn(
         "group/dropdown-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
+        gated && "cursor-not-allowed opacity-50",
         className
       )}
       {...props}
+      // Choosing it (click, Enter, Space: Radix turns each into a click) is stopped before it selects or follows a
+      // link. The pointer-down stop keeps the tooltip open, as WriteGate does.
+      {...(gated && {
+        "aria-disabled": true,
+        onSelect: (e: Event) => e.preventDefault(),
+        onClickCapture: stopEvent,
+        onPointerDownCapture: stopEvent,
+      })}
     />
+  )
+  if (!readOnly.readOnly || !gated) return item
+  return <ItemReason reason={readOnly.reason}>{item}</ItemReason>
+}
+
+/**
+ * A dimmed item's reason: beside the menu, clear of the other items, or under the item on a phone, where a menu
+ * leaves too little room on either side and a tooltip beside it would run off the screen.
+ */
+function ItemReason({ reason, children }: { reason: string; children: React.ReactElement }) {
+  const isMobile = useIsMobile()
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={isMobile ? "bottom" : "left"} collisionPadding={8}>
+        {reason}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

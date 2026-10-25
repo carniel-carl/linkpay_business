@@ -563,7 +563,8 @@ export function InvoiceEditor({ branches, customers, branding, defaults, busines
             <Button type="button" variant="ghost" asChild>
               <Link href={invoice ? `/invoices/${invoice._id}` : "/invoices"}>Cancel</Link>
             </Button>
-            <Button type="submit" disabled={busy || (!locked && ready.length === 0)}>
+            {/* The editor is also reached straight from its URL, so the save is gated here too. */}
+            <Button write type="submit" disabled={busy || (!locked && ready.length === 0)}>
               {busy && <Spinner />}
               {invoice ? "Save changes" : "Save draft"}
             </Button>
