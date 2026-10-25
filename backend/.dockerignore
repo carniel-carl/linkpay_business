@@ -1,0 +1,9 @@
+# Only what the Dockerfile copies is needed; keep secrets and local data out of the build context.
+node_modules
+.env
+.env.*
+uploads
+tests
+coverage
+*.log
+.DS_Store

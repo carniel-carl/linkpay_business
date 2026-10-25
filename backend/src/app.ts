@@ -28,6 +28,7 @@ import { transfersRouter } from "./routes/transfers";
 import { webhooksRouter } from "./routes/webhooks";
 import { usersRouter } from "./routes/users";
 import { requireSupportedApp } from "./middleware/appVersion";
+import { clientIpFromServers } from "./middleware/clientIp";
 import { errorHandler, notFound } from "./middleware/errorHandler";
 
 export const app = express();
@@ -41,6 +42,9 @@ if (/^\s*(true|\d+)\s*$/i.test(env.trustProxy)) {
 }
 for (const entry of env.trustProxy.split(",")) assertNarrowSubnet(entry.trim());
 app.set("trust proxy", env.trustProxy);
+// Web and admin servers that can't be listed above (Vercel has no fixed outgoing addresses) send the visitor's
+// address with CLIENT_IP_SECRET instead. Before everything else, so every route and rate limit sees that req.ip.
+app.use(clientIpFromServers);
 
 /**
  * A subnet in TRUST_PROXY wider than /8 (IPv4) or /16 (IPv6), such as 0.0.0.0/0 or ::/0, trusts nearly any

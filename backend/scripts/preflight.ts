@@ -83,6 +83,26 @@ function secret(vars: Vars, name: string) {
   return pass(name, `set (${value.length} characters)`);
 }
 
+/** Optional, with src/config/env.ts's rules: the web and admin servers send it with the visitor's IP (Vercel). */
+function clientIpSecret(vars: Vars) {
+  const { pass, warn, fail } = check("Environment");
+  const name = "CLIENT_IP_SECRET";
+  const value = vars[name]?.trim();
+  if (!value) {
+    return warn(
+      name,
+      "not set: web and admin must then reach the API through a proxy listed in TRUST_PROXY, or every visitor they serve shares their rate limits (on Vercel, set it here and on both)",
+    );
+  }
+  if (!/^[\x21-\x7e]+$/.test(value)) return fail(name, `has spaces or characters a header can't carry, which the server refuses at startup: ${GENERATE}`);
+  if (value.length < 32) return fail(name, `only ${value.length} characters, needs at least 32: ${GENERATE}`);
+  if (repoSecrets().has(value)) return fail(name, `is a development value from this repo (dev:mock or tests): ${GENERATE}`);
+  for (const other of ["JWT_SECRET", "STAFF_JWT_SECRET", "ENCRYPTION_KEY"]) {
+    if (vars[other] && value.toLowerCase() === vars[other]!.toLowerCase()) return fail(name, `same as ${other}: use a separate secret, ${GENERATE}`);
+  }
+  return pass(name, `set (${value.length} characters): the web and admin servers need the same value`);
+}
+
 function publicUrl(vars: Vars, name: string, fallback: string, usedFor: string) {
   const { pass, warn, fail } = check("Environment");
   const raw = vars[name]?.trim();
@@ -238,6 +258,8 @@ export function checkEnv(vars: Vars): Check[] {
       out.push(fail("TRUST_PROXY", `doesn't parse, so the server won't start: ${errorText(err)}`));
     }
   }
+  // Where the web and admin servers can't be listed in TRUST_PROXY (Vercel), they pass the visitor's IP with it.
+  out.push(clientIpSecret(vars));
 
   // Public URLs, which end up in emails and embed code.
   out.push(publicUrl(vars, "API_URL", `http://localhost:${vars.PORT ?? 4000}`, "payment-link embed code and its verify URL"));

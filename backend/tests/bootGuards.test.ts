@@ -201,6 +201,55 @@ describe("token secrets", () => {
   });
 });
 
+describe("CLIENT_IP_SECRET", () => {
+  const read = ["-e", `const { env } = await import("./src/config/env"); console.log(JSON.stringify(env.clientIpSecret ?? null))`];
+
+  test("optional: unset or empty, nothing is believed from X-LinkPay-Client-IP", async () => {
+    for (const CLIENT_IP_SECRET of [undefined, "", "  "]) {
+      const res = await boot({ CLIENT_IP_SECRET }, read);
+      expect([CLIENT_IP_SECRET, res.code, res.output.trim()]).toEqual([CLIENT_IP_SECRET, 0, "null"]);
+    }
+  });
+
+  test("when set: at least 32 visible characters, in every NODE_ENV, with surrounding whitespace dropped", async () => {
+    const value = secret();
+    for (const NODE_ENV of ["development", "test", "production"]) {
+      const short = await boot({ NODE_ENV, CLIENT_IP_SECRET: "x".repeat(31) });
+      expect([NODE_ENV, short.code === 0]).toEqual([NODE_ENV, false]);
+      expect(short.output).toContain("CLIENT_IP_SECRET must be at least 32 characters");
+    }
+    // It goes in a header: a space or a character outside printable ASCII would break every call from the web.
+    for (const CLIENT_IP_SECRET of [`${value.slice(0, 20)} ${value.slice(20)}`, `${value}é`, `${value}\u0007`]) {
+      const res = await boot({ CLIENT_IP_SECRET });
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("CLIENT_IP_SECRET must be letters, digits and symbols only (no spaces)");
+    }
+    const ok = await boot({ CLIENT_IP_SECRET: ` ${value}\n` }, read);
+    expect([ok.code, ok.output.trim()]).toEqual([0, JSON.stringify(value)]);
+  });
+
+  test("never one of the other secrets, whatever the case", async () => {
+    const key = secret();
+    const vars = { JWT_SECRET: secret(), STAFF_JWT_SECRET: secret(), ENCRYPTION_KEY: key };
+    for (const name of ["JWT_SECRET", "STAFF_JWT_SECRET", "ENCRYPTION_KEY"] as const) {
+      const res = await boot({ ...vars, CLIENT_IP_SECRET: vars[name].toUpperCase() });
+      expect([name, res.code === 0]).toEqual([name, false]);
+      expect(res.output).toContain(`CLIENT_IP_SECRET must be different from ${name}`);
+    }
+  });
+
+  test("a repo value is refused in production or with a live key, and fine in development with a test key", async () => {
+    const repo = [...REPO_SECRETS].find((s) => s.length >= 32)!;
+    expect((await boot({ CLIENT_IP_SECRET: repo }, read)).output.trim()).toBe(JSON.stringify(repo));
+    for (const vars of [{ NODE_ENV: "production" }, { LIQUIFIA_SECRET_KEY: "sk_live_boot", LIQUIFIA_ALLOW_LIVE: "1" }]) {
+      const res = await boot({ ...vars, CLIENT_IP_SECRET: repo });
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("CLIENT_IP_SECRET is a development value committed in this repo");
+      expect(res.output).not.toContain(repo); // the value itself is never printed
+    }
+  });
+});
+
 describe("TRUST_PROXY", () => {
   test("a subnet wider than /8 (IPv4) or /16 (IPv6) is refused, whatever its notation", async () => {
     for (const TRUST_PROXY of ["0.0.0.0/0", "::/0", "10.0.0.5, 0.0.0.0/0", "10.0.0.0/7", "fd00::/15", "0.0.0.0/0.0.0.0", "::ffff:0.0.0.0/96"]) {
