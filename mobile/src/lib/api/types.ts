@@ -11,7 +11,12 @@ export type User = {
   /** False when verifying the email removed a password chosen before it was proven. A reset sets one. */
   hasPassword?: boolean;
   role: "user" | "admin";
-  twoFactor?: { enabled: boolean; method: TwoFactorMethod | null };
+  twoFactor?: {
+    enabled: boolean;
+    method: TwoFactorMethod | null;
+    /** Unused recovery codes. 0 unless the method is the authenticator app. */
+    recoveryCodesLeft: number;
+  };
   createdAt: string;
   updatedAt: string;
 };
@@ -20,6 +25,12 @@ export type User = {
 export type DeviceSession = { accessToken: string; refreshToken: string; sessionId: string; user: User };
 
 export type TwoFactorChallenge = { twoFactorRequired: true; method: TwoFactorMethod; challengeToken: string };
+
+/** POST /api/auth/login/2fa. A sign-in with a recovery code also says how many are left. */
+export type TwoFactorSession = DeviceSession & { recoveryCodeUsed?: true; recoveryCodesLeft?: number };
+
+/** Shown once: when the authenticator app is turned on, and from POST /api/auth/2fa/recovery-codes. */
+export type RecoveryCodes = { recoveryCodes: string[] };
 
 export type SignInResponse = DeviceSession | TwoFactorChallenge;
 
@@ -85,7 +96,18 @@ export type Business = {
   submittedAt?: string;
   reviewedAt?: string;
   liquifia?: { accountStatus: AccountSetupStatus };
+  /** Whether compliance has restricted the business (never why). */
+  restriction?: Restriction;
 };
+
+/**
+ * A compliance restriction (docs/briefs/compliance.md). Suspended: every read works and every change is refused
+ * (BUSINESS_SUSPENDED). Banned, shown as "Closed": every business route is refused (BUSINESS_BANNED), except
+ * GET /api/business and GET /api/memberships, which say so.
+ */
+export type RestrictionStatus = "active" | "suspended" | "banned";
+/** `since` is null while active. */
+export type Restriction = { status: RestrictionStatus; since: string | null };
 
 // ---- Verification (KYB) ----
 
@@ -144,7 +166,8 @@ export type Overview = {
 
 /** GET /api/memberships, for the business switcher. */
 export type MembershipSummary = {
-  business: { _id: string; name: string; status: BusinessStatus };
+  /** `restriction` is the status alone here, not GET /api/business's `{ status, since }`. */
+  business: { _id: string; name: string; status: BusinessStatus; restriction?: RestrictionStatus };
   role: string;
   roleLabel?: string;
   isOwner: boolean;
@@ -200,6 +223,13 @@ export type TransactionList = { items: Transaction[]; total: number; skip: numbe
 
 /** Successful transactions only. */
 export type TransactionSummary = { inflowKobo: number; outflowKobo: number; feesKobo: number; count: number; currency: "NGN" };
+
+/**
+ * GET /api/transactions/statement?branch=&from=&to=&format= answers with the file itself (docs/briefs/statements.md):
+ * one branch account's completed transactions over Lagos days `from` to `to` (both included, at most 366, ending
+ * today or earlier), with totals and no balances.
+ */
+export type StatementFormat = "pdf" | "csv";
 
 // ---- Team ----
 

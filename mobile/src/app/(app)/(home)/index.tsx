@@ -9,6 +9,7 @@ import { Logo } from "@/components/brand/logo";
 import { BranchDeck } from "@/components/home/branch-deck";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
 import { HomeShortcuts } from "@/components/home/shortcuts";
+import { SuspendedBanner } from "@/components/home/suspended-banner";
 import { PaymentRow, PaymentRowSkeleton } from "@/components/payments/payment-row";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -79,6 +80,9 @@ export default function Home() {
       ? gate.overview.business
       : undefined;
   const switchable = (memberships.data?.length ?? 0) > 1;
+  // Suspended: reads work, writes are refused. The band says so and Send is left off the cards. (A closed business
+  // gets the closed screen over the tabs instead; see the (app) layout.)
+  const suspended = business?.restriction?.status === "suspended";
   const [refreshing, setRefreshing] = useState(false);
   // The business's own logo (Invoice branding), when it has one.
   const branding = useBranding(ready);
@@ -127,6 +131,7 @@ export default function Home() {
             {profile ? `, ${profile.firstName}` : ""}
           </Text>
           <BusinessTitle name={business?.name} logo={logo} switchable={switchable} />
+          {suspended && business && <SuspendedBanner name={business.name} />}
         </View>
 
         {ready && cards.length > 0 ? (
@@ -145,7 +150,7 @@ export default function Home() {
               }}
               onSavings={(c) => router.push({ pathname: "/savings", params: { branch: c.branch._id } })}
               onSend={
-                can(gate.overview, "transfers.create")
+                can(gate.overview, "transfers.create") && !suspended
                   ? (c) => {
                       useSendDraft.getState().start(c.branch._id);
                       router.push("/payments/send");

@@ -1,6 +1,6 @@
 import { api } from "@/lib/api/client";
 import { idSegment } from "@/lib/api/paths";
-import type { DeviceSession, SignedInDevice, SignInResponse } from "@/lib/api/types";
+import type { DeviceSession, RecoveryCodes, SignedInDevice, SignInResponse, TwoFactorSession } from "@/lib/api/types";
 import { deviceInfo } from "@/lib/device";
 
 // Every sign-in sends `device`, so the backend returns a revocable device session (refresh token)
@@ -36,8 +36,9 @@ export const requestSignInCode = (email: string) => publicPost("/api/auth/otp/re
 export const signInWithCode = (email: string, code: string) =>
   publicPost<SignInResponse>("/api/auth/otp/verify", { email, code, device: deviceInfo() });
 
-export const verifyTwoFactor = (challengeToken: string, code: string) =>
-  publicPost<DeviceSession>("/api/auth/login/2fa", { challengeToken, code, device: deviceInfo() });
+/** The code from the authenticator app or the email, or (authenticator app only) one of the saved recovery codes. */
+export const verifyTwoFactor = (challengeToken: string, proof: { code: string } | { recoveryCode: string }) =>
+  publicPost<TwoFactorSession>("/api/auth/login/2fa", { challengeToken, ...proof, device: deviceInfo() });
 
 export const resendTwoFactor = (challengeToken: string) => publicPost("/api/auth/login/2fa/resend", { challengeToken });
 
@@ -51,6 +52,13 @@ export const resetPassword = (email: string, code: string, newPassword: string) 
 /** Signed in: the current password is checked. Other devices are signed out; this phone stays signed in. */
 export const changePassword = (currentPassword: string, newPassword: string) =>
   api("/api/auth/password", { method: "POST", json: { currentPassword, newPassword } });
+
+/**
+ * Signed in, authenticator app only: 10 new recovery codes, shown once, replace the old ones. Needs the password or
+ * a current authenticator code, as authenticator setup does.
+ */
+export const newRecoveryCodes = (proof: { password: string } | { code: string }) =>
+  api<RecoveryCodes>("/api/auth/2fa/recovery-codes", { method: "POST", json: proof });
 
 export const signInWithBiometricKey = (secret: string) =>
   publicPost<DeviceSession>("/api/auth/biometric/login", { secret, device: deviceInfo() });

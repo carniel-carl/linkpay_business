@@ -11,7 +11,7 @@ import { formatAccountNumber, formatNaira, nairaParts } from "@/lib/format";
 import { usePaymentFilters } from "@/lib/payment-filters";
 import { shareAccount } from "@/lib/share";
 
-/** A branch account: what a customer needs to pay in, each part copyable, and the way to its payments. */
+/** A branch account: what a customer needs to pay in, each part copyable, and the way to its payments and statement. */
 export default function AccountDetails() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const accounts = useAccounts(true);
@@ -93,6 +93,13 @@ export default function AccountDetails() {
           onPress={() => router.push({ pathname: "/savings", params: { branch: account.branch._id } })}
         >
           Savings
+        </Button>
+        <Button
+          variant="outline"
+          icon={{ ios: "doc.text", android: "description" }}
+          onPress={() => router.push({ pathname: "/account/statement", params: { branch: account.branch._id } })}
+        >
+          Download statement
         </Button>
       </View>
     </ScrollView>
