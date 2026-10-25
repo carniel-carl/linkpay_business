@@ -40,6 +40,6 @@ export const requestTransactionPinReset: RequestHandler = async (req, res) => {
 /** A forgotten or locked PIN: `{ password, code, newPin }`. */
 export const resetTransactionPin: RequestHandler = async (req, res) => {
   const body = z.object({ password, code, newPin: pinSchema }).parse(req.body);
-  await resetPin(req.userId!, body.password, body.code, body.newPin);
+  await resetPin(req.userId!, body.password, body.code, body.newPin, { ip: req.ip });
   res.json(await pinStatus(req.userId!));
 };

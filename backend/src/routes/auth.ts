@@ -10,6 +10,7 @@ import {
   logout,
   me,
   refresh,
+  regenerateRecoveryCodes,
   register,
   requestLoginOtp,
   resendTwoFactor,
@@ -57,5 +58,6 @@ authRouter.delete("/sessions/:id", requireAuth, revokeDeviceSession);
 authRouter.get("/me", requireAuth, me);
 authRouter.post("/2fa/totp/setup", requireAuth, authLimiter, setupTotp);
 authRouter.post("/2fa/totp/enable", requireAuth, authLimiter, enableTotp);
+authRouter.post("/2fa/recovery-codes", requireAuth, authLimiter, regenerateRecoveryCodes);
 authRouter.post("/2fa/email/enable", requireAuth, authLimiter, enableEmailTwoFactor);
 authRouter.post("/2fa/disable", requireAuth, authLimiter, disableTwoFactor);

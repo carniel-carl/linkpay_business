@@ -619,7 +619,8 @@ describe("pictures", () => {
     expect(page.body.link.images[0].url).toStartWith(`/api/public/pay/${link.slug}/images/${b._id}?v=`);
     const pub = await get(page.body.link.images[0].url);
     expect(pub.status).toBe(200);
-    expect(pub.headers.get("cache-control")).toContain("immutable");
+    // A browser keeps it a week; a CDN only 5 minutes (see the take-down test).
+    expect(pub.headers.get("cache-control")).toBe("public, max-age=604800, s-maxage=300");
     // Only pictures attached to this link are served under it.
     const loose = (await upload(owner.token, await picture())).body;
     expect((await get(`/api/public/pay/${link.slug}/images/${loose._id}`)).status).toBe(404);
@@ -691,8 +692,20 @@ describe("a link LinkPay has taken down", () => {
     const before = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
     const imageUrl = before.link.images[0].url;
     const logoUrl = before.business.logo.url;
-    expect((await get(imageUrl)).status).toBe(200);
+    const served = await get(imageUrl);
+    expect(served.status).toBe(200);
     expect((await get(logoUrl)).status).toBe(200);
+    // A CDN may keep the picture at most 5 minutes, and must ask again after that: never `immutable` or stale.
+    const cache = served.headers.get("cache-control")!;
+    expect(cache).toContain("public");
+    expect(Number(/s-maxage=(\d+)/.exec(cache)?.[1])).toBeLessThanOrEqual(300);
+    expect(cache).not.toMatch(/immutable|stale-while-revalidate|stale-if-error/);
+    // The logo likewise: a day in a browser, 5 minutes in a CDN.
+    expect((await get(logoUrl)).headers.get("cache-control")).toBe("public, max-age=86400, s-maxage=300");
+    // Asking again costs a 304 while the link is up.
+    const etag = served.headers.get("etag")!;
+    expect(etag).toBeTruthy();
+    expect((await fetch(`${t.url}${imageUrl}`, { headers: { "If-None-Match": etag } })).status).toBe(304);
 
     expect((await t.api("POST", `/api/admin/payment-links/${link._id}/take-down`, { token: staffToken, body: { note: "Reported as a scam" } })).status).toBe(200);
     const page = await t.api("GET", `/api/public/pay/${link.slug}`);
@@ -705,9 +718,15 @@ describe("a link LinkPay has taken down", () => {
       unavailableReason: "taken_down",
     });
     for (const gone of ["storm", "For the children", "Chidi", cover._id]) expect(JSON.stringify(page.body)).not.toContain(gone);
-    // The pictures, the logo and the donor list answer 404, even at their old addresses.
-    expect((await get(imageUrl)).status).toBe(404);
-    expect((await get(logoUrl)).status).toBe(404);
+    // The pictures, the logo and the donor list answer 404, even at their old addresses, and even to a cache
+    // asking again about the copy it has. That refusal isn't cached, so a restore brings the pictures back at once.
+    const refused = await get(imageUrl);
+    expect(refused.status).toBe(404);
+    expect(refused.headers.get("cache-control")).toBe("no-store");
+    expect((await fetch(`${t.url}${imageUrl}`, { headers: { "If-None-Match": etag } })).status).toBe(404);
+    const noLogo = await get(logoUrl);
+    expect(noLogo.status).toBe(404);
+    expect(noLogo.headers.get("cache-control")).toBe("no-store");
     const donors = await t.api("GET", `/api/public/pay/${link.slug}/donations`);
     expect(donors.status).toBe(404);
     expect(donors.body.code).toBe("PAYMENT_LINK_TAKEN_DOWN");

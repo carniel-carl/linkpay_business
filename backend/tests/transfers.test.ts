@@ -505,15 +505,18 @@ describe("approval workflows", () => {
     const batch = res.body.batch;
     expect(batch.items.every((i: any) => i.approval.levels.length === 2)).toBe(true);
     // The owner is level 2: nothing in the batch is theirs to decide yet.
-    expect((await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token })).body.code).toBe("NOTHING_TO_DECIDE");
+    const nothingYet = { expect: { count: 0, amountKobo: 0 } };
+    expect((await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token, body: nothingYet })).body.code).toBe("NOTHING_TO_DECIDE");
 
-    const one = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: second.token });
+    // What each approver is shown waiting for them, sent back as `expect`.
+    const both = { expect: { count: 2, amountKobo: 150_000_00 } };
+    const one = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: second.token, body: both });
     expect(one.body.statusCounts).toMatchObject({ pending_approval: 2 });
     expect(one.body.items.every((i: any) => i.approval.current === 2)).toBe(true);
     // One notification for the batch, not one per row.
     expect(outbox.filter((m) => m.to === owner.user.email && m.subject.startsWith("Approve 2 transfers"))).toHaveLength(1);
 
-    const two = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token });
+    const two = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token, body: both });
     expect(two.body.statusCounts).toMatchObject({ processing: 2, pending_approval: 0 });
   });
 
@@ -580,7 +583,11 @@ describe("bulk transfers", () => {
     expect(batch.items[1].recipient.accountName).toBe("AMAKA OBI");
     expect(outbox.filter((m) => m.subject.startsWith("Approve 2 transfers"))).toHaveLength(1);
 
-    const approved = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, { token: owner.token });
+    const approved = await t.api("POST", `/api/transfers/batches/${batch._id}/approve`, {
+      token: owner.token,
+      // What the owner is shown waiting for them: both rows.
+      body: { expect: { count: 2, amountKobo: 125_000_00 } },
+    });
     expect(approved.body.statusCounts).toMatchObject({ processing: 2, pending_approval: 0 });
     const listed = await t.api("GET", `/api/transfers?batch=${batch._id}`, { token: owner.token });
     expect(listed.body.total).toBe(2);

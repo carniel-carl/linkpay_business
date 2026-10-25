@@ -40,7 +40,8 @@ export const requestPasswordReset: RequestHandler = async (req, res) => {
 export const resetPassword: RequestHandler = async (req, res) => {
   const body = z.object({ email, code, newPassword: passwordSchema }).parse(req.body);
 
-  if (!(await verifyOtp(body.email, "password_reset", body.code))) throw invalidCode();
+  // Wrong codes count per address (services/otp.ts), so a stranger who knows the email can't lock its owner out of resetting.
+  if (!(await verifyOtp(body.email, "password_reset", body.code, { ip: req.ip }))) throw invalidCode();
 
   const user = await UserModel.findOneAndUpdate(
     { email: body.email },

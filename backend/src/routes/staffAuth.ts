@@ -8,6 +8,7 @@ import {
   login,
   logout,
   me,
+  regenerateRecoveryCodes,
   resendTwoFactor,
   setupTotp,
   verifyTwoFactor,
@@ -33,5 +34,6 @@ staffAuthRouter.get("/me", requireStaff, me);
 staffAuthRouter.post("/logout", requireStaff, logout);
 staffAuthRouter.post("/2fa/totp/setup", requireStaff, authLimiter, setupTotp);
 staffAuthRouter.post("/2fa/totp/enable", requireStaff, authLimiter, enableTotp);
+staffAuthRouter.post("/2fa/recovery-codes", requireStaff, authLimiter, regenerateRecoveryCodes);
 staffAuthRouter.post("/2fa/email/enable", requireStaff, authLimiter, enableEmailTwoFactor);
 staffAuthRouter.post("/password", requireStaff, authLimiter, changePassword);

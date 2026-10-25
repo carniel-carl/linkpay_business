@@ -149,7 +149,8 @@ describe("staff sign-in", () => {
       body: { code: totpCode(email, setup.body.secret) },
     });
     expect(enabled.status).toBe(200);
-    expect(enabled.body.twoFactor).toEqual({ method: "totp" });
+    expect(enabled.body.twoFactor).toEqual({ method: "totp", recoveryCodesLeft: 10 });
+    expect(enabled.body.recoveryCodes).toHaveLength(10);
 
     const sent = outbox.length;
     const first = await login(email);
@@ -167,7 +168,7 @@ describe("staff sign-in", () => {
     const badPassword = await t.api("POST", "/api/admin/auth/2fa/email/enable", { token, body: { password: "nope" } });
     expect(badPassword.body.code).toBe("INCORRECT_PASSWORD");
     const back = await t.api("POST", "/api/admin/auth/2fa/email/enable", { token, body: { password: PASSWORD } });
-    expect(back.body.twoFactor).toEqual({ method: "email" });
+    expect(back.body.twoFactor).toEqual({ method: "email", recoveryCodesLeft: 0 });
     expect((await login(email)).body.method).toBe("email");
   });
 });

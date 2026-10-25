@@ -86,7 +86,9 @@ export async function startTestEnv(): Promise<TestEnv> {
     url: `http://127.0.0.1:${port}`,
     api,
     stop: async () => {
+      // Keep-alive connections would otherwise outlive the server and answer a later one on the same port.
       server.close();
+      server.closeAllConnections();
       // Pushes run in the background (services/push.ts) and read the database: let them finish first.
       await flushPushes();
       liquifia.stop();

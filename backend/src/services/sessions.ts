@@ -343,17 +343,25 @@ export async function revokeSession(userId: string, sessionId: string, reason: "
 /**
  * Ends every session of the user except `keepSessionId`, and every biometric sign-in key except this
  * phone's (including phones already signed out that could still sign back in). Returns how many sessions were ended.
+ *
+ * Keys are ended before the sessions, and again after them. A biometric sign-in checks its key again once its
+ * session is open (biometricKeys.ts), so one that opens its session after the sessions here were ended finds its key
+ * already gone and closes it; and a key being turned on meanwhile, in a session ended here, is caught by the second
+ * pass. (After a password change or reset, the password stamp, see predatesPassword, ends such sessions too.)
  */
 export async function revokeOtherSessions(userId: string, keepSessionId?: string) {
+  const current = keepSessionId ? await SessionModel.findById(keepSessionId).select("installationId").lean() : null;
+  const endKeys = () =>
+    BiometricKeyModel.updateMany(
+      { user: userId, revokedAt: null, ...(current?.installationId && { installationId: { $ne: current.installationId } }) },
+      { revokedAt: new Date(), revokedReason: "signed_out_everywhere" },
+    );
+  await endKeys();
   const result = await SessionModel.updateMany(
     { user: userId, revokedAt: null, ...(keepSessionId && { _id: { $ne: keepSessionId } }) },
     { revokedAt: new Date(), revokedReason: "signed_out_everywhere" },
   );
-  const current = keepSessionId ? await SessionModel.findById(keepSessionId).select("installationId").lean() : null;
-  await BiometricKeyModel.updateMany(
-    { user: userId, revokedAt: null, ...(current?.installationId && { installationId: { $ne: current.installationId } }) },
-    { revokedAt: new Date(), revokedReason: "signed_out_everywhere" },
-  );
+  await endKeys();
   return result.modifiedCount;
 }
 

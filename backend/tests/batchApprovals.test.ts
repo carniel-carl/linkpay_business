@@ -87,9 +87,16 @@ async function bulk(token: string, branch: string, rows = 3, title = "Batch") {
   return res.body.batch as { _id: string; items: { _id: string }[] };
 }
 
-const approveBatch = (token: string, id: string, pin?: string | null) => t.api("POST", `/api/transfers/batches/${id}/approve`, { token, body: {}, pin });
-const rejectBatch = (token: string, id: string, note?: string) => t.api("POST", `/api/transfers/batches/${id}/reject`, { token, body: { note } });
 const getBatch = async (token: string, id: string) => (await t.api("GET", `/api/transfers/batches/${id}`, { token })).body;
+/** What the caller is shown waiting for them, sent back as `expect` the way the apps do. */
+const shownTo = async (token: string, id: string) => {
+  const batch = await getBatch(token, id);
+  return { count: batch.awaitingMe, amountKobo: batch.awaitingMeKobo };
+};
+const approveBatch = async (token: string, id: string, pin?: string | null) =>
+  t.api("POST", `/api/transfers/batches/${id}/approve`, { token, body: { expect: await shownTo(token, id) }, pin });
+const rejectBatch = async (token: string, id: string, note?: string) =>
+  t.api("POST", `/api/transfers/batches/${id}/reject`, { token, body: { note, expect: await shownTo(token, id) } });
 const listBatches = (token: string, query = "") => t.api("GET", `/api/transfers/batches${query}`, { token });
 const ids = (res: { body: { items: { _id: string }[] } }) => res.body.items.map((i) => i._id);
 
@@ -193,7 +200,7 @@ describe("batch approve and reject", () => {
     expect((await t.api("POST", `/api/transfers/${batch.items[1]!._id}/approve`, { token: first.token })).status).toBe(200);
 
     const membership = (await MembershipModel.findOne({ business: business._id, user: second.user._id }))!;
-    const result = await decideBatchTransfers({ transfers: read, membership, userId: second.id, decision: "approve" });
+    const result = await decideBatchTransfers({ transfers: read, membership, userId: second.id, decision: "approve", expect: { count: 3, amountKobo: 3_000_00 } });
     expect(result).toEqual({ decided: 2, skipped: 1 });
 
     const rows = await TransferModel.find({ batch: batch._id }).sort({ _id: 1 });
@@ -449,13 +456,42 @@ describe("approving what was shown (expect)", () => {
     expect(t.liquifia.payouts.length).toBe(payouts + 2);
   });
 
-  test("without expect it decides what's waiting now, as before; a bad expect is a 400", async () => {
-    const { second, finance, headOfficeId } = await setup();
+  test("expect is required: without it 400 EXPECT_REQUIRED, before the batch is read; a bad one is a 400; nothing is decided", async () => {
+    const { owner, second, finance, headOfficeId } = await setup();
     const batch = await bulkOf(finance.token, headOfficeId, [1_000_00, 2_000_00]);
-    for (const expect_ of [{ count: "2", amountKobo: 3_000_00 }, { count: 2 }, { count: 2, amountKobo: -1 }, { count: 2, amountKobo: 3_000_00, rows: [] }, { count: 1.5, amountKobo: 3_000_00 }]) {
-      expect((await decide("approve", second.token, batch._id, { expect: expect_ })).status).toBe(400);
+    const payouts = t.liquifia.payouts.length;
+    const call = (action: "approve" | "reject", token: string, id: string, body?: object, pin?: string | null) =>
+      t.api("POST", `/api/transfers/batches/${id}/${action}`, { token, body, pin });
+
+    for (const action of ["approve", "reject"] as const) {
+      for (const body of [undefined, {}, { note: "Looks right" }]) {
+        const res = await call(action, second.token, batch._id, body);
+        expect(res.status).toBe(400);
+        expect(res.body).toMatchObject({ code: "EXPECT_REQUIRED", error: expect.stringContaining("expect") });
+      }
+      // Ahead of the batch's state: the owner has nothing to decide yet (NOTHING_TO_DECIDE with expect), and an
+      // unknown batch is a 404 only once the request is well formed.
+      expect((await call(action, owner.token, batch._id, {})).body.code).toBe("EXPECT_REQUIRED");
+      expect((await call(action, owner.token, batch._id, { expect: { count: 0, amountKobo: 0 } })).body.code).toBe("NOTHING_TO_DECIDE");
+      const unknown = "6a1b2c3d4e5f6a7b8c9d0e1f";
+      expect((await call(action, second.token, unknown, {})).body.code).toBe("EXPECT_REQUIRED");
+      expect((await call(action, second.token, unknown, { expect: { count: 2, amountKobo: 3_000_00 } })).status).toBe(404);
     }
-    expect((await decide("approve", second.token, batch._id, {})).body).toMatchObject({ decided: 2, skipped: 0 });
+    // The PIN guard on approve still comes first.
+    expect((await call("approve", second.token, batch._id, {}, null)).body.code).toBe("TRANSACTION_PIN_MISSING");
+
+    for (const expect_ of [null, { count: "2", amountKobo: 3_000_00 }, { count: 2 }, { count: 2, amountKobo: -1 }, { count: 2, amountKobo: 3_000_00, rows: [] }, { count: 1.5, amountKobo: 3_000_00 }]) {
+      const res = await decide("approve", second.token, batch._id, { expect: expect_ });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBeUndefined();
+    }
+
+    expect((await getBatch(owner.token, batch._id)).items.map((i: any) => [i.status, i.approval.current])).toEqual([
+      ["pending_approval", 1],
+      ["pending_approval", 1],
+    ]);
+    expect(t.liquifia.payouts.length).toBe(payouts);
+    expect((await decide("approve", second.token, batch._id, { expect: { count: 2, amountKobo: 3_000_00 } })).body).toMatchObject({ decided: 2, skipped: 0 });
   });
 
   test("only the rows checked are decided: none that arrive before the writes, fewer if someone else decides first", async () => {

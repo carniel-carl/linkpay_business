@@ -5,11 +5,12 @@
 // the newest document of each kind (last uploaded or reviewed), deletes the others and their stored files,
 // then builds the index. Safe to run more than once. Makes no calls to Liquifia.
 //
-// Files go through services/storage.ts. If production storage is swapped in at startup with setFileStorage(),
-// do the same before running this, or the files of removed documents are left behind (their keys are printed).
+// Files go through services/storage.ts. Run as a script, it loads src/services/providers.ts as the server does, so
+// with STORAGE_PROVIDER=s3 the removed documents' files are deleted from the bucket, not looked for on local disk.
+// Imported (preflight, tests), it uses whatever storage the importer has set up.
 import mongoose, { type Types } from "mongoose";
 import { KybDocumentModel } from "../src/models/KybDocument";
-import { removeFile } from "../src/services/storage";
+import { fileStorageName, removeFile } from "../src/services/storage";
 
 type Duplicate = {
   _id: Types.ObjectId;
@@ -105,12 +106,15 @@ export async function migrateKybDocuments({ apply = false } = {}): Promise<KybMi
 }
 
 if (import.meta.main) {
+  // The server's email and file storage (STORAGE_PROVIDER), before any file is removed.
+  await import("../src/services/providers");
   const { connectScriptDB, disconnectDB } = await import("../src/config/db");
   const apply = process.argv.includes("--apply");
   // No automatic index builds or collections: the dry run reads only, and only --apply builds the unique index.
   await connectScriptDB();
   const r = await migrateKybDocuments({ apply });
   console.log(`${apply ? "Applied" : "Dry run (pass --apply to write)"} on database "${mongoose.connection.name}"`);
+  console.log(`Files: ${fileStorageName()}`);
   console.log(`Kinds of document with duplicates: ${r.groups}`);
   for (const d of r.removed) {
     console.log(`${apply ? "Removed" : "Would remove"} ${d._id}: business ${d.business}, ${d.type}${d.person ? `, person ${d.person}` : ""}, file ${d.storageKey}`);

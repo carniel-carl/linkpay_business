@@ -994,7 +994,7 @@ export function awaitingMember(transfers: TransferDocument[], membership: Member
  * still be finished as a batch. `skipped` counts the rows that were waiting but not decided here, including
  * any someone else decided at the same moment.
  *
- * `expect` binds the decision to what the member was shown: the count and total (`awaitingMe`,
+ * `expect` (required) binds the decision to what the member was shown: the count and total (`awaitingMe`,
  * `awaitingMeKobo`) of the rows they could decide then. If the rows they can decide now (in `transfers`, read
  * for this request) aren't exactly that, it's refused with 409 BATCH_CHANGED (`details`: the count and total
  * now) and nothing is decided. Otherwise exactly those rows, by id, are decided, each with a write conditional
@@ -1008,7 +1008,7 @@ export async function decideBatchTransfers(opts: {
   userId: string;
   decision: "approve" | "reject";
   note?: string;
-  expect?: { count: number; amountKobo: number };
+  expect: { count: number; amountKobo: number };
 }) {
   const { transfers, membership, userId, decision, note, expect } = opts;
   const pending = transfers.filter((t) => t.status === "pending_approval");
@@ -1021,7 +1021,7 @@ export async function decideBatchTransfers(opts: {
     }
     throw new HttpError(409, "Nothing in this batch is waiting for your approval", "NOTHING_TO_DECIDE", { pending: pending.length });
   }
-  if (expect && (mine.count !== expect.count || mine.amountKobo !== expect.amountKobo)) {
+  if (mine.count !== expect.count || mine.amountKobo !== expect.amountKobo) {
     throw new HttpError(409, "This bulk transfer has changed since you opened it. Check what's waiting for you now.", "BATCH_CHANGED", {
       count: mine.count,
       amountKobo: mine.amountKobo,

@@ -537,6 +537,31 @@ describe("branding", () => {
     expect((await binary("/api/branding/logo", owner.token)).status).toBe(404);
   });
 
+  test("a CDN keeps an invoice's logo minutes, the signed-in logo never; refusals aren't cached", async () => {
+    const { owner, business, headOfficeId } = await setup();
+    const png = await sharp({ create: { width: 200, height: 100, channels: 3, background: "#0E7C66" } }).png().toBuffer();
+    expect((await upload(owner.token, new Blob([png], { type: "image/png" }), "logo.png")).status).toBe(200);
+    const inv = await sent(owner.token, headOfficeId);
+    const token = (await InvoiceModel.findById(inv._id))!.publicToken;
+    const cacheOf = async (path: string, auth?: string) => {
+      const res = await fetch(`${t.url}${path}`, { headers: auth ? { Authorization: `Bearer ${auth}` } : {} });
+      return [res.status, res.headers.get("cache-control")];
+    };
+
+    // A browser keeps it a day; a CDN 5 minutes, then asks again.
+    expect(await cacheOf(`/api/public/invoices/${token}/logo`)).toEqual([200, "public, max-age=86400, s-maxage=300"]);
+    // The member's own (signed-in) logo is never kept by a shared cache.
+    expect(await cacheOf("/api/branding/logo", owner.token)).toEqual([200, "private, max-age=86400"]);
+
+    // Refusals: no such invoice, a suspended business, no logo.
+    expect(await cacheOf(`/api/public/invoices/${"x".repeat(32)}/logo`)).toEqual([404, "no-store"]);
+    await BusinessModel.updateOne({ _id: business._id }, { "compliance.status": "suspended" });
+    expect(await cacheOf(`/api/public/invoices/${token}/logo`)).toEqual([404, "no-store"]);
+    await BusinessModel.updateOne({ _id: business._id }, { $unset: { "compliance.status": 1 } });
+    expect((await t.api("DELETE", "/api/branding/logo", { token: owner.token })).status).toBe(200);
+    expect(await cacheOf(`/api/public/invoices/${token}/logo`)).toEqual([404, "no-store"]);
+  });
+
   test("SVGs are rasterised (scripts never served); other files are refused", async () => {
     const { owner } = await setup();
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><script>alert(1)</script><rect width="120" height="60" fill="#7C3AED"/></svg>`;

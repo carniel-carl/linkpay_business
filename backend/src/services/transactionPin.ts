@@ -367,12 +367,12 @@ export async function requestPinReset(userId: string) {
 }
 
 /** A forgotten PIN: the account password plus the emailed code. Also ends a lock, either kind. */
-export async function resetPin(userId: string, password: string, code: string, newPin: string) {
+export async function resetPin(userId: string, password: string, code: string, newPin: string, { ip }: { ip?: string } = {}) {
   assertStrong(newPin);
   if (!(await TransactionPinModel.exists({ user: userId }))) throw pinRequired();
   const user = await checkPassword(userId, password);
-  // Codes are counted per code and per day (services/otp.ts).
-  if (!(await verifyOtp(user.email, "transaction_pin_reset", code))) {
+  // Codes are counted per code, and per day for each address and in all (services/otp.ts).
+  if (!(await verifyOtp(user.email, "transaction_pin_reset", code, { ip }))) {
     throw new HttpError(400, "Invalid or expired code", "INVALID_CODE");
   }
   await replacePin(userId, newPin);

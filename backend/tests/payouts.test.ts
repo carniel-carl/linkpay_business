@@ -369,6 +369,17 @@ describe("payout lists", () => {
     const { owner, list } = await withList();
     expect(list).toMatchObject({ title: "Monthly salaries", count: 2, amountKobo: 200_000_00, branch: { isHeadOffice: true }, lastRunAt: null });
     expect(list.items[0]).toMatchObject({ beneficiary: { accountName: "AMAKA OBI" }, amountKobo: 120_000_00, narration: "Salary" });
+    // Each row's account with its bank's uuid, which the apps key a run by, here and when the list is opened.
+    const amakaRow = {
+      _id: list.items[0].beneficiary._id,
+      accountName: "AMAKA OBI",
+      nickname: null,
+      accountNumber: "1111111111",
+      bankName: "Guaranty Trust Bank",
+      bankUuid: "BANK-GTB",
+    };
+    expect(list.items[0].beneficiary).toEqual(amakaRow);
+    expect((await t.api("GET", `/api/payout-lists/${list._id}`, { token: owner.token })).body.items[0].beneficiary).toEqual(amakaRow);
     const all = await t.api("GET", "/api/payout-lists", { token: owner.token });
     expect(all.body.items).toHaveLength(1);
     expect(all.body.items[0].items).toBeUndefined();

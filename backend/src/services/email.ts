@@ -17,11 +17,16 @@ export interface EmailMessage {
 }
 
 export interface EmailProvider {
+  /** Rejects when the email wasn't sent; callers decide whether that fails the request or is only logged. */
   send(message: EmailMessage): Promise<void>;
+  /** For startup logs and preflight, e.g. "Resend, from LinkPay Business <no-reply@…>". Never a secret. */
+  name?: string;
 }
 
-// Default provider until a real email service is wired in: prints emails to the console.
+// Default provider until a real email service is wired in (EMAIL_PROVIDER=resend, src/services/providers.ts): prints
+// emails to the console.
 const consoleProvider: EmailProvider = {
+  name: "console (printed to the log, never sent)",
   async send({ to, subject, text, attachments }) {
     const files = attachments?.length ? `\nAttachments: ${attachments.map((a) => `${a.filename} (${a.content.length} bytes)`).join(", ")}\n` : "";
     console.log(`\n📧 Email to ${to}\nSubject: ${subject}\n\n${text}\n${files}`);
@@ -30,13 +35,16 @@ const consoleProvider: EmailProvider = {
 
 let provider: EmailProvider = consoleProvider;
 
-/** Swap in a real provider (Resend, SES, SendGrid, ...) at startup. */
+/** Swaps in a real provider at startup: src/services/providers.ts does, from EMAIL_PROVIDER. */
 export function setEmailProvider(next: EmailProvider) {
   provider = next;
 }
 
 /** True until a real provider is set. Until then every email, sign-in codes and invite links included, only goes to stdout. */
 export const usingConsoleEmail = () => provider === consoleProvider;
+
+/** The provider's name, if it has one (a test's stand-in may not). */
+export const emailProviderName = () => provider.name;
 
 export function sendEmail(message: EmailMessage) {
   // Subjects carry names people type; a line break in one could add headers to the message.
@@ -94,6 +102,33 @@ export const sendPasswordChangedEmail = (to: string, { reset }: { reset: boolean
     html:
       `<p>Your ${escapeHtml(env.appName)} password was just changed. ${escapeHtml(signedOut)}</p>` +
       `<p>If this wasn't you, <a href="${escapeHtml(link)}">reset your password now</a>, then contact support.</p>`,
+  });
+};
+
+/**
+ * Someone signed in with a recovery code instead of the authenticator app (services/recoveryCodes.ts). `staff` for
+ * the admin console, where there's no password reset to point at.
+ */
+export const sendRecoveryCodeUsedEmail = (to: string, { left, staff = false }: { left: number; staff?: boolean }) => {
+  const where = staff ? `the ${env.appName} admin console` : env.appName;
+  const remaining =
+    left === 0
+      ? "That was your last one: create new recovery codes now, in your security settings."
+      : `You have ${left} recovery code${left === 1 ? "" : "s"} left. Each one works once.`;
+  const link = `${env.webUrl}/forgot-password`;
+  const notYou = staff
+    ? "If this wasn't you, change your password and create new recovery codes in the console's Security page, and tell a super admin straight away."
+    : `If this wasn't you, reset your password now (${link}), then create new recovery codes and sign out your other devices.`;
+  const intro = `Someone just signed in to ${where} with one of your recovery codes, instead of a code from your authenticator app.`;
+  return sendEmail({
+    to,
+    subject: `A recovery code was used to sign in to ${where}`,
+    text: `${intro}\n\n${remaining}\n\n${notYou}`,
+    html:
+      `<p>${escapeHtml(intro)}</p><p>${escapeHtml(remaining)}</p>` +
+      (staff
+        ? `<p>${escapeHtml(notYou)}</p>`
+        : `<p>If this wasn't you, <a href="${escapeHtml(link)}">reset your password now</a>, then create new recovery codes and sign out your other devices.</p>`),
   });
 };
 
@@ -168,7 +203,7 @@ export const sendBusinessReinstatedEmail = (to: string, businessName: string) =>
   sendEmail({
     to,
     subject: `${businessName} has full access again`,
-    text: `We've finished our review and lifted the suspension on ${businessName}. You have full access to your ${env.appName} dashboard again.`,
+    text: `We've finished our review of ${businessName} and restored full access. You can use your ${env.appName} dashboard again: send money, create invoices and change settings.`,
   });
 
 export const sendBusinessBannedEmail = (to: string, businessName: string) =>
