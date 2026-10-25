@@ -69,7 +69,7 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | `WEB_URL` | Public web URL used in emailed links (team invites). Default `http://localhost:3000`. |
 | `PUSH_PROVIDER`, `EXPO_ACCESS_TOKEN` | Phone pushes. Unset, they print to the console (`📱 Push to ...`); `expo` sends them through Expo's push service (the access token only if the Expo project requires one). |
 | `ADMIN_APP_URL` | Public URL of the admin console (`admin/`), used in staff invite links (`ADMIN_APP_URL/invite/<token>`). Default `http://localhost:3001`. |
-| `API_URL`, `TRUST_PROXY` | `API_URL`: the API's public URL, shown to businesses in payment-link embed code (where their server confirms a payment). `TRUST_PROXY`: proxies whose `X-Forwarded-For` is believed for rate limits (Express "trust proxy", default `loopback`). Set it to a comma-separated list of the web and admin servers' addresses, as the API sees them, plus any load balancer in front of the API; otherwise every visitor shares one limit. `true` or a hop count is refused at startup. If the web runs on a host without fixed outgoing IPs (e.g. Vercel), this can't be set yet: that needs static outgoing IPs or a shared-secret header, which isn't built. Auth routes also limit failed requests per account (10 per 15 minutes) across all IPs. |
+| `API_URL`, `TRUST_PROXY` | `API_URL`: the API's public URL, shown to businesses in payment-link embed code (where their server confirms a payment). `TRUST_PROXY`: proxies whose `X-Forwarded-For` is believed for rate limits (Express "trust proxy", default `loopback`). Set it to a comma-separated list of the web and admin servers' addresses, as the API sees them, plus any load balancer in front of the API; otherwise every visitor shares one limit. `true` or a hop count is refused at startup. If the web runs on a host without fixed outgoing IPs (e.g. Vercel), set `CLIENT_IP_SECRET` on the API and on web and admin instead: they send the visitor's IP in `X-LinkPay-Client-IP` with the secret (`src/middleware/clientIp.ts`). Auth routes also limit failed requests per account (10 per 15 minutes) across all IPs. |
 | `ENCRYPTION_REQUIRE_V2` | Set it to `1` once `bun run migrate:encryption --apply` reports nothing left in the old format. From then on, an encrypted value without the `v2:` record binding is refused, and startup logs which mode is on. |
 | `LIQUIFIA_WEBHOOK_SECRET` | Verifies Liquifia webhooks. Until it's set, `POST /api/webhooks/liquifia` returns 503 and incoming payments arrive through the periodic sync only. |
 | `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia and moves payouts on (default 60000, at most 86400000; 0 turns both off). |
@@ -888,3 +888,17 @@ Add a line per session: date, what was done, and anything left half-finished.
     - New: the `balancesnapshots` collection and index, built at startup, and the snapshot job.
     - Check the first morning's snapshots (DEPLOY.md §5 step 8).
     - On an environment that already ran batch 9, staff who changed their password there sign in once more.
+
+- **2026-10-25 (deploy prep: Render, Vercel, R2):** on branch `deploy/render`. Hosting decided: the API on Render (Docker, Frankfurt, Starter, one instance), web and admin on Vercel, and files in Cloudflare R2. See [DEPLOY.md](DEPLOY.md) §1, Hosting.
+  - **`backend/Dockerfile` and `.dockerignore`:**
+    - `oven/bun:1.4.4-slim`, a production install, running as the `bun` user.
+    - It copies `index.ts`, `src/`, `scripts/` (preflight and the migrations, for Render's shell) and `assets/` (the PDF fonts).
+    - Checked locally: it builds; sharp and pdfkit load and the fonts are there; it boots through every settings check to the database connection.
+  - **`CLIENT_IP_SECRET`:** web and admin on Vercel have no fixed outgoing IPs to list in `TRUST_PROXY`, so they now send the visitor's IP in `X-LinkPay-Client-IP` with the shared secret in `X-LinkPay-Client-Secret`.
+    - The API (`src/middleware/clientIp.ts`) believes the IP only on a timing-safe match. Then `req.ip` is that address, so every rate limit, session, audit entry and OTP count uses it.
+    - Otherwise both headers are ignored and removed, with a warning at most once a minute.
+    - Boot and preflight check the secret.
+    - Web and admin send it only to `API_URL`'s origin (`forwardIpHeaders` in `lib/client-ip.ts`).
+  - **The mirror:** a private deploy mirror `Temitayo-spec/linkpay-business` (git remote `deploy`) gets `main` pushed after each merge. Render deploys from it, with auto-deploy off.
+  - **Tests:** 735/735 backend. Web and admin: typecheck and lint are clean.
+  - **Left:** after the first deploy, confirm the address of Render's load balancer and set `TRUST_PROXY` to it (§1, Hosting).
