@@ -80,3 +80,15 @@ Every existing user starts without a PIN, so all 15 routes return `TRANSACTION_P
 Clients should handle this so it doesn't feel like an error. The first time someone confirms a covered action, they set their PIN (password + new PIN, entered twice), and the action then goes ahead.
 
 In the dev seed, `swift@linkpay.test` has the PIN `1357`. `demo@linkpay.test` has none, so the set-PIN flow can be tried there.
+
+## Batch 8 changes (2026-10-25)
+
+- **Daily cap.** Wrong PINs are counted over a rolling 24 hours, counted atomically before the PIN is compared. The 15th wrong PIN in a day locks the PIN **until it is reset**; no timer ends that lock.
+  - The response is 429 `TRANSACTION_PIN_LOCKED` with `details: { lockedUntil: null, retryAt: null, attemptsLeft: 0, resetRequired: true }`.
+  - The user gets an email, and only `POST /api/transaction-pin/reset` clears the lock.
+  - The 30-minute lock after 5 wrong PINs in a row still applies. It now carries `resetRequired: false`.
+  - A right PIN takes its own try back off the day's count; earlier wrong ones stay counted.
+- **Status and attempts.** The status object adds `resetRequired: boolean`. `attemptsLeft` is the smaller of the tries left in a row and the tries left today.
+- **Weak PINs.** Four of one digit, straight runs up or down, years 1950–2030, and a list of common PINs: pairs, mirrors and keypad shapes such as 1212, 1122, 1221, 2580, 1470, 0852 and 2468. The list is in `backend/src/services/transactionPin.ts`; the web (`web/src/lib/transaction-pin.ts`) and mobile copies must match, and a test checks the web copy. The seed's 1357 is still allowed.
+- **Changing the PIN with the password** still needs no emailed code, a deliberate choice. Every password re-check is now rate-limited, sharing one count of 10 failures per 15 minutes per user, and every change is emailed. To close the remaining risk (a phished password plus a stolen session), drop `{ newPin, password }` and send people to reset. That would be a contract change for both clients.
+- **Mobile.** The weak-PIN list in `mobile/src/lib/api/transaction-pin.ts` matches the backend's. When `resetRequired` is true, the PIN sheet and More › Transaction PIN say the PIN is locked until it's reset, show no countdown, and offer "Reset your PIN".

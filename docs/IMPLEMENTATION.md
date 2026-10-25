@@ -2,7 +2,7 @@
 
 This is the single source of truth for **where the project is and what comes next**. Read it at the start of every session, and update it at the end: the status tables, the "Next up" section and the session log.
 
-Last updated: 2026-10-21
+Last updated: 2026-10-25
 
 ---
 
@@ -38,7 +38,7 @@ linkpay_business/
 └── docs/      this file
 ```
 
-> ⚠️ The project is **not a git repository** yet. Run `git init` and commit before any large change.
+> The repository is on GitHub (`carniel-carl/linkpay_business`). Work on a branch and merge through a PR. The production deploy steps are in [docs/DEPLOY.md](DEPLOY.md), and `bun run preflight` (in `backend/`) checks a production config before go-live.
 
 ### Backend
 ```bash
@@ -60,7 +60,8 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | --- | --- |
 | `MONGODB_URI`, `MONGODB_DB_NAME` (default `linkpay_business`), `MONGODB_USERNAME`, `MONGODB_PASSWORD` | Username and password are passed to the driver separately from the URI. |
 | `LIQUIFIA_SECRET_KEY` (required), `LIQUIFIA_PUBLIC_KEY`, `LIQUIFIA_BASE_URL` | ⚠️ The current `.env` has **live** keys (`sk_live_`), so creating anything on Liquifia uses real money. Ask Liquifia for `sk_test_` keys for development. Outside `NODE_ENV=production` the server **refuses to start with an `sk_live_` key** unless `LIQUIFIA_ALLOW_LIVE=1` is set (it then prints a warning). `bun run check` sets that for itself. |
-| `JWT_SECRET`, `JWT_EXPIRES_IN`, `ENCRYPTION_KEY` | Generate secrets with `openssl rand -hex 32`. `ENCRYPTION_KEY` encrypts BVNs. `JWT_EXPIRES_IN` (default 7d) is also a web session's maximum age. Every web sign-in is a server-side session (`Session.kind: "web"`) with a 12-hour idle timeout (`WEB_SESSION_IDLE_MS`) and can be signed out from any device. |
+| `NODE_ENV` (required) | `production`, `development` or `test`. The server refuses to start without it. Servers must set `production` (`bun run start` doesn't), and a local `.env` sets `development`. `test` is refused with a live Liquifia key. |
+| `JWT_SECRET`, `JWT_EXPIRES_IN`, `ENCRYPTION_KEY` | Generate secrets with `openssl rand -hex 32`. Outside tests, `JWT_SECRET` and `STAFF_JWT_SECRET` must both be at least 32 characters, different from each other and from `ENCRYPTION_KEY`. In production or with a live key, they must also not be any value committed in the repo (`REPO_SECRETS`). `JWT_EXPIRES_IN` and `ACCESS_TOKEN_TTL` must be durations such as `15m` or `7d`. Numeric vars (`PORT`, `LIQUIFIA_SYNC_INTERVAL_MS`, `SESSION_*`, `BIOMETRIC_*`) must be plain digits within range, or startup fails. `ENCRYPTION_KEY` encrypts BVNs. `JWT_EXPIRES_IN` (default 7d) is also a web session's maximum age. Every web sign-in is a server-side session (`Session.kind: "web"`) with a 12-hour idle timeout (`WEB_SESSION_IDLE_MS`) and can be signed out from any device. |
 | `STAFF_JWT_SECRET` | Signs staff (admin console) tokens. **Required everywhere except tests**: at least 32 characters and different from `JWT_SECRET`, or the server refuses to start (`openssl rand -hex 32`). `dev:mock` and `dev:seed` set their own. |
 | `UPLOAD_DIR` | Local folder for verification documents (gitignored). |
 | `WEB_URL` | Public web URL used in emailed links (team invites). Default `http://localhost:3000`. |
@@ -69,9 +70,12 @@ Environment variables go in `backend/.env`; see `backend/.env.example`. Bun load
 | `API_URL`, `TRUST_PROXY` | `API_URL`: the API's public URL, shown to businesses in payment-link embed code (where their server confirms a payment). `TRUST_PROXY`: proxies whose `X-Forwarded-For` is believed for rate limits (Express "trust proxy", default `loopback`). Set it to a comma-separated list of the web and admin servers' addresses, as the API sees them, plus any load balancer in front of the API; otherwise every visitor shares one limit. `true` or a hop count is refused at startup. If the web runs on a host without fixed outgoing IPs (e.g. Vercel), this can't be set yet: that needs static outgoing IPs or a shared-secret header, which isn't built. Auth routes also limit failed requests per account (10 per 15 minutes) across all IPs. |
 | `ENCRYPTION_REQUIRE_V2` | Set it to `1` once `bun run migrate:encryption --apply` reports nothing left in the old format. From then on, an encrypted value without the `v2:` record binding is refused, and startup logs which mode is on. |
 | `LIQUIFIA_WEBHOOK_SECRET` | Verifies Liquifia webhooks. Until it's set, `POST /api/webhooks/liquifia` returns 503 and incoming payments arrive through the periodic sync only. |
-| `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia (default 60000; 0 turns it off). |
+| `LIQUIFIA_SYNC_INTERVAL_MS` | How often the server pulls incoming payments from Liquifia and moves payouts on (default 60000, at most 86400000; 0 turns both off). |
+| `MIN_MOBILE_APP_VERSION` | The oldest mobile app version the API works with, three whole numbers such as `1.1.0` (anything else stops the boot). Unset: any version. Older phones, and builds that don't send `X-App-Version`, get 426 `APP_UPDATE_REQUIRED` on everything but signing out, refreshing and removing a push token (`src/middleware/appVersion.ts`). Set it only once that version can be downloaded: DEPLOY.md §4 step 3. |
 
-Until a real email provider is connected, **emails, including OTP codes, are printed to the backend console.** For that reason the server **refuses to start with `NODE_ENV=production`** until `setEmailProvider()` is called at startup (`src/services/email.ts`).
+Until a real email provider is connected, **emails, including OTP codes, are printed to the backend console.** For that reason the server **refuses to start with `NODE_ENV=production`, or with any live Liquifia key,** until `setEmailProvider()` is called at startup (`src/services/email.ts`). Console pushes (`PUSH_PROVIDER` not `expo`) only log a WARN.
+
+**Deploying to production:** follow [DEPLOY.md](DEPLOY.md), one ordered runbook; `bun run preflight` checks the production config and database read-only.
 
 ### Web
 ```bash
@@ -85,7 +89,7 @@ cd backend && bun run dev:mock    # API on :4000 with in-memory MongoDB + mock L
 cd backend && bun run dev:seed   # (same as dev:mock --seed) plus a verified demo business with payments and six invoices (scripts/dev-seed.ts): demo@linkpay.test / password123; staff staff@linkpay.test / password123
 cd mobile && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 bunx expo run:ios     # development build on the simulator; or run:android. CocoaPods fails with "Unicode Normalization not appropriate for ASCII-8BIT" without a UTF-8 LANG
 ```
-`mobile/.env.example` lists the `EXPO_PUBLIC_*` settings. Screenshots are blocked in the app unless `EXPO_PUBLIC_ALLOW_SCREEN_CAPTURE=1` (development only).
+`mobile/.env.example` lists the `EXPO_PUBLIC_*` settings. Screenshots are blocked in the app unless `EXPO_PUBLIC_ALLOW_SCREEN_CAPTURE=1` (development only). `EXPO_PUBLIC_IOS_STORE_URL` and `EXPO_PUBLIC_ANDROID_STORE_URL` are where the "Update LinkPay" screen sends a phone the API refuses (the backend's `MIN_MOBILE_APP_VERSION`).
 
 ### Web
 `web/.env.local` sets `API_URL` (default `http://localhost:4000`), `NEXT_PUBLIC_SUPPORT_EMAIL`, `CSP_REPORT_ONLY` (set it to `1` to send the page CSP report-only while rolling it out; enforcing by default) and **`CLIENT_IP_HEADER`**. The last one also goes in `admin/.env.local`. It names the header the platform in front of the server sets with the visitor's address, replacing anything the browser sent: e.g. `x-real-ip` or `x-forwarded-for` on Vercel, `cf-connecting-ip` behind Cloudflare, or `x-real-ip` from your own nginx. The server forwards it to the API so rate limits count each visitor. Unset, nothing is forwarded, and production logs a warning. The auth token lives in an httpOnly cookie (`src/lib/session.ts`). The browser never calls the backend directly; all calls go through server actions and route handlers (`src/lib/api/client.ts`).
@@ -343,7 +347,7 @@ Technical debt to fit in along the way:
 | 9 | Biometric sign-in skips 2FA (device key plus enrolled biometrics count as two factors) and lasts up to 180 days without a password. Acceptable for the bank partner? | Product owner / compliance |
 | 8 | Mobile blocks screenshots app-wide (Android FLAG_SECURE, iOS capture blocking). Keep, or allow them on screens like account details? | Product owner |
 | 11 | The staff migration (`bun run migrate:staff --apply`) hasn't been run on the real database. It deletes users who were staff only. Go-ahead to run it? | Product owner |
-| 12 | Staff roles: are the four proposed roles right (super admin; compliance reviewer; operations; support, read only), and their permissions? See `backend/src/config/staffPermissions.ts`. Should support staff see the bank partner's `customerId` and `lastError` on businesses (every staff role sees them today)? When a super admin is disabled or demoted, should their open invites be revoked automatically (today they stay valid until revoked or expired)? | Product owner |
+| 12 | Staff roles: are the four proposed roles right (super admin; compliance reviewer; operations; support, read only), and their permissions? See `backend/src/config/staffPermissions.ts`. Should support staff see the bank partner's `customerId` and `lastError` on businesses (every staff role sees them today)? ~~When a super admin is disabled or demoted, should their open invites be revoked?~~ Yes, done in batch 8: changing their access revokes them, and accepting checks the inviter. | Product owner |
 | 14 | Notifications: is the list of events and recipients right (`docs/briefs/notifications.md` §4)? Should a web sign-in also send a "new sign-in" alert (today only new phones do)? Real pushes need the Expo project id and APNs/FCM credentials. | Product owner |
 | 13 | Invoices: an overpayment (a matched transfer for more than the balance) counts in full and shows as paid. Should the extra be refunded, credited to the next invoice, or flagged? Is VAT at 7.5% on the discounted subtotal right for every business, and are any FIRS e-invoicing requirements in scope? | Product owner / bank partner |
 | 15 | Safelock: ~~whether a lock can be broken early~~ **never** (product owner, 2026-10-21). Still to confirm: 10 to 1,000 days and a ₦1,000 minimum (proposed), and when interest arrives: the rates, who funds them (a treasury account?), and upfront or at maturity. Pockets: is 20 per branch right, and should auto-save also apply to own-branch transfers? | Product owner / bank partner |
@@ -583,7 +587,7 @@ Add a line per session: date, what was done, and anything left half-finished.
   - **Before deploying batch 4**, on top of the batch 3 list, whose KYB step `migrate:kyb` replaces:
     1. Run `bun run migrate:kyb` as a dry run, then with `--apply`, **before** the new backend builds its indexes. If production stores uploads through `setFileStorage()`, configure that in the script too, or the files of deleted documents are left behind.
     2. Deploy the backend everywhere, then run `bun run migrate:encryption` as a dry run, then with `--apply`. After that, and as soon as anyone saves a new BVN, older code can't read BVNs, so don't roll the backend back past this point.
-    3. Make sure the new indexes build: the partial index on PocketMovement, `{ createdBy, branch, createdAt }` on Transfer, and `Notification.branch`. Mongoose builds them on startup unless `autoIndex` is off; if it is, run `syncIndexes`.
+    3. Make sure the new indexes build: the partial index on PocketMovement, and `{ createdBy, branch, createdAt }` on Transfer. Mongoose builds them on startup unless `autoIndex` is off. Since batch 8, the startup log and `/health` (`indexes`) report any index that failed to build. (There is no `Notification.branch` index, and none is needed.)
     4. Ship the admin app together with the backend, because of the new `activity.view_ips` permission and the audit labels.
     5. Have the proxy in front of web and admin send `X-Forwarded-Proto: https` (for `upgrade-insecure-requests`). Pages are now rendered per request, so don't cache them on a CDN. Optionally roll the CSP out with `CSP_REPORT_ONLY=1` first.
   - **Left:** see the audit's batch 4 "Still open" list.
@@ -621,7 +625,7 @@ Add a line per session: date, what was done, and anything left half-finished.
   - **Before deploying batch 5:**
     1. Make sure the `ratelimithits` indexes build. Limits start from zero once, at this deploy.
     2. Each limited request now costs one Mongo write.
-    3. Alert on the "rate limit store unavailable" log line, because limits fail open while it's down.
+    3. Alert on the log line `Rate limits can't reach MongoDB: requests are NOT being limited until it's back.`, because limits fail open while it's down.
     4. Ship admin with the backend (the new `staff.added` label).
     5. After `migrate:encryption --apply` reports nothing left in the old format, set `ENCRYPTION_REQUIRE_V2=1` on every instance.
     6. Optionally watch `/api/csp-report` logs while running `CSP_REPORT_ONLY=1`.
@@ -701,3 +705,96 @@ Add a line per session: date, what was done, and anything left half-finished.
   - **Left:**
     - The transfers list has no `?batch=none` filter (mobile drops batch rows itself).
     - Mobile has no payout lists.
+
+- **2026-10-25 (batch 8, re-audit, deploy runbook, app-version gate, mobile payout lists):** on branch `fix/audit-batch-8`. Backend: 614/614 tests pass on two full runs. Web, admin and mobile: typecheck and lint are clean (web and admin keep their two old warnings), and web and admin build.
+  - **Re-audit:** a second full review of `main` at `0577e51` by five read-only reviewers (auth, money, public surface, clients, ops). One critical, about 16 medium and about 30 low findings, every one checked against the code. All are fixed except five lows. The list is in [AUDIT-2026-10-23.md](AUDIT-2026-10-23.md), "Re-audit (batch 8)".
+    - **R1 (critical):** a passwordless account (batch 3's takeover fix makes them) could be signed in to with the literal string the dummy hash was made from. Fixed for business and staff sign-in, with a regression test.
+  - **Backend:**
+    - **Boot guards:**
+      - `NODE_ENV` is required.
+      - Numbers, durations and `MIN_MOBILE_APP_VERSION` are validated.
+      - Both token secrets need 32+ characters and must differ from each other and from `ENCRYPTION_KEY`. In production or with a live key, they can't be values from the repo.
+      - The console-email guard also applies with any live key.
+      - `TRUST_PROXY` refuses subnets wider than /8 or /16.
+    - **Indexes:** startup waits for the index builds and logs any failure (`🚨 INDEX BUILD FAILED`). `GET /health` reports `indexes`.
+    - **Migration scripts:** they connect with autoIndex and autoCreate off, so their dry runs write nothing.
+    - **Transaction PIN:**
+      - A daily cap: the 15th wrong PIN in a day locks the PIN until it's reset (`resetRequired`).
+      - Weak PINs are refused.
+      - Every signed-in password re-check shares one limit of 10 per 15 minutes.
+    - **Sign-in:**
+      - The account lockout is per email and IP, with a cross-IP cap of 50.
+      - "Send me a code" emails go out in the background.
+      - Sessions carry the password-change stamp, and refresh rotation is conditional.
+    - **Money:**
+      - The Idempotency-Key is required on sends.
+      - The request hash v2 covers accounts, not beneficiary ids, and replays are built from the sent transfers.
+      - The sender, rule and role are re-checked inside the lock.
+      - Batch decisions take `expect` (409 `BATCH_CHANGED`), and every batch has `awaitingMeKobo`.
+      - A name-check budget of 600 per member per 15 minutes.
+      - Fee quotes are validated.
+    - **Payment links:**
+      - After the hold, `payTo` and the amount are hidden.
+      - Places are counted across the whole link, each key gets at most a 10% share, and IPv6 is grouped by /48.
+      - Cross-branch manual links are refused.
+      - Taken-down links hide their content.
+      - `overLimit` is on merchant verify.
+    - **Invoices:**
+      - Reminders skip finished schedules and stop 30 days after the due date.
+      - Suggested payments are branch-scoped.
+    - **Staff:**
+      - Disabling or demoting someone revokes their invites.
+      - Accepting an invite checks the inviter and is audited.
+    - **Pushes:** a 10 s timeout, sent in the background.
+    - **New endpoints and filters:**
+      - `GET /api/app/version` and the minimum-app-version gate (`src/middleware/appVersion.ts`).
+      - `?batch=none` on the transfers list.
+      - Beneficiary payment history matched by account, with a new Transfer index `{ business, recipient.accountNumber, createdAt }`.
+    - **Files:** `backend/.env.example` (and `!.env.example` in `.gitignore`); `dev:seed` sends an Idempotency-Key.
+  - **Deploy:**
+    - [DEPLOY.md](DEPLOY.md) is the one ordered runbook for the first production deploy.
+    - `bun run preflight` (`backend/scripts/preflight.ts`) checks the environment, email, data and indexes read-only, plus Liquifia with `--liquifia`.
+    - New in this batch:
+      - Set `NODE_ENV=production`.
+      - Set `MIN_MOBILE_APP_VERSION` only once the new build can be downloaded (§4 step 3).
+      - Build mobile with `EXPO_PUBLIC_IOS_STORE_URL`.
+      - Anything that sends money through the API needs an Idempotency-Key.
+      - Check the two new indexes after deploy (§5 step 1).
+  - **Web and admin:**
+    - **Idempotency keys** match the server's hash and survive closing a dialog: bulk, Send money, Safelock, pockets.
+    - **Batch banner:** "Approve N · ₦X" with `expect`.
+    - **CSV:** comma and header rules (`lib/bulk-csv.ts`).
+    - **Sign-out:** the GET sign-out routes only revoke from the same origin.
+    - **CSP:** it now covers paths ending in an image extension. `frame-ancestors` keeps the last good answer when a lookup fails.
+    - **Public files:** relays forward the visitor's IP.
+    - **Embed guidance:** covers `paidKobo`, `clientReference` and `overLimit`.
+    - **Admin:** a message for `INVITER_CANT_INVITE`.
+  - **Mobile:**
+    - **App updates:** the gate shows an "Update LinkPay" screen (`components/security/update-required.tsx`, `lib/app-update.ts`), and every request sends `X-App-Version` and `X-App-Platform` (`lib/device.ts`).
+    - **Payout lists:** list, create, edit, pay and delete (`app/(app)/payments/lists/`). They open from More and from Bulk transfer.
+    - **Batches:** "Approve N · ₦X" with `expect`, and `BATCH_CHANGED` handling.
+    - **PIN:** the same weak-PIN list as the server, and the `resetRequired` lock.
+    - **Sign-out:** the pending logout is recorded before the wipe.
+    - **Send money:** the draft is cleared on sign-out and on a business switch, and review checks the account and bank still match the name check.
+    - **Bulk sends:** the timeout is 90 s, and the batch merge dedupes.
+    - **CSV:** the same rules as the web.
+  - **QA on the iOS simulator** (iPhone 17 Pro, against `dev:seed`): all nine checks pass, with no mobile bugs found.
+    - CSV comma and header rules.
+    - "Approve N · ₦X", and `BATCH_CHANGED` when another approver acts while the PIN sheet is open.
+    - Signing out and killing the app at once: the server session is gone.
+    - The send draft cleared on sign-out, and review refusing a changed account.
+    - A Safelock retry after a timeout: one lock, not two.
+    - Weak PINs refused, and the daily cap's "Reset your PIN" lock.
+    - No duplicate keys while transfers arrive during scrolling.
+    - The app-version gate: the update screen in front of the lock, sign out from it, clearing on foreground, raised while open; at 1.0.0 everything works, PDFs and pictures included.
+    - A payout-list run with a changed amount.
+  - **Left:**
+    - **The five open lows** (AUDIT, "Still open after the re-audit"):
+      - the 2FA challenge token has no password stamp;
+      - biometric sign-in can race a reset;
+      - the OTP daily cap can lock out email-code sign-in;
+      - batch decisions without `expect` behave as before;
+      - taken-down link pictures can stay in a CDN.
+    - **Mobile payout-list run keys** follow beneficiary ids, not accounts ([bulk-payouts brief](briefs/bulk-payouts.md), batch 8).
+    - **`legacySendHash`** can go once no pre-deploy transfer can be retried.
+    - **Still to come from the product owner and Liquifia:** an email provider, the webhook secret, and Liquifia's answers.

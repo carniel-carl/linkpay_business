@@ -219,3 +219,8 @@ Type `savings.safelock_released` (push: yes; Android channel `account`) goes to 
 - **Savings page:** a Safelock section or tab beside Pockets. Show the total locked, cards with the title, amount, unlock date, "N days left" and a time progress bar, and released locks under a filter. Add a "New Safelock" action.
 - **Create:** branch, title, amount (show the branch's available balance), and an unlock date picker limited to `earliestUnlockOn` and `latestUnlockOn` (or "days" presets such as 30 / 90 / 180 / 365). Then a confirmation step: "₦X will be locked until <date>. You can't take it out early." Mobile could ask for the passcode here, since it can't be undone.
 - **Detail:** amount, locked on, unlocks on, countdown, and rename. Never show a withdraw or break button.
+
+## Batch 8 changes (2026-10-25)
+
+- **Replay before validation.** Safelock and pocket-move retries look up the Idempotency-Key replay before any validation. A retry after Lagos midnight, or after a pocket was closed, replays instead of failing on the date or the closed pocket. A key reused with different details gets 422 before any 400.
+- **Clients.** Web and mobile keep a Safelock's or pocket move's key when the form is closed. They replace it only after a success or `IDEMPOTENCY_KEY_REUSED`.

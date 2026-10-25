@@ -169,3 +169,14 @@ At each new level, that level's approvers get `transfer.approval_requested` (ema
 - A transfer whose current level loses all its approvers (they left or lost the role) stays waiting. The creator can cancel it, but nobody else can unblock it. Options are letting `transfers.manage` reassign it, or falling back to the owner.
 - Per-branch workflows (today one workflow covers the business).
 - Approving or dropping single rows of a batch (bulk payout upgrade; not chosen for now).
+
+## Batch 8 changes (2026-10-25)
+
+- **`awaitingMeKobo`** is on every batch object and every `GET /transfers/batches` item: the sum of `amountKobo` over the rows the caller can decide (the same rows as `awaitingMe`).
+- **`expect` on batch decisions.** `POST /batches/:id/approve` and `/reject` accept `expect: { count, amountKobo }`, a strict object.
+  - If the rows the caller can decide now differ from it, the response is 409 `BATCH_CHANGED` with `details: { count, amountKobo }` (the current values), and nothing is decided.
+  - Precedence: `TRANSFER_NOT_PENDING`, `CANNOT_APPROVE_OWN` and `NOTHING_TO_DECIDE` come before `BATCH_CHANGED`.
+  - The exact rows checked are the ones decided, each with its conditional write. A row decided by someone else meanwhile is `skipped`, so a decision can cover fewer rows than confirmed, never more.
+  - Web and mobile send `expect` from what they showed, and label the button "Approve 2 · ₦200,000.00".
+- **`GET /transfers?batch=none`** returns only transfers that aren't part of a bulk transfer, with `total` and paging to match. It combines with every other filter. Mobile uses it to merge single transfers with `GET /batches`.
+- **Sends re-check the sender inside the account lock.** The approval rule and the sender's membership are re-read there, so a rule changed, or a member demoted or removed, during a long request takes effect. Responses: 403 `NOT_A_MEMBER`, 403 `PERMISSION_DENIED` if they lost `transfers.create`, or 404 if they lost access to the branch.

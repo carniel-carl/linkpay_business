@@ -150,3 +150,27 @@ Running a list can also return everything `POST /transfers/bulk` does: `INSUFFIC
 - **Bulk payout:** add rows from beneficiaries (multi-select) as well as CSV, "Save new recipients", and "Save as a list" after sending.
 - **Payout lists:** cards with the title, count, total and last run. A list view where amounts are editable inline, with "Pay now" (choose the account, review the total with fees, keep the changes on the list or not), then the batch sheet as usual.
 - Mobile: start with picking a beneficiary in Send money. Lists can come later.
+
+## Batch 8 changes (2026-10-25)
+
+- **The Idempotency-Key is now required** on `POST /transfers`, `/transfers/bulk` and `/payout-lists/:id/run`. Without it the response is 400 `IDEMPOTENCY_KEY_REQUIRED`. Web and mobile always send one.
+- **Replays survive changed beneficiaries.** The request hash for a replay is built from the transfers the key already created, never from beneficiaries as they are now. So a retry still replays after a beneficiary is deleted or saved again, and when only the save tick (`saveBeneficiary`/`saveBeneficiaries`) changed.
+  - **The hash (v2).** It covers `branch`, `payoutList`, and per row `accountNumber`, `bankUuid`, `amountKobo` and `narration`.
+    - A row that names a saved beneficiary counts as the account it pays.
+    - Left out: the beneficiary id, the save flags, the batch title and reviewed names.
+    - Transfers stored with the old hash shape (which included the beneficiary id) still replay. `legacySendHash` can go once no pre-deploy transfer can be retried.
+    - Clients build their keys from exactly these fields.
+  - A key is replaced only after a success or `IDEMPOTENCY_KEY_REUSED`, never when a dialog is closed or reopened.
+- **`saveItems` on a run is best effort** once the money has moved. A failure is logged and never turns a sent run into an error.
+- **Name-check budget.**
+  - 600 name checks per member per 15 minutes, shared by `resolve-account`, `resolve-accounts`, `bulk/preview` (uncached accounts only), and beneficiary create and import (new accounts only).
+  - Over it: 429 `RATE_LIMITED`, `details: { retryAt, limit, remaining, requested }`.
+  - Imports are also capped at 60 requests per member per 15 minutes.
+  - The 2,000-beneficiary limit is checked before the bank is called. On import, rows past the room left get `BENEFICIARY_LIMIT`. Duplicate accounts in one import are checked once.
+- **Payment history** (`GET /transfers?beneficiary=`) now matches every transfer from the business to that beneficiary's account number and bank. That includes ones sent before the account was saved, and ones typed in by hand. `recipient.beneficiary` isn't backfilled. A deleted beneficiary keeps its own payments. New index: Transfer `{ business, recipient.accountNumber, createdAt }`.
+- **CSV rules** (web and mobile, shared logic):
+  - An unquoted 1–3 digit amount followed by a 3-digit cell is refused ("Amounts with commas need quotes, or write 25000"); a quoted 3-digit narration is allowed.
+  - Commas inside quotes must be thousands groups; anything else is refused.
+  - Line 1 is skipped as a header only if it mentions "account" and its first cell has letters and no digits.
+- **Mobile now has payout lists:** index, create and edit (picker and new account), pay with the review and PIN, delete, and a read-only view. Saving a bulk transfer as a list is web only. They open from More › Payout lists (approved businesses, with `accounts.view`) and from a row on the Bulk transfer screen. Screens: `mobile/src/app/(app)/payments/lists/`, draft state in `src/lib/payout-list-draft.ts`.
+  - Known gap: the phone builds a run's key from beneficiary ids (`runKeyBody` in `payout-list-draft.ts`), while the server hashes accounts. Suppose a run's answer is lost, and before the retry the list is edited so a row points at a different saved beneficiary for the same account. The retry then gets a new key and can pay again. It takes a list edit in that window; keying by account, like the web, would close it.
