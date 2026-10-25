@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -99,16 +100,19 @@ function Details({
           </div>
         )}
         {p.canManage && !mode && (
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setMode("deposit")}>
-              <Plus data-icon="inline-start" aria-hidden />
-              Add money
-            </Button>
-            <Button variant="outline" onClick={() => setMode("withdraw")} disabled={p.balanceKobo === 0}>
-              <ArrowUpRight data-icon="inline-start" aria-hidden />
-              Withdraw
-            </Button>
-          </div>
+          // Disabled, with the reason, while the business is suspended.
+          <WriteGate>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => setMode("deposit")}>
+                <Plus data-icon="inline-start" aria-hidden />
+                Add money
+              </Button>
+              <Button variant="outline" onClick={() => setMode("withdraw")} disabled={p.balanceKobo === 0}>
+                <ArrowUpRight data-icon="inline-start" aria-hidden />
+                Withdraw
+              </Button>
+            </div>
+          </WriteGate>
         )}
       </SheetHeader>
 
@@ -156,14 +160,18 @@ function Details({
       </dl>
 
       {p.canManage && (
-        <div className="flex flex-wrap gap-2 border-b px-6 py-4">
-          <PocketFormDialog pocket={p} branches={branches}>
-            <Button variant="ghost" size="sm">
-              <Pencil data-icon="inline-start" aria-hidden />
-              Edit
-            </Button>
-          </PocketFormDialog>
-          <ClosePocket pocket={p} onClosed={onClosed} />
+        <div className="border-b px-6 py-4">
+          <WriteGate>
+            <div className="flex flex-wrap gap-2">
+              <PocketFormDialog pocket={p} branches={branches}>
+                <Button variant="ghost" size="sm">
+                  <Pencil data-icon="inline-start" aria-hidden />
+                  Edit
+                </Button>
+              </PocketFormDialog>
+              <ClosePocket pocket={p} onClosed={onClosed} />
+            </div>
+          </WriteGate>
         </div>
       )}
 

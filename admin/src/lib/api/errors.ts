@@ -46,6 +46,7 @@ const MESSAGES: Record<string, string> = {
   INCORRECT_PASSWORD: "That password is incorrect.",
   NOT_EMAIL_METHOD: "Use the code from your authenticator app.",
   TOTP_SETUP_REQUIRED: "Start the authenticator setup again.",
+  TOTP_NOT_ENABLED: "Recovery codes only work with the authenticator app. Set it up first.",
   NOT_REVIEWABLE: "This business is no longer waiting for review. Refresh to see its current status.",
   FORBIDDEN: "You don't have access to this.",
   PROVIDER_ERROR: "We can't reach our banking partner right now. Try again in a moment.",

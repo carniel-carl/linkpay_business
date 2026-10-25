@@ -5,6 +5,7 @@ import { api } from "@/lib/api/client"
 import { ApiError } from "@/lib/api/errors"
 import { fetchAccounts } from "@/lib/accounts"
 import { getSelectedBranch } from "@/lib/branches"
+import { CLOSED_PATH } from "@/lib/restriction"
 import type {
   Branch,
   Branding,
@@ -46,6 +47,8 @@ import type { BeneficiaryDetail, BeneficiaryList, PayoutList, PayoutListWithItem
 // sign-out route handler, which clears the cookie and redirects to sign in.
 function onReadError(err: unknown): never {
   if (err instanceof ApiError && err.sessionExpired) redirect("/auth/sign-out?expired=1")
+  // Closed by compliance while the dashboard was open (its layout isn't rendered again between pages).
+  if (err instanceof ApiError && err.code === "BUSINESS_BANNED") redirect(CLOSED_PATH)
   throw err
 }
 
@@ -139,7 +142,7 @@ async function load<T>(path: string): Promise<Loaded<T>> {
     return { ok: true, data: await api<T>(path) }
   } catch (err) {
     if (!(err instanceof ApiError)) throw err
-    if (err.sessionExpired) onReadError(err)
+    if (err.sessionExpired || err.code === "BUSINESS_BANNED") onReadError(err)
     const down = err.code === "PROVIDER_ERROR" || err.code === "API_UNREACHABLE" || err.status >= 500
     return { ok: false, reason: down ? "provider_down" : "unavailable" }
   }

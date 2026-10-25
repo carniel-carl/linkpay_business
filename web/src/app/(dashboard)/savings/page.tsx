@@ -7,6 +7,7 @@ import { PocketFormDialog, type PocketBranch } from "@/components/savings/pocket
 import { SafelockFormDialog } from "@/components/savings/safelock-form-dialog"
 import { SafelockView } from "@/components/savings/safelock-view"
 import { SavingsView } from "@/components/savings/savings-view"
+import { WriteGate } from "@/components/shell/write-gate"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -81,21 +82,26 @@ export default async function SavingsPage({ searchParams }: PageProps<"/savings"
       ? ready.filter((b) => locked.data.items.filter((s) => s.branch?._id === b._id).length < limits.data.maxPerBranch)
       : []
 
+  // Disabled, with the reason, while the business is suspended (so are the moves in a pocket's sheet).
   const newPocket = canManage && ready.length > 0 && (
-    <PocketFormDialog branches={ready} defaultBranchId={selected?._id}>
-      <Button>
-        <Plus data-icon="inline-start" aria-hidden />
-        New pocket
-      </Button>
-    </PocketFormDialog>
+    <WriteGate>
+      <PocketFormDialog branches={ready} defaultBranchId={selected?._id}>
+        <Button>
+          <Plus data-icon="inline-start" aria-hidden />
+          New pocket
+        </Button>
+      </PocketFormDialog>
+    </WriteGate>
   )
   const newSafelock = canManage && limits?.ok && lockable.length > 0 && (
-    <SafelockFormDialog branches={lockable} limits={limits.data} defaultBranchId={selected?._id}>
-      <Button>
-        <Lock data-icon="inline-start" aria-hidden />
-        New Safelock
-      </Button>
-    </SafelockFormDialog>
+    <WriteGate>
+      <SafelockFormDialog branches={lockable} limits={limits.data} defaultBranchId={selected?._id}>
+        <Button>
+          <Lock data-icon="inline-start" aria-hidden />
+          New Safelock
+        </Button>
+      </SafelockFormDialog>
+    </WriteGate>
   )
 
   const header = (

@@ -7,6 +7,7 @@ import { Ellipsis, ExternalLink, FlaskConical, Pencil, Power, PowerOff, Rocket, 
 import { toast } from "sonner"
 import { deletePaymentLink, updatePaymentLink } from "@/app/(dashboard)/payment-links/actions"
 import { CopyButton } from "@/components/accounts/copy-button"
+import { WriteGate } from "@/components/shell/write-gate"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -140,12 +141,15 @@ export function LinkActions({ link }: { link: PaymentLink }) {
       <CopyButton value={link.url} message="Link copied. Paste it into WhatsApp, SMS or an email." label="Copy link" variant="default" size="default">
         Copy link
       </CopyButton>
-      <Button variant="outline" asChild>
-        <Link href={`/payment-links/${link._id}/edit`}>
-          <Pencil data-icon="inline-start" aria-hidden />
-          Edit
-        </Link>
-      </Button>
+      {/* Disabled, with the reason, while the business is suspended. Copying the link still works. */}
+      <WriteGate>
+        <Button variant="outline" asChild>
+          <Link href={`/payment-links/${link._id}/edit`}>
+            <Pencil data-icon="inline-start" aria-hidden />
+            Edit
+          </Link>
+        </Button>
+      </WriteGate>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="icon" aria-label="More actions">

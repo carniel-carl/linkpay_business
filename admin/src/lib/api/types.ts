@@ -160,7 +160,8 @@ export type Staff = {
   role: StaffRole
   permissions: StaffPermission[]
   status: "active" | "disabled"
-  twoFactor: { method: TwoFactorMethod }
+  /** `recoveryCodesLeft` (unused recovery codes) is 0 unless the method is the authenticator app. */
+  twoFactor: { method: TwoFactorMethod; recoveryCodesLeft: number }
   lastSignInAt: string | null
   createdAt: string
 }
@@ -196,8 +197,17 @@ export type StaffInvitePreview = {
 /** POST /api/admin/auth/login */
 export type StaffChallenge = { challengeToken: string; method: TwoFactorMethod }
 
-/** POST /api/admin/auth/login/2fa */
-export type StaffSession = { accessToken: string; expiresAt: string; staff: Staff }
+/** POST /api/admin/auth/login/2fa. A sign-in with a recovery code also says how many are left. */
+export type StaffSession = {
+  accessToken: string
+  expiresAt: string
+  staff: Staff
+  recoveryCodeUsed?: true
+  recoveryCodesLeft?: number
+}
+
+/** Shown once: when the authenticator app is turned on, and from POST /api/admin/auth/2fa/recovery-codes. */
+export type RecoveryCodes = { recoveryCodes: string[] }
 
 export type AdminSummary = {
   counts: Record<BusinessStatus, number>

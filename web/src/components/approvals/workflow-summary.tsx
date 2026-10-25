@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { ArrowRight, TriangleAlert } from "lucide-react"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Button } from "@/components/ui/button"
 import type { ApprovalTier, TransferSettings } from "@/lib/api/types"
 import { formatNaira } from "@/lib/format"
@@ -36,12 +37,15 @@ export function WorkflowSummary({ settings, canManage }: { settings: TransferSet
           </p>
         </div>
         {canManage && (
-          <Button asChild variant="ghost" size="sm">
-            <Link href="/approvals/setup">
-              {tiers.length ? "Edit" : "Set up levels"}
-              <ArrowRight data-icon="inline-end" aria-hidden />
-            </Link>
-          </Button>
+          // Disabled, with the reason, while the business is suspended, like the page header's button.
+          <WriteGate>
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/approvals/setup">
+                {tiers.length ? "Edit" : "Set up levels"}
+                <ArrowRight data-icon="inline-end" aria-hidden />
+              </Link>
+            </Button>
+          </WriteGate>
         )}
       </div>
 

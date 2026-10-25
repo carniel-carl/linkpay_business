@@ -5,6 +5,7 @@ import { RefreshWhileSettingUp, ViewBranchButton } from "@/components/branches/b
 import { BranchFormDialog } from "@/components/branches/branch-form-dialog"
 import { PageHeader } from "@/components/common/page-header"
 import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { Branch } from "@/lib/api/types"
@@ -42,12 +43,15 @@ export default async function BranchesPage() {
         }
         actions={
           canManage && (
-            <BranchFormDialog>
-              <Button>
-                <Plus data-icon="inline-start" aria-hidden />
-                Add branch
-              </Button>
-            </BranchFormDialog>
+            // Disabled, with the reason, while the business is suspended.
+            <WriteGate>
+              <BranchFormDialog>
+                <Button>
+                  <Plus data-icon="inline-start" aria-hidden />
+                  Add branch
+                </Button>
+              </BranchFormDialog>
+            </WriteGate>
           )
         }
       />

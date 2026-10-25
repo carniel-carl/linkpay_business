@@ -16,7 +16,12 @@ export type User = {
   emailVerified: boolean
   /** False when verifying the email removed a password chosen before it was proven. A reset sets one. */
   hasPassword?: boolean
-  twoFactor?: { enabled: boolean; method: TwoFactorMethod | null }
+  twoFactor?: {
+    enabled: boolean
+    method: TwoFactorMethod | null
+    /** Unused recovery codes. 0 unless the method is the authenticator app. */
+    recoveryCodesLeft: number
+  }
   createdAt: string
   updatedAt: string
 }
@@ -131,9 +136,20 @@ export type Business = {
   submittedAt?: string
   reviewedAt?: string
   liquifia?: LiquifiaInfo
+  /** GET /api/business only: whether compliance has restricted the business (never why). Absent on admin endpoints. */
+  restriction?: Restriction
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * A compliance restriction (docs/briefs/compliance.md). Suspended: every read works and every change is refused
+ * (BUSINESS_SUSPENDED). Banned, shown as "Closed": every business route is refused (BUSINESS_BANNED), except
+ * GET /api/business and GET /api/memberships, which say so.
+ */
+export type RestrictionStatus = "active" | "suspended" | "banned"
+/** `since` is null while active. */
+export type Restriction = { status: RestrictionStatus; since: string | null }
 
 export type DocumentStatus = "pending" | "accepted" | "rejected"
 
@@ -178,6 +194,12 @@ export type Overview = {
 
 export type AuthSession = { accessToken: string; user: User }
 
+/** POST /api/auth/login/2fa. A sign-in with a recovery code also says how many are left. */
+export type TwoFactorSession = AuthSession & { recoveryCodeUsed?: true; recoveryCodesLeft?: number }
+
+/** Shown once: when the authenticator app is turned on, and from POST /api/auth/2fa/recovery-codes. */
+export type RecoveryCodes = { recoveryCodes: string[] }
+
 export type TwoFactorChallenge = {
   twoFactorRequired: true
   method: TwoFactorMethod
@@ -206,7 +228,8 @@ export type Membership = { _id: string; role: TeamRole; permissions: Permission[
 
 /** GET /api/memberships: every business the user belongs to, for the business switcher. */
 export type MembershipSummary = {
-  business: { _id: string; name: string; status: BusinessStatus }
+  /** `restriction` is the status alone here, not GET /api/business's `{ status, since }`. */
+  business: { _id: string; name: string; status: BusinessStatus; restriction?: RestrictionStatus }
   role: TeamRole
   roleLabel?: string
   isOwner: boolean
@@ -307,6 +330,13 @@ export type TransactionSummary = {
   count: number
   currency: "NGN"
 }
+
+/**
+ * GET /api/transactions/statement?branch=&from=&to=&format= answers with the file itself (docs/briefs/statements.md):
+ * one branch account's completed transactions over Lagos days `from` to `to` (both included, at most 366, ending
+ * today or earlier), with totals and no balances.
+ */
+export type StatementFormat = "pdf" | "csv"
 
 // ---- Transfers ----
 
@@ -725,6 +755,9 @@ export type NotificationType =
   | "security.new_sign_in"
   | "savings.target_reached"
   | "savings.safelock_released"
+  | "business.suspended"
+  | "business.reinstated"
+  | "business.banned"
 
 /** One notification, across all the user's businesses. `link` is a path in this app. */
 export type AppNotification = {
@@ -1114,7 +1147,8 @@ export type BeneficiaryImportResult = { created: number; failed: number; rows: B
 
 /** A row of a payout list. `beneficiary` is null if the saved beneficiary has gone. */
 export type PayoutListItem = {
-  beneficiary: Pick<Beneficiary, "_id" | "accountName" | "nickname" | "accountNumber" | "bankName"> | null
+  /** With its bank's uuid: a run's Idempotency-Key follows each row's account number and bank. */
+  beneficiary: Pick<Beneficiary, "_id" | "accountName" | "nickname" | "accountNumber" | "bankName" | "bankUuid"> | null
   amountKobo: number
   narration: string | null
 }

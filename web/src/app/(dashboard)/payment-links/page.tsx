@@ -6,6 +6,7 @@ import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
 import { CheckoutsView } from "@/components/payment-links/checkouts-view"
 import { LinksView } from "@/components/payment-links/links-view"
 import { PaymentLinksLocked } from "@/components/payment-links/parts"
+import { WriteGate } from "@/components/shell/write-gate"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import { Button } from "@/components/ui/button"
 import type { PaymentLinkSummary } from "@/lib/api/types"
@@ -46,13 +47,16 @@ export default async function PaymentLinksPage({ searchParams }: PageProps<"/pay
     payments && query.checkout ? getLinkCheckout(query.checkout) : null,
   ])
 
+  // Disabled, with the reason, while the business is suspended.
   const newLink = canManage && hasReadyBranch && (
-    <Button asChild>
-      <Link href="/payment-links/new">
-        <Plus data-icon="inline-start" aria-hidden />
-        New payment link
-      </Link>
-    </Button>
+    <WriteGate>
+      <Button asChild>
+        <Link href="/payment-links/new">
+          <Plus data-icon="inline-start" aria-hidden />
+          New payment link
+        </Link>
+      </Button>
+    </WriteGate>
   )
   const showBranch = !selected && branches.length > 1
 

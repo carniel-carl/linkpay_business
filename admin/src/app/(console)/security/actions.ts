@@ -1,9 +1,10 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
+import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
-import type { Staff } from "@/lib/api/types"
+import type { RecoveryCodes, Staff } from "@/lib/api/types"
 import { changePasswordSchema, code, passwordConfirmSchema } from "@/lib/schemas"
 
 async function done<T>(result: Awaited<ReturnType<typeof runAction<T>>>) {
@@ -19,9 +20,20 @@ export async function startTotpSetup(input: unknown) {
   )
 }
 
+/** Also returns the 10 recovery codes, shown once. */
 export async function enableTotp(input: { code: string }) {
   const body = { code: code.parse(input.code) }
-  return done(await runAction(() => api<Staff>("/api/admin/auth/2fa/totp/enable", { method: "POST", json: body })))
+  return done(
+    await runAction(() => api<Staff & RecoveryCodes>("/api/admin/auth/2fa/totp/enable", { method: "POST", json: body })),
+  )
+}
+
+/** New recovery codes replace the old ones. Needs the password or a current authenticator code, as setup does. */
+export async function newRecoveryCodes(input: unknown) {
+  const body = z.union([passwordConfirmSchema, z.object({ code })]).parse(input)
+  return done(
+    await runAction(() => api<RecoveryCodes>("/api/admin/auth/2fa/recovery-codes", { method: "POST", json: body })),
+  )
 }
 
 /** Switches back to emailed codes. There's no "off": two-step is mandatory for staff. */

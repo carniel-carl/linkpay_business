@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
-import type { User } from "@/lib/api/types"
+import type { RecoveryCodes, User } from "@/lib/api/types"
 import { getMe } from "@/lib/data"
 import { code, passwordConfirmSchema } from "@/lib/schemas"
 
@@ -27,9 +27,18 @@ export async function startTotpSetup(input: unknown) {
   )
 }
 
+/** Also returns the 10 recovery codes, shown once. */
 export async function enableTotp(input: { code: string }) {
   const body = { code: code.parse(input.code) }
-  return done(await runAction(() => api<{ user: User }>("/api/auth/2fa/totp/enable", { method: "POST", json: body })))
+  return done(
+    await runAction(() => api<{ user: User } & RecoveryCodes>("/api/auth/2fa/totp/enable", { method: "POST", json: body })),
+  )
+}
+
+/** New recovery codes replace the old ones. Needs the password or a current authenticator code, as setup does. */
+export async function newRecoveryCodes(input: unknown) {
+  const body = z.union([passwordConfirmSchema, z.object({ code })]).parse(input)
+  return done(await runAction(() => api<RecoveryCodes>("/api/auth/2fa/recovery-codes", { method: "POST", json: body })))
 }
 
 export async function enableEmailTwoFactor(input: unknown) {

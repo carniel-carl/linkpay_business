@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { PiggyBank, Plus } from "lucide-react"
 import { BalanceAmount } from "@/components/accounts/balance-visibility"
 import { NavTabs } from "@/components/common/nav-tabs"
+import { useReadOnly } from "@/components/shell/write-gate"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import type { Pocket, PocketList } from "@/lib/api/types"
 import { formatDate, formatNaira } from "@/lib/format"
@@ -38,6 +39,8 @@ function href(status: SavingsQuery["status"], pocket?: string) {
 export function SavingsView({ active, closed, query, linked, branches, canManage, showBranch, newPocket }: Props) {
   const router = useRouter()
   const pathname = usePathname()
+  // Suspended: the header's New pocket shows disabled, so the tile at the end of the list goes.
+  const { readOnly } = useReadOnly()
   const pockets = query.status === "closed" ? (closed ?? []) : active.items
   const open = query.pocket
     ? (active.items.find((p) => p._id === query.pocket) ?? closed?.find((p) => p._id === query.pocket) ?? linked)
@@ -132,7 +135,7 @@ export function SavingsView({ active, closed, query, linked, branches, canManage
                 <PocketCard pocket={p} showBranch={showBranch} href={href(query.status, p._id)} />
               </li>
             ))}
-            {query.status === "active" && canManage && roomy.length > 0 && (
+            {query.status === "active" && canManage && !readOnly && roomy.length > 0 && (
               <li style={{ "--i": pockets.length } as React.CSSProperties}>
                 <PocketFormDialog branches={roomy} defaultBranchId={roomy.length === 1 ? roomy[0]._id : undefined}>
                   <button

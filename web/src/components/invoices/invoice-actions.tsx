@@ -7,6 +7,7 @@ import { BellRing, Copy, Download, Ellipsis, FilePenLine, Files, Link2, Send, Tr
 import { toast } from "sonner"
 import { actOnInvoice, deleteDraft, sendInvoice } from "@/app/(dashboard)/invoices/actions"
 import { FormError } from "@/components/common/form-error"
+import { WriteGate } from "@/components/shell/write-gate"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -96,10 +97,13 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   return (
     <>
       {editable && (
-        <Button onClick={() => setSendOpen(true)}>
-          <Send data-icon="inline-start" aria-hidden />
-          {invoice.lastSentAt ? "Send again" : "Send"}
-        </Button>
+        // Disabled, with the reason, while the business is suspended. The rest (link, PDF) are reads.
+        <WriteGate>
+          <Button onClick={() => setSendOpen(true)}>
+            <Send data-icon="inline-start" aria-hidden />
+            {invoice.lastSentAt ? "Send again" : "Send"}
+          </Button>
+        </WriteGate>
       )}
       {invoice.status !== "void" && (
         <Button variant="outline" disabled={busy} onClick={shareLink}>

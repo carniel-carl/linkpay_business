@@ -27,7 +27,8 @@ import { BeneficiaryName } from "./parts"
 
 type RunRow = {
   key: string
-  beneficiary: BeneficiaryLike
+  /** With its bank's uuid, which the run's key follows (keyedItems). */
+  beneficiary: BeneficiaryLike & { bankUuid: string }
   /** The amount saved on the list. */
   savedKobo: number
   narration: string | null
@@ -61,6 +62,19 @@ const rowsFrom = (list: PayoutListWithItems): RunRow[] =>
 
 const toItems = (rows: RunRow[]): Item[] =>
   rows.map((r) => ({ beneficiary: r.beneficiary._id, amountKobo: parseNairaToKobo(r.amount) ?? 0, narration: r.narration ?? undefined }))
+
+/**
+ * The rows as a run's Idempotency-Key follows them, like the API's request hash and the bulk dialog's keyedItems:
+ * each row's account number, bank, amount and narration. Not the beneficiary: a row pointed at another beneficiary
+ * for the same account (deleted and saved again) after a lost answer is the same payment, and must replay.
+ */
+const keyedItems = (rows: RunRow[]) =>
+  rows.map((r) => ({
+    accountNumber: r.beneficiary.accountNumber,
+    bankUuid: r.beneficiary.bankUuid,
+    amountKobo: parseNairaToKobo(r.amount) ?? 0,
+    narration: r.narration ?? null,
+  }))
 
 /** Row codes that mean "try again", not "this row is wrong": the bank couldn't answer a name check just now. */
 const RETRYABLE = new Set(["NAME_CHECK_UNAVAILABLE"])
@@ -204,11 +218,11 @@ export function PayoutListRun({
     setError(undefined)
     setServerErrors({})
     const request = { branch: sourceId, items }
-    // The key follows what's paid: this list, the account and the rows. Sending the same again keeps it, whatever
-    // went wrong (a wrong PIN, a dropped response), so a retry can't pay twice; changing any of them gets a new one.
-    // "Save these changes" isn't part of the payment (the API leaves it out of what it compares a repeat with), so
-    // ticking it after a failed try still replays a run that already went instead of paying again.
-    const idempotencyKey = idempotency.keyFor({ list: list._id, ...request })
+    // The key follows what's paid: this list, the account and each row's account, amount and narration. Sending the
+    // same again keeps it, whatever went wrong (a wrong PIN, a dropped response), so a retry can't pay twice;
+    // changing any of them gets a new one. "Save these changes" isn't part of the payment (the API leaves it out of
+    // what it compares a repeat with), so ticking it after a failed try still replays a run that already went.
+    const idempotencyKey = idempotency.keyFor({ list: list._id, branch: sourceId, items: keyedItems(included) })
     const kept = saveItems && changed
     const forApproval = current.approval.needed
     const result = await pin.confirm({

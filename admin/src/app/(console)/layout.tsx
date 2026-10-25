@@ -1,6 +1,7 @@
 import { cookies } from "next/headers"
 import { AdminSidebar } from "@/components/admin/admin-sidebar"
 import { NotificationBell } from "@/components/notifications/notification-bell"
+import { RecoveryCodeNotice } from "@/components/settings/recovery-code-notice"
 import { PinnedHeader } from "@/components/shell/pinned-header"
 import { UserMenu } from "@/components/shell/user-menu"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
@@ -21,6 +22,8 @@ export default async function ConsoleLayout({ children }: LayoutProps<"/">) {
       >
         Skip to content
       </a>
+      {/* After a sign-in with a recovery code: one notice of how many are left. */}
+      <RecoveryCodeNotice />
       <AdminSidebar
         summary={summary}
         access={{

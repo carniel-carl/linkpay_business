@@ -8,6 +8,7 @@ import { BeneficiaryFormDialog } from "@/components/payouts/beneficiary-form-dia
 import { BeneficiaryImportDialog } from "@/components/payouts/beneficiary-import-dialog"
 import { PayoutsLocked } from "@/components/payouts/parts"
 import { PayoutsUnavailable } from "@/components/payouts/unavailable"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Button } from "@/components/ui/button"
 import { getBeneficiaries, getOverview } from "@/lib/data"
 import { beneficiaryApiParams, parseBeneficiaryQuery } from "@/lib/payouts"
@@ -34,13 +35,16 @@ export default async function BeneficiariesPage({ searchParams }: PageProps<"/be
   const canManage = can(overview, "transfers.create")
   const list = await getBeneficiaries(beneficiaryApiParams(query))
 
+  // Disabled, with the reason, while the business is suspended.
   const add = canManage && (
-    <BeneficiaryFormDialog>
-      <Button>
-        <UserPlus data-icon="inline-start" aria-hidden />
-        Add beneficiary
-      </Button>
-    </BeneficiaryFormDialog>
+    <WriteGate>
+      <BeneficiaryFormDialog>
+        <Button>
+          <UserPlus data-icon="inline-start" aria-hidden />
+          Add beneficiary
+        </Button>
+      </BeneficiaryFormDialog>
+    </WriteGate>
   )
 
   return (
@@ -58,12 +62,14 @@ export default async function BeneficiariesPage({ searchParams }: PageProps<"/be
               </Link>
             </Button>
             {canManage && (
-              <BeneficiaryImportDialog>
-                <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
-                  <FileUp data-icon="inline-start" aria-hidden />
-                  <span className="max-sm:sr-only">Import</span>
-                </Button>
-              </BeneficiaryImportDialog>
+              <WriteGate>
+                <BeneficiaryImportDialog>
+                  <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
+                    <FileUp data-icon="inline-start" aria-hidden />
+                    <span className="max-sm:sr-only">Import</span>
+                  </Button>
+                </BeneficiaryImportDialog>
+              </WriteGate>
             )}
             {add}
           </>

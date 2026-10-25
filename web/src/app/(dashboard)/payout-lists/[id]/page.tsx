@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/common/page-header"
 import { PayoutsLocked } from "@/components/payouts/parts"
 import { PayoutListMenu } from "@/components/payouts/payout-list-actions"
 import { PayoutListRun } from "@/components/payouts/payout-list-run"
+import { WriteGate } from "@/components/shell/write-gate"
 import type { SourceAccount } from "@/components/transfers/new-transfer-dialog"
 import { Button } from "@/components/ui/button"
 import { fetchAccounts } from "@/lib/accounts"
@@ -13,6 +14,7 @@ import { getOverview, getPayoutList, getSelected } from "@/lib/data"
 import { formatDate, formatNaira } from "@/lib/format"
 import { people } from "@/lib/payouts"
 import { can } from "@/lib/permissions"
+import { isSuspended } from "@/lib/restriction"
 
 export const metadata: Metadata = { title: "Payout list" }
 
@@ -37,7 +39,13 @@ export default async function PayoutListPage({ params }: PageProps<"/payout-list
   // Accounts the member can pay from: their branches', with balances.
   const sources: SourceAccount[] =
     accounts?.state === "ready" ? accounts.accounts.filter((a): a is SourceAccount => typeof a.branch === "object" && !!a.branch) : []
-  const note = accounts && accounts.state !== "ready" ? ACCOUNTS_NOTE[accounts.state] : undefined
+  // Suspended: nothing can be paid, so no account is offered and the note says why.
+  const suspended = isSuspended(overview)
+  const note = suspended
+    ? `${overview.business.name} is suspended, so this list can't be paid right now.`
+    : accounts && accounts.state !== "ready"
+      ? ACCOUNTS_NOTE[accounts.state]
+      : undefined
   // The list's own account, else the sidebar's branch, else the only one there is.
   const defaultBranchId = [list.branch?._id, selected?._id, sources.length === 1 ? sources[0].branch._id : undefined].find(
     (b) => b && sources.some((s) => s.branch._id === b),
@@ -74,7 +82,7 @@ export default async function PayoutListPage({ params }: PageProps<"/payout-list
         }
         actions={
           canRun && (
-            <>
+            <WriteGate>
               <Button variant="outline" asChild>
                 <Link href={`/payout-lists/${list._id}/edit`}>
                   <Pencil data-icon="inline-start" aria-hidden />
@@ -82,11 +90,17 @@ export default async function PayoutListPage({ params }: PageProps<"/payout-list
                 </Link>
               </Button>
               <PayoutListMenu list={list} leaveTo="/payout-lists" showEdit={false} />
-            </>
+            </WriteGate>
           )
         }
       />
-      <PayoutListRun list={list} accounts={sources} defaultBranchId={defaultBranchId} canRun={canRun} accountsNote={note} />
+      <PayoutListRun
+        list={list}
+        accounts={suspended ? [] : sources}
+        defaultBranchId={suspended ? undefined : defaultBranchId}
+        canRun={canRun}
+        accountsNote={note}
+      />
     </>
   )
 }

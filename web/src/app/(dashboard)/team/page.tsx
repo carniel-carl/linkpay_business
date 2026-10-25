@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { UsersRound } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
+import { WriteGate } from "@/components/shell/write-gate"
 import { InviteDialog } from "@/components/team/invite-dialog"
 import { InvitesList } from "@/components/team/invites-list"
 import { LeaveBusiness } from "@/components/team/leave-business"
@@ -40,12 +41,15 @@ export default async function TeamPage() {
         title="Team"
         description="Invite your accountant and staff. Each person signs in with their own account, and their role decides what they can see and do."
         actions={
-          <InviteDialog
-            roles={grantable}
-            catalog={team.roles.permissions}
-            branches={branches}
-            adminHidden={!isOwner(membership)}
-          />
+          // Disabled, with the reason, while the business is suspended.
+          <WriteGate>
+            <InviteDialog
+              roles={grantable}
+              catalog={team.roles.permissions}
+              branches={branches}
+              adminHidden={!isOwner(membership)}
+            />
+          </WriteGate>
         }
       />
       <div className="stagger grid gap-8">
