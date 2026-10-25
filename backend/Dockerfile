@@ -14,6 +14,10 @@ COPY src ./src
 COPY scripts ./scripts
 COPY assets ./assets
 
+# With STORAGE_PROVIDER=local and no UPLOAD_DIR, uploads go to /app/uploads: make it the bun user's. (Production
+# uses a bucket, or a mounted disk with an absolute UPLOAD_DIR.)
+RUN mkdir -p /app/uploads && chown bun:bun /app/uploads
+
 # Not root. NODE_ENV and everything else come from the service's environment: nothing is baked in.
 USER bun
 EXPOSE 10000
