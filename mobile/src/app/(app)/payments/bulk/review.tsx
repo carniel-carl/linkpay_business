@@ -269,6 +269,8 @@ export default function BulkReview() {
           setSendProblem("That took too long, so the bulk transfer may already have gone. Check your transfers before you send it again.");
           return;
         }
+        // The key was used for other details: say so, and let a deliberate retry be a new request.
+        if (err instanceof ApiError && err.code === "IDEMPOTENCY_KEY_REUSED") useBulkDraft.getState().freshKeys();
         setSendProblem(friendlyMessage(err));
         // The balance or the approvers changed since the preview: work it out again.
         if (err instanceof ApiError && (err.code === "INSUFFICIENT_BALANCE" || err.code === "NO_APPROVER")) setAttempt((a) => a + 1);

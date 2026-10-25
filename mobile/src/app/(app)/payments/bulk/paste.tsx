@@ -81,6 +81,7 @@ export default function BulkPaste() {
         bankText: r.bank ? undefined : r.bankText,
         bankError: r.bankError,
         amountKobo: r.amountKobo,
+        amountError: r.amountError,
         narration: r.narration,
         line: r.line,
       })),

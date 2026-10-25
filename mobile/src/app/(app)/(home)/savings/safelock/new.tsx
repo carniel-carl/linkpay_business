@@ -17,9 +17,8 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { TextField } from "@/components/ui/text-field";
 import { Display } from "@/components/ui/typography";
 import { can, useAccounts } from "@/lib/api/banking";
-import { idempotencyKeys } from "@/lib/api/client";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { createSafelock, useSafelockCreated, useSafelockLimits } from "@/lib/api/safelocks";
+import { createSafelock, safelockKeys, useSafelockCreated, useSafelockLimits } from "@/lib/api/safelocks";
 import type { Branch, SafelockLimits } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { formatNaira, formatNairaShort } from "@/lib/format";
@@ -93,8 +92,6 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
   // What the last try came to, when it didn't lock the money: shown on the confirm step.
   const [error, setError] = useState<unknown>();
   const [serverField, setServerField] = useState<{ amount?: string; unlockOn?: string }>({});
-  // Locking the same details again reuses the key, so a create whose answer got lost can't lock the money twice.
-  const [keyFor] = useState(() => idempotencyKeys());
 
   const picked = branches.find((b) => b._id === branch);
   const account = accounts.data?.find((a) => a.branch._id === branch);
@@ -139,9 +136,12 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
       title: `Lock ${amount}?`,
       subtitle: `Enter your transaction PIN to lock ${amount} until ${formatDay(unlockOn)}.`,
       pending: "Locking…",
-      // The same details keep the same key, a corrected PIN too, so a lock whose answer got lost can't happen twice.
-      run: (entered) => createSafelock(input, keyFor(input), entered),
+      // The same details keep the same key, a corrected PIN too, even after leaving this form and filling it in again
+      // (safelockKeys), so a lock whose answer got lost can't happen twice.
+      run: (entered) => createSafelock(input, safelockKeys.keyFor(input), entered),
       onSuccess: (saved) => {
+        // The next lock is a new request.
+        safelockKeys.reset();
         created(saved);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.replace({ pathname: "/savings/safelock/[id]", params: { id: saved._id, created: "1" } });
@@ -149,6 +149,8 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
       onError: (err) => {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         setError(err);
+        // The key was used for other details: a deliberate retry is a new request.
+        if (err instanceof ApiError && err.code === "IDEMPOTENCY_KEY_REUSED") safelockKeys.reset();
         if (err instanceof ApiError && (err.code === "SAFELOCK_TOO_SMALL" || err.code === "INSUFFICIENT_BALANCE")) {
           setServerField({ amount: err.code === "INSUFFICIENT_BALANCE" ? NOT_ENOUGH : friendlyMessage(err) });
           setStep("details");
@@ -346,6 +348,9 @@ function Agree({ checked, onChange, label }: { checked: boolean; onChange: (v: b
 function lockError(err: unknown) {
   if (err instanceof ApiError && err.code === "TIMEOUT") {
     return "That took too long, so the money may already be locked. Check your Safelocks before you try again.";
+  }
+  if (err instanceof ApiError && err.code === "IDEMPOTENCY_KEY_REUSED") {
+    return "These details changed after they were first sent. Check your Safelocks to see whether the money was locked before you try again.";
   }
   return friendlyMessage(err);
 }

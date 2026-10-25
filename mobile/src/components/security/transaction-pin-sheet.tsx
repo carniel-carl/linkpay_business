@@ -17,6 +17,7 @@ import {
   lockedMessage,
   lockedUntilOf,
   pinStatusQuery,
+  resetRequiredOf,
   setTransactionPin,
   wrongPinMessage,
 } from "@/lib/api/transaction-pin";
@@ -55,7 +56,8 @@ export type PinRequest<T> = {
 
 type Step =
   | { kind: "enter"; message?: string }
-  | { kind: "locked"; until: string | null }
+  /** `resetRequired`: too many wrong tries in a day, so only a reset unlocks it. */
+  | { kind: "locked"; until: string | null; resetRequired?: boolean }
   | { kind: "password"; error?: string }
   | { kind: "choose"; password: string }
   | { kind: "noPassword" }
@@ -98,7 +100,7 @@ export function useTransactionPin() {
         status && !status.isSet
           ? { kind: "password" }
           : status && isPinLocked(status)
-            ? { kind: "locked", until: status.lockedUntil }
+            ? { kind: "locked", until: status.lockedUntil, resetRequired: status.resetRequired }
             : { kind: "enter" };
       setJob({
         id: ++ids.current,
@@ -181,7 +183,7 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
     }
     if (isApiCode(err, "TRANSACTION_PIN_LOCKED")) {
       refreshStatus();
-      setStep({ kind: "locked", until: lockedUntilOf(err) });
+      setStep({ kind: "locked", until: lockedUntilOf(err), resetRequired: resetRequiredOf(err) });
       return "error";
     }
     if (isApiCode(err, "TRANSACTION_PIN_REQUIRED")) {
@@ -280,7 +282,15 @@ function TransactionPinSheet({ job, onClose }: { job: Job; onClose: () => void }
       />
     );
   } else if (step.kind === "locked") {
-    body = <PinNotice title="PIN locked" body={lockedMessage(step.until)} action="Reset PIN" onAction={resetPin} onCancel={onClose} />;
+    body = (
+      <PinNotice
+        title="PIN locked"
+        body={lockedMessage(step.until, step.resetRequired)}
+        action={step.resetRequired ? "Reset your PIN" : "Reset PIN"}
+        onAction={resetPin}
+        onCancel={onClose}
+      />
+    );
   } else if (step.kind === "noPassword" || (step.kind === "password" && me.data?.hasPassword === false)) {
     body = (
       <PinNotice

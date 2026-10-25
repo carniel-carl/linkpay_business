@@ -1,7 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBusinessContext } from "@/lib/business-context";
 import { formatNaira } from "@/lib/format";
-import { api, MONEY_TIMEOUT_MS } from "./client";
+import { api, BULK_MONEY_TIMEOUT_MS, MONEY_TIMEOUT_MS } from "./client";
 import { idSegment } from "./paths";
 import { pinHeader } from "./transaction-pin";
 import { ApiError } from "./errors";
@@ -9,6 +9,7 @@ import type {
   ApprovalRule,
   ApprovalTier,
   Bank,
+  BatchExpectation,
   BatchLevel,
   BulkPreview,
   BulkRequest,
@@ -51,16 +52,23 @@ export const TRANSFER_TABS = [
 ] as const;
 export type TransferTab = (typeof TRANSFER_TABS)[number]["key"];
 
-/** `q` searches the recipient, reference and narration. */
-export function useTransfers(tab: TransferTab, { enabled = true, q }: { enabled?: boolean; q?: string } = {}) {
+/**
+ * `q` searches the recipient, reference and narration. `singles` leaves out the transfers that are part of a bulk
+ * transfer (`batch=none`), for a list that shows each bulk transfer as one row from the batch list.
+ */
+export function useTransfers(
+  tab: TransferTab,
+  { enabled = true, q, singles = false }: { enabled?: boolean; q?: string; singles?: boolean } = {},
+) {
   const business = useBusinessKey();
   return useInfiniteQuery({
-    queryKey: [business, "transfers", tab, q],
+    queryKey: [business, "transfers", tab, q, singles],
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({ skip: String(pageParam), take: "30" });
       if (tab === "awaiting") params.set("awaiting", "me");
       else if (tab !== "all") params.set("status", tab);
       if (q) params.set("q", q);
+      if (singles) params.set("batch", "none");
       return api<TransferList>(`/api/transfers?${params}`, { signal });
     },
     initialPageParam: 0,
@@ -90,14 +98,18 @@ export const APPROVAL_TABS = [
 ] as const;
 export type ApprovalTab = (typeof APPROVAL_TABS)[number]["key"];
 
-/** Transfers that went through approval: waiting at any level, approved and sent, or declined. */
-export function useApprovals(tab: ApprovalTab, q?: string) {
+/**
+ * Transfers that went through approval: waiting at any level, approved and sent, or declined. `singles` leaves
+ * out bulk transfers' rows, as useTransfers.
+ */
+export function useApprovals(tab: ApprovalTab, { q, singles = false }: { q?: string; singles?: boolean } = {}) {
   const business = useBusinessKey();
   return useInfiniteQuery({
-    queryKey: [business, "transfers", "approvals", tab, q],
+    queryKey: [business, "transfers", "approvals", tab, q, singles],
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams({ approval: tab, skip: String(pageParam), take: "30" });
       if (q) params.set("q", q);
+      if (singles) params.set("batch", "none");
       return api<TransferList>(`/api/transfers?${params}`, { signal });
     },
     initialPageParam: 0,
@@ -263,14 +275,15 @@ export const previewBulkTransfer = (body: BulkRequest, signal?: AbortSignal) =>
 /**
  * Sends a bulk transfer. As with one transfer, the PIN is this request's header only, and the Idempotency-Key
  * comes from the rows (without the names the member reviewed, as the API's request hash leaves them out), so
- * sending the same rows again after a lost answer, a wrong PIN or a re-checked name returns the first batch.
+ * sending the same rows again after a lost answer, a wrong PIN or a re-checked name returns the first batch. It
+ * waits longer than the preview: the server checks every row with its bank again first.
  */
 export const sendBulkTransfer = (body: BulkRequest, idempotencyKey: string, pin: string) =>
   api<BulkResult>("/api/transfers/bulk", {
     method: "POST",
     json: body,
     headers: { "Idempotency-Key": idempotencyKey, ...pinHeader(pin) },
-    timeoutMs: MONEY_TIMEOUT_MS,
+    timeoutMs: BULK_MONEY_TIMEOUT_MS,
   });
 
 /** The rows an INVALID_ROWS refusal names (`details.rows`); nothing was created. */
@@ -359,16 +372,16 @@ export function useBatchChanged() {
 
 /**
  * Reject the transfers in a batch waiting for the member (and leave the rest for their approvers), or, for its
- * creator, cancel everything still waiting. Neither moves money, so neither needs the PIN. Rejecting answers
- * with `decided` and `skipped` too.
+ * creator, cancel everything still waiting. Neither moves money, so neither needs the PIN. Rejecting sends what the
+ * member was shown (`expect`), so it can't reject more than that, and answers with `decided` and `skipped` too.
  */
 export function useBatchAction() {
   const changed = useBatchChanged();
   return useMutation({
-    mutationFn: ({ id, action, note }: { id: string; action: "reject" | "cancel"; note?: string }) =>
+    mutationFn: ({ id, action, note, expect }: { id: string; action: "reject" | "cancel"; note?: string; expect?: BatchExpectation }) =>
       api<TransferBatch & Partial<Pick<TransferBatchDecision, "decided" | "skipped">>>(`/api/transfers/batches/${idSegment(id)}/${action}`, {
         method: "POST",
-        json: action === "reject" ? { note: note || undefined } : {},
+        json: action === "reject" ? { note: note || undefined, expect } : {},
         timeoutMs: MONEY_TIMEOUT_MS,
       }),
     onSuccess: changed,
@@ -377,16 +390,24 @@ export function useBatchAction() {
 
 /**
  * Approves the current level of the transfers in a batch waiting for the member, and leaves the rest for their
- * approvers; a last level sends those payouts. A plain call, not a mutation, so the PIN stays out of
- * react-query's state.
+ * approvers; a last level sends those payouts. `expect` is the count and total the member was shown: if what
+ * waits for them has changed since, nothing is approved (BATCH_CHANGED). A plain call, not a mutation, so the PIN
+ * stays out of react-query's state.
  */
-export const approveBatch = (id: string, note: string | undefined, pin: string) =>
+export const approveBatch = (id: string, note: string | undefined, expect: BatchExpectation, pin: string) =>
   api<TransferBatchDecision>(`/api/transfers/batches/${idSegment(id)}/approve`, {
     method: "POST",
-    json: { note: note || undefined },
+    json: { note: note || undefined, expect },
     headers: pinHeader(pin),
     timeoutMs: MONEY_TIMEOUT_MS,
   });
+
+/** What waits for the member now, from a BATCH_CHANGED refusal's `details`. */
+export function batchChangedOf(err: unknown): BatchExpectation | undefined {
+  if (!(err instanceof ApiError) || err.code !== "BATCH_CHANGED") return undefined;
+  const d = err.details as Partial<BatchExpectation> | undefined;
+  return typeof d?.count === "number" && typeof d.amountKobo === "number" ? { count: d.count, amountKobo: d.amountKobo } : undefined;
+}
 
 /** "Ada, Bola or Chidi". */
 const joinOr = (names: string[]) => (names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} or ${names.at(-1)}`);

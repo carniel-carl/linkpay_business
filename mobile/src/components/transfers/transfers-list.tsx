@@ -64,8 +64,8 @@ export function TransfersList({
   const sender = can(overview, "transfers.create");
   const tabs = TRANSFER_TABS.filter((t) => t.key !== "awaiting" || approver);
   const tab: TransferTab = wanted && tabs.some((t) => t.key === wanted) ? wanted : "all";
-  const transfers = useTransfers(tab, { q });
   const grouped = tab === "awaiting" && !q;
+  const transfers = useTransfers(tab, { q, singles: grouped });
   const batches = useTransferBatches("awaiting", grouped);
   const list = useTransfersWithBatches(transfers, grouped ? batches : undefined);
   const items = list.entries;

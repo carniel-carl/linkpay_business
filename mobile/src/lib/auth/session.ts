@@ -120,18 +120,47 @@ export function invalidateAccessToken() {
 }
 
 /**
- * For sign-out, after the phone has forgotten the session: the server ends it even if the access token has
- * expired, and stops pushing to this phone. `forgetDevice` also ends this phone's biometric sign-in there.
- * Best effort, and never waits long; not through api(), which waits for an unlock. It's noted down first,
- * so one that doesn't get through (offline, or the app closed) is sent again later; see retryPendingLogouts.
+ * Ends a session on the server, even if the access token has expired, and stops pushing to this phone.
+ * `forgetDevice` also ends this phone's biometric sign-in there. It's noted down first (notePendingLogout), so
+ * one that doesn't get through (offline, or the app closed) is sent again later; see retryPendingLogouts.
  */
-export async function endSessionOnServer(refreshToken: string, { forgetDevice = false } = {}) {
-  const entry: PendingLogout = { refreshToken, ...(forgetDevice && { forgetDevice: true as const }) };
-  await changePending((list) => [...list.filter((p) => p.refreshToken !== refreshToken), entry]);
-  if (await sendLogout(entry)) await changePending((list) => list.filter((p) => p.refreshToken !== refreshToken));
+export async function endSessionOnServer(refreshToken: string, opts: { forgetDevice?: boolean } = {}) {
+  await sendNotedLogout(await notePendingLogout(refreshToken, opts));
 }
 
-type PendingLogout = { refreshToken: string; forgetDevice?: true };
+/**
+ * Step one of a sign-out, before the phone forgets the session: notes it down in this phone's keychain (the
+ * this-device-only pending-logout key), so if the app is closed before the server hears of it, the next launch
+ * finishes the sign-out and sends it (boot, retryPendingLogouts). No network, so the wipe after it never waits.
+ */
+export async function notePendingLogout(refreshToken: string, { forgetDevice = false } = {}): Promise<PendingLogout> {
+  const entry: PendingLogout = { refreshToken, ...(forgetDevice && { forgetDevice: true as const }) };
+  inHand.add(refreshToken);
+  await changePending((list) => [...list.filter((p) => p.refreshToken !== refreshToken), entry]);
+  return entry;
+}
+
+/**
+ * Step two, once the phone has forgotten the session: tells the server. Best effort, and never waits long; not
+ * through api(), which waits for an unlock. Forgotten here once the server has it, otherwise left for a retry.
+ */
+export async function sendNotedLogout(entry: PendingLogout) {
+  try {
+    if (await sendLogout(entry)) await changePending((list) => list.filter((p) => p.refreshToken !== entry.refreshToken));
+  } finally {
+    inHand.delete(entry.refreshToken);
+  }
+}
+
+/** The noted sign-out for this refresh token, if there is one: a sign-out the app was closed in the middle of. */
+export const pendingLogoutFor = async (refreshToken: string) => (await readPending()).find((p) => p.refreshToken === refreshToken);
+
+export type PendingLogout = { refreshToken: string; forgetDevice?: true };
+/**
+ * Sign-outs between their two steps in this run of the app. The retry leaves them to sendNotedLogout: before the
+ * phone is wiped it would still see biometric sign-in on, and drop the entry's `forgetDevice`.
+ */
+const inHand = new Set<string>();
 /** A phone signed out offline again and again keeps only the latest few. */
 const MAX_PENDING_LOGOUTS = 5;
 
@@ -186,6 +215,7 @@ export async function retryPendingLogouts() {
     // a late `forgetDevice` (it covers this whole phone) would end the new one too.
     const biometricAgain = (await secureGet(KEYS.biometricSignIn).catch(() => null)) === "1";
     for (const entry of await readPending()) {
+      if (inHand.has(entry.refreshToken)) continue;
       const sent = await sendLogout(biometricAgain ? { refreshToken: entry.refreshToken } : entry);
       // Still offline, most likely: the rest wait for the next try.
       if (!sent) break;

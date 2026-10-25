@@ -43,6 +43,8 @@ export type TransactionPinStatus = {
   /** Wrong tries left before it locks; null when no PIN is set. */
   attemptsLeft: number | null;
   changedAt: string | null;
+  /** Too many wrong tries in a day: locked (with no `lockedUntil`) until it's reset. Waiting won't unlock it. */
+  resetRequired?: boolean;
 };
 
 // ---- Business, branches and accounts ----
@@ -433,6 +435,8 @@ type TransferBatchHead = {
   statusCounts: Record<TransferStatus, number>;
   /** Transfers the member can approve or reject now: at a level that names them, not their own, no earlier level of theirs. */
   awaitingMe: number;
+  /** What those `awaitingMe` transfers send in all, before fees. Sent back with `awaitingMe` as a decision's `expect`. */
+  awaitingMeKobo: number;
 };
 
 /** GET /api/transfers/batches/:id: a bulk transfer and every transfer in it. */
@@ -452,6 +456,12 @@ export type TransferBatchList = { items: TransferBatchSummary[]; total: number; 
  * at the same moment).
  */
 export type TransferBatchDecision = TransferBatch & { decided: number; skipped: number };
+
+/**
+ * What the member was shown waiting for them in a batch (`awaitingMe`, `awaitingMeKobo`), sent with a decision as
+ * `expect`. If what waits for them now differs, nothing is decided: 409 BATCH_CHANGED, with the figures now as `details`.
+ */
+export type BatchExpectation = { count: number; amountKobo: number };
 
 /** POST /api/transfers/bulk: the batch, or a plain transfer when a single row went (`batch: null`). */
 export type BulkResult = { batch: TransferBatch; items?: undefined } | { batch: null; items: Transfer[] };

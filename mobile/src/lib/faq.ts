@@ -98,11 +98,15 @@ export const FAQ: FaqTopic[] = [
     questions: [
       {
         q: "What is a beneficiary?",
-        a: "Someone you pay often, saved once for your whole team. We check the account with its bank when it's saved and keep the name it gives, so paying them later needs no new check. In the app, add them to a bulk transfer from Saved beneficiaries. You save, rename and import them on the web dashboard, under Beneficiaries.",
+        a: "Someone you pay often, saved once for your whole team. We check the account with its bank when it's saved and keep the name it gives, so paying them later needs no new check. In the app, add them to a bulk transfer or a payout list from Saved beneficiaries, or save a new one while you build a payout list. You rename, remove and import them on the web dashboard, under Beneficiaries.",
       },
       {
         q: "What is a payout list?",
-        a: "A saved bulk payment, like Monthly salaries: beneficiaries with an amount each and the account it's usually paid from. Payout lists are on the web dashboard for now. Paying one makes an ordinary bulk transfer, so it shows in the app's Transfers and Fund approvals like any other.",
+        a: "A saved bulk payment, like Monthly salaries: beneficiaries with an amount each and the account it's usually paid from. Find them under More, Payout lists, or from Bulk transfer. Paying one makes an ordinary bulk transfer, so it shows in Transfers and Fund approvals like any other, with your approval rules.",
+      },
+      {
+        q: "Can I pay different amounts this month?",
+        a: "Yes. When you pay a list, change anyone's amount or untick them just for that payment. Tick \"Save these changes to the list\" to keep the new amounts for next time; people you left out then come off the list. Saving, changing and paying a list need your transaction PIN; deleting one doesn't, and its people stay saved as beneficiaries.",
       },
     ],
   },
@@ -124,7 +128,7 @@ export const FAQ: FaqTopic[] = [
       },
       {
         q: "How do I approve a bulk transfer?",
-        a: "In Fund approvals a bulk transfer shows as one row. Open it: Approve, which shows how many of its transfers are waiting for you, approves them all with your PIN. Reject declines the same ones, with an optional note. Any at another approval level, or that you prepared, are left for the right person.",
+        a: "In Fund approvals a bulk transfer shows as one row. Open it: Approve, which shows how many of its transfers are waiting for you and their total, approves them all with your PIN. If that changes before you confirm, nothing is approved and the screen shows what waits for you now. Reject declines the same ones, with an optional note. Any at another approval level, or that you prepared, are left for the right person.",
       },
       {
         q: "Where do I see what's waiting for me?",

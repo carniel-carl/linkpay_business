@@ -60,7 +60,7 @@ export default function BulkTransfer() {
     );
   }
 
-  const { set, removeRows, start } = useBulkDraft.getState();
+  const { set, removeRows, clear } = useBulkDraft.getState();
   const sources = accounts.data ?? [];
   const source = sources.find((a) => a.branch._id === from) ?? (sources.length === 1 ? sources[0] : undefined);
   const limit = source ? available(source) : undefined;
@@ -96,7 +96,7 @@ export default function BulkTransfer() {
         style: "destructive",
         onPress: () => {
           setSubmitted(false);
-          start(useBulkDraft.getState().business, source?.branch._id);
+          clear(source?.branch._id);
         },
       },
     ]);
@@ -113,6 +113,7 @@ export default function BulkTransfer() {
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         Pay up to {MAX_BULK_ROWS} people from one account, for salaries or suppliers. We check every account with its bank before anything is sent.
       </Text>
+      <PayoutListsLink />
 
       {accounts.isPending ? (
         <View className="h-28 rounded-surface bg-muted" />
@@ -190,6 +191,27 @@ export default function BulkTransfer() {
       <FormError message={show(errors.rows ?? errors.tooMany ?? errors.fix)} />
       <Button onPress={next}>Continue</Button>
     </KeyboardAwareScrollView>
+  );
+}
+
+/** Payout lists: the same people paid again (salaries, regular suppliers), saved with what each one gets. */
+function PayoutListsLink() {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Payout lists"
+      accessibilityHint="Pay a saved list, like monthly salaries"
+      onPress={() => router.push("/payments/lists")}
+      className="flex-row items-center gap-3 rounded-field bg-muted px-4 py-3 active:opacity-80"
+    >
+      <Icon ios="list.bullet.rectangle" android="checklist" size={18} color={colors["muted-foreground"]} />
+      <View className="flex-1 gap-0.5">
+        <Text className="text-[14px] font-semibold text-foreground">Payout lists</Text>
+        <Text className="text-[13px] leading-[18px] text-muted-foreground">Pay the same people again, like monthly salaries, from a saved list.</Text>
+      </View>
+      <Icon ios="chevron.right" android="chevron_right" size={14} color={colors["muted-foreground"]} />
+    </Pressable>
   );
 }
 

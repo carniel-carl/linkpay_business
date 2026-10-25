@@ -81,7 +81,7 @@ export default function Send() {
   function next() {
     setSubmitted(true);
     if (!valid) return;
-    update({ from: source!.branch._id, resolved: draft.to === "bank" ? resolve.data : undefined });
+    update({ from: source!.branch._id, resolved: draft.to === "bank" && resolve.data ? { ...resolve.data, bankUuid: draft.bank!.uuid } : undefined });
     router.push("/payments/review");
   }
 

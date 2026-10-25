@@ -86,6 +86,14 @@ export default function More() {
           )}
           {business.status === "approved" && can(overview.data, "accounts.view") && (
             <ListRow
+              icon={{ ios: "list.bullet.rectangle", android: "checklist" }}
+              title="Payout lists"
+              detail="Pay salaries and suppliers in one go"
+              onPress={() => router.push("/payments/lists")}
+            />
+          )}
+          {business.status === "approved" && can(overview.data, "accounts.view") && (
+            <ListRow
               icon={{ ios: "link", android: "link" }}
               title="Payment links"
               detail="Get paid with a link or your website"

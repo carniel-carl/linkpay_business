@@ -30,6 +30,8 @@ const MESSAGES: Record<string, string> = {
   SESSION_NOT_FOUND: "That device is already signed out.",
   INVALID_BIOMETRIC_KEY: "Biometric sign-in has ended on this phone. Sign in with your password.",
   DEVICE_SESSION_REQUIRED: "Sign in again on this phone to turn this on.",
+  // The server's minimum app version is newer than this build (the update screen covers the app). Mobile only.
+  APP_UPDATE_REQUIRED: "This version of LinkPay Business is out of date. Update the app to keep using it.",
   BUSINESS_NOT_APPROVED: "This is available once your business is verified.",
   FORBIDDEN: "You don't have access to this.",
   PROVIDER_ERROR: "We can't reach our banking partner right now. Try again in a moment.",
@@ -45,6 +47,8 @@ const MESSAGES: Record<string, string> = {
   // Bulk transfers: nothing left in it waits for this member (other levels, or someone else just decided it).
   NOTHING_TO_DECIDE:
     "Nothing in this bulk transfer is waiting for you now. What's still waiting is for someone at another approval level, or someone else has just decided it.",
+  // Bulk transfers: what waits for this member changed since they looked (`expect`), so nothing was decided.
+  BATCH_CHANGED: "This bulk transfer changed since you opened it, so nothing was decided. Check what's waiting for you now and try again.",
   ACCOUNT_NOT_FOUND: "We couldn't find that account. Check the number and bank.",
   SAME_ACCOUNT: "You can't send money to the account it's coming from.",
   ACCOUNT_BUSY: "Another transfer from this account is going through. Try again in a moment.",
@@ -58,7 +62,16 @@ const MESSAGES: Record<string, string> = {
   NAME_CHECK_UNAVAILABLE: "We couldn't check this account with the bank right now. Try again in a moment.",
   ACCOUNT_NAME_CHANGED: "The bank now gives a different name for this account. Check it's who you mean to pay.",
   BENEFICIARY_NOT_FOUND: "That saved beneficiary was removed. Take the row out, or add the account by its number.",
-  IDEMPOTENCY_KEY_REUSED: "This transfer changed after it was first sent. Check your transfers before you send it again.",
+  // Beneficiaries and payout lists (same copy as the web).
+  BENEFICIARY_EXISTS: "This account is already saved as a beneficiary.",
+  BENEFICIARY_OWN_ACCOUNT: "This is one of your own branch accounts. Move money to it as a branch transfer instead.",
+  BENEFICIARY_IN_USE: "A payout list still pays this beneficiary. Take them off the list first.",
+  BENEFICIARY_LIMIT: "You have 2,000 saved beneficiaries, the most a business can have. Remove some to add more.",
+  PAYOUT_LIST_NOT_FOUND: "We couldn't find that payout list. It may have been deleted, or be for a branch you can't see.",
+  PAYOUT_LIST_LIMIT: "You have 100 payout lists, the most a business can have. Delete one to add another.",
+  PAYOUT_LIST_EMPTY: "This bulk transfer only went to your own branches, so there's nobody to save as a list.",
+  BRANCH_REQUIRED: "Choose the account to pay from.",
+  IDEMPOTENCY_KEY_REUSED: "These payment details changed after they were first sent. Check Transfers to see whether it went before sending it again.",
   BUSINESS_REQUIRED: "Set up your business first.",
   BUSINESS_EXISTS: "This account already has a business.",
   KYB_INCOMPLETE: "A few requirements are still missing.",
@@ -113,7 +126,7 @@ const MESSAGES: Record<string, string> = {
   TRANSACTION_PIN_INVALID: "That transaction PIN is wrong.",
   TRANSACTION_PIN_LOCKED: "Your transaction PIN is locked after too many wrong tries. Reset it, or wait and try again later.",
   TRANSACTION_PIN_ALREADY_SET: "You already have a transaction PIN. Change it instead.",
-  WEAK_TRANSACTION_PIN: "That PIN is easy to guess. Avoid repeated digits and runs like 1234.",
+  WEAK_TRANSACTION_PIN: "That PIN is too easy to guess. Avoid repeated digits, runs like 1234, years and other common PINs.",
 };
 
 /** Friendly copy for a code reported inside a response (a bulk row's), or the server's own message. */

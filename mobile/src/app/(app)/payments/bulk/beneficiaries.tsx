@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { router, Stack } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, Text, View } from "react-native";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { friendlyMessage } from "@/lib/api/errors";
 import type { Beneficiary } from "@/lib/api/types";
 import { MAX_BULK_ROWS } from "@/lib/bulk-csv";
 import { useBulkDraft } from "@/lib/bulk-draft";
+import { recipientOf, useListDraft } from "@/lib/payout-list-draft";
 import { cn } from "@/lib/cn";
 import { formatAccountNumber } from "@/lib/format";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
@@ -19,19 +20,26 @@ import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
 /**
- * Saved beneficiaries to add to a bulk transfer, several at once. They were name-checked when saved, so they
- * need no new name enquiry. Amounts are added on the list (each new row asks for one).
+ * Saved beneficiaries to add to a bulk transfer, or with `?for=list` to the payout list being edited, several at
+ * once. They were name-checked when saved, so they need no new name enquiry. Amounts are added on the list (each
+ * new row asks for one).
  */
 export default function BulkBeneficiaries() {
-  const rows = useBulkDraft((s) => s.rows);
+  const forList = useLocalSearchParams<{ for?: string }>().for === "list";
+  const bulkRows = useBulkDraft((s) => s.rows);
+  const listRows = useListDraft((s) => s.rows);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState<string>();
   const list = useBeneficiaries(q);
   const pull = usePullToRefresh(() => list.refetch());
   const items = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
   const [picked, setPicked] = useState<Map<string, Beneficiary>>(() => new Map());
-  const added = useMemo(() => new Set(rows.flatMap((r) => (r.beneficiary ? [r.beneficiary._id] : []))), [rows]);
-  const room = MAX_BULK_ROWS - rows.length;
+  const added = useMemo(
+    () => new Set(forList ? listRows.map((r) => r.beneficiary._id) : bulkRows.flatMap((r) => (r.beneficiary ? [r.beneficiary._id] : []))),
+    [forList, listRows, bulkRows],
+  );
+  const room = MAX_BULK_ROWS - (forList ? listRows.length : bulkRows.length);
+  const what = forList ? "payout list" : "bulk transfer";
 
   // Search waits for a pause in typing.
   useEffect(() => {
@@ -53,13 +61,11 @@ export default function BulkBeneficiaries() {
 
   function add() {
     if (!count || tooMany) return;
-    useBulkDraft.getState().addRows(
-      [...picked.values()].map((b) => ({
-        beneficiary: { _id: b._id, accountName: b.accountName, accountNumber: b.accountNumber, bankName: b.bankName, nickname: b.nickname },
-        accountNumber: b.accountNumber,
-        amountKobo: null,
-      })),
-    );
+    if (forList) useListDraft.getState().addPeople([...picked.values()].map(recipientOf), MAX_BULK_ROWS);
+    else
+      useBulkDraft.getState().addRows(
+        [...picked.values()].map((b) => ({ beneficiary: recipientOf(b), accountNumber: b.accountNumber, amountKobo: null })),
+      );
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     router.back();
   }
@@ -102,7 +108,7 @@ export default function BulkBeneficiaries() {
                 </Button>
                 {tooMany && (
                   <Text className="text-[13px] leading-[18px] text-destructive-foreground">
-                    There's room for {room} more on this bulk transfer ({MAX_BULK_ROWS} at most).
+                    There's room for {room} more on this {what} ({MAX_BULK_ROWS} at most).
                   </Text>
                 )}
               </View>
@@ -133,7 +139,9 @@ export default function BulkBeneficiaries() {
               <Text className="text-[15px] leading-[22px] text-muted-foreground">
                 {q
                   ? `No saved beneficiary matches "${q}".`
-                  : "Save people you pay often on the web, under Beneficiaries, and they'll show here. Until then, paste rows from a spreadsheet or add people one at a time."}
+                  : forList
+                    ? "Go back and add a new account: we check it with its bank and save it here for next time."
+                    : "Save people you pay often on the web, under Beneficiaries, and they'll show here. Until then, paste rows from a spreadsheet or add people one at a time."}
               </Text>
             </View>
           )
@@ -141,7 +149,7 @@ export default function BulkBeneficiaries() {
         renderItem={({ item, index }) => (
           <View className={cn("mx-4 overflow-hidden bg-card", index === 0 && "rounded-t-surface", index === items.length - 1 && "rounded-b-surface")}>
             {index > 0 && <View className="ml-4 h-px bg-border" />}
-            <BeneficiaryRow beneficiary={item} selected={picked.has(item._id)} already={added.has(item._id)} onPress={toggle} />
+            <BeneficiaryRow beneficiary={item} selected={picked.has(item._id)} already={added.has(item._id)} what={what} onPress={toggle} />
           </View>
         )}
         ListFooterComponent={list.isFetchingNextPage ? <ActivityIndicator style={{ paddingVertical: 24 }} /> : undefined}
@@ -154,11 +162,14 @@ const BeneficiaryRow = memo(function BeneficiaryRow({
   beneficiary: b,
   selected,
   already,
+  what,
   onPress,
 }: {
   beneficiary: Beneficiary;
   selected: boolean;
   already: boolean;
+  /** "bulk transfer" or "payout list", for the hint on people already added. */
+  what: string;
   onPress: (b: Beneficiary) => void;
 }) {
   const { colors } = useTheme();
@@ -168,7 +179,7 @@ const BeneficiaryRow = memo(function BeneficiaryRow({
     <Pressable
       accessibilityRole="checkbox"
       accessibilityState={{ checked, disabled: already }}
-      accessibilityHint={already ? "Already on this bulk transfer" : undefined}
+      accessibilityHint={already ? `Already on this ${what}` : undefined}
       disabled={already}
       onPress={() => {
         void Haptics.selectionAsync();

@@ -38,7 +38,25 @@ export default function Review() {
           kind: draft.resolved.kind,
         };
 
-  if (!kobo || !source || !recipient) {
+  // The account sent to is the one checked and shown here: a number or bank changed since the name enquiry (or a
+  // draft left over) goes back to be checked again rather than paying an account nobody looked at.
+  const unchecked =
+    draft.to === "bank" && (!draft.resolved || draft.resolved.accountNumber !== draft.accountNumber || draft.resolved.bankUuid !== draft.bank?.uuid);
+  if (unchecked && draft.resolved) {
+    return (
+      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-4 px-5 pt-6">
+        <FocusStatusBar />
+        <Text className="text-[15px] leading-[22px] text-muted-foreground">
+          The account number or bank changed after the account was checked. Go back so the bank can check it again.
+        </Text>
+        <Button variant="outline" onPress={() => router.back()}>
+          Back to the form
+        </Button>
+      </ScrollView>
+    );
+  }
+
+  if (!kobo || !source || !recipient || unchecked) {
     return (
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-4 px-5 pt-6">
         <FocusStatusBar />
@@ -70,7 +88,8 @@ export default function Review() {
       run: (entered) => sendTransfer(body, draft.keyFor(body), entered),
       onSuccess: (transfer) => {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        useSendDraft.getState().start();
+        // The next transfer is a new request, under new keys.
+        useSendDraft.getState().finish();
         void qc.invalidateQueries({ queryKey: [business] });
         // Back from the transfer lands on the Transfers view, where it now shows.
         router.dismissTo({ pathname: "/payments", params: { view: "transfers" } });
@@ -78,6 +97,8 @@ export default function Review() {
       },
       onError: (err) => {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        // The key was used for other details: say so, and let a deliberate retry be a new request.
+        if (err instanceof ApiError && err.code === "IDEMPOTENCY_KEY_REUSED") useSendDraft.getState().freshKeys();
         setError(
           err instanceof ApiError && err.code === "TIMEOUT"
             ? "That took too long, so the transfer may already have gone. Check your transfers before you send it again."

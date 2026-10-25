@@ -14,14 +14,15 @@ import { ApiError, friendlyMessage } from "@/lib/api/errors";
 import {
   approvalProgress,
   approveBatch,
+  batchChangedOf,
   batchLevelLine,
   useBatchAction,
   useBatchChanged,
   useTransferBatch,
   waitingLevels,
 } from "@/lib/api/transfers";
-import type { Transfer, TransferBatch, TransferBatchDecision } from "@/lib/api/types";
-import { formatDateTime, formatNaira, formatNairaShort } from "@/lib/format";
+import type { BatchExpectation, Transfer, TransferBatch, TransferBatchDecision } from "@/lib/api/types";
+import { formatDateTime, formatNaira } from "@/lib/format";
 import { usePullToRefresh } from "@/lib/query";
 import { useTheme } from "@/theme/theme";
 
@@ -40,8 +41,10 @@ const lastLevel = (t: Transfer) => (t.approval?.current ?? 1) >= (t.approval?.le
 
 /**
  * A bulk transfer: its totals, where its transfers stand, and what the member can do with the ones waiting for
- * them. "Approve N waiting for you" takes the transaction PIN and clears the member's level for those (a last
- * level sends them); "Reject N" and the creator's "Cancel" move no money, so they take a confirmation instead.
+ * them. "Approve N · ₦X" takes the transaction PIN and clears the member's level for those (a last level sends
+ * them); "Reject N" and the creator's "Cancel" move no money, so they take a confirmation instead. Approving and
+ * rejecting send the count and amount the member was shown (`expect`): if what waits for them has changed since,
+ * nothing is decided, and the page refreshes and says what changed.
  * Either leaves the transfers waiting for someone else (another level or approver) as they are, so a batch
  * with transfers at different levels is still decided here. Single transfers still open on their own screen.
  */
@@ -111,7 +114,10 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
   const sends = mine.filter(lastLevel).length;
   const myLevel = mine[0]?.approval?.current ?? null;
   const myLevels = mine[0]?.approval?.levels.length ?? 0;
-  const mineKobo = sum(mine);
+  // What the buttons and the PIN prompt show, from the server's count and total for the member, and what a decision
+  // sends back as `expect`, so it covers exactly what was shown.
+  const shown: BatchExpectation = { count: n, amountKobo: b.awaitingMeKobo };
+  const shownAmount = formatNaira(shown.amountKobo);
   const counts = b.statusCounts;
   const notSent = counts.failed + counts.rejected + counts.cancelled;
   // Every transfer failed, was rejected or was cancelled: no money left the account.
@@ -141,10 +147,12 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
 
   // A refusal because the batch moved on since it loaded (nothing waits, or nothing for this member) refreshes it.
   // Nothing left for the member isn't a mistake on their part, so it's said in a note rather than as an error.
-  function failed(err: unknown, kind: "approve" | "reject" | "cancel") {
+  // BATCH_CHANGED: what waits for the member changed since they looked, so nothing was decided; it says what's there now.
+  function failed(err: unknown, kind: "approve" | "reject" | "cancel", saw?: BatchExpectation) {
     const code = err instanceof ApiError ? err.code : undefined;
-    if (code === "NOTHING_TO_DECIDE" || code === "TRANSFER_NOT_PENDING") void refetch();
+    if (code === "NOTHING_TO_DECIDE" || code === "TRANSFER_NOT_PENDING" || code === "BATCH_CHANGED") void refetch();
     if (code === "NOTHING_TO_DECIDE") Alert.alert("Nothing waiting for you", batchError(err, kind));
+    else if (code === "BATCH_CHANGED" && saw && kind !== "cancel") setError(changedMessage(kind, saw, batchChangedOf(err), batchError(err, kind)));
     else setError(batchError(err, kind));
   }
 
@@ -152,47 +160,50 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
   function approve() {
     action.reset();
     setError(undefined);
-    const amount = formatNairaShort(mineKobo);
+    // Taken now, from what's on screen: a corrected PIN sends the same, and a refresh behind the sheet can't widen it.
+    const saw = shown;
+    const amount = shownAmount;
     const trimmed = note.trim() || undefined;
     const ids = new Set(mine.map((t) => t._id));
     void pin.ask({
-      title: `Approve ${amount}?`,
+      title: `Approve ${saw.count} · ${amount}`,
       subtitle:
         sends === mine.length
-          ? `Enter your transaction PIN to send ${transfers(n)}, ${amount} in all.`
+          ? `Enter your transaction PIN to send ${transfers(saw.count)}, ${amount} in all.`
           : sends === 0 && myLevel && mine.every((t) => t.approval?.current === myLevel)
-            ? `Enter your transaction PIN to approve level ${myLevel} of ${myLevels} for ${transfers(n)}.`
-            : `Enter your transaction PIN to approve ${transfers(n)}. ${sends} of them are sent straight away.`,
+            ? `Enter your transaction PIN to approve level ${myLevel} of ${myLevels} for ${transfers(saw.count)}, ${amount} in all.`
+            : `Enter your transaction PIN to approve ${transfers(saw.count)}, ${amount} in all. ${sends} of them are sent straight away.`,
       pending: sends === mine.length ? "Sending…" : "Approving…",
-      run: (entered) => approveBatch(b._id, trimmed, entered),
+      run: (entered) => approveBatch(b._id, trimmed, saw, entered),
       onSuccess: (next) => {
         seen.current = progressOf(next);
         changed(next);
         setNote("");
         Alert.alert("Approved", decidedMessage("approve", next, next.items.filter((t) => ids.has(t._id))));
       },
-      onError: (err) => failed(err, "approve"),
+      onError: (err) => failed(err, "approve", saw),
     });
   }
 
-  // Rejecting and cancelling don't move money, so no PIN; a confirmation guards them instead.
-  function decide(kind: "reject" | "cancel") {
+  // Rejecting and cancelling don't move money, so no PIN; a confirmation guards them instead. A rejection sends
+  // what its confirmation showed (`saw`).
+  function decide(kind: "reject" | "cancel", saw?: BatchExpectation) {
     setError(undefined);
     action.mutate(
-      { id: b._id, action: kind, note: note.trim() || undefined },
+      { id: b._id, action: kind, note: note.trim() || undefined, expect: kind === "reject" ? saw : undefined },
       {
         onSuccess: (next) => {
           seen.current = progressOf(next);
           setNote("");
-          if (kind === "reject") Alert.alert("Rejected", decidedMessage("reject", { decided: next.decided ?? n, skipped: next.skipped ?? 0 }, []));
+          if (kind === "reject") Alert.alert("Rejected", decidedMessage("reject", { decided: next.decided ?? saw?.count ?? 0, skipped: next.skipped ?? 0 }, []));
           else Alert.alert("Bulk transfer cancelled", "The money is available again.");
         },
-        onError: (err) => failed(err, kind),
+        onError: (err) => failed(err, kind, saw),
       },
     );
   }
 
-  const shown = showAll ? b.items : b.items.slice(0, FIRST_ROWS);
+  const rows = showAll ? b.items : b.items.slice(0, FIRST_ROWS);
 
   return (
     <>
@@ -248,24 +259,25 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
             )}
             <TextField label="Note (optional)" value={note} onChangeText={(v) => setNote(v.slice(0, 300))} hint="The person who prepared it sees this." maxLength={300} />
             <Button loading={pin.busy} disabled={action.isPending} onPress={approve}>
-              {`Approve ${n} waiting for you`}
+              {`Approve ${n} · ${shownAmount}`}
             </Button>
             <Button
               variant="destructive"
               loading={action.isPending && action.variables?.action === "reject"}
               disabled={busy}
-              onPress={() =>
+              onPress={() => {
+                const saw = shown;
                 Alert.alert(
                   n === waiting.length ? "Reject this bulk transfer?" : `Reject ${transfers(n)}?`,
-                  `${transfers(n)}, ${formatNaira(mineKobo)} in all, won't be sent, and the money is available again.${
+                  `${transfers(n)}, ${shownAmount} in all, won't be sent, and the money is available again.${
                     n < waiting.length ? ` The other ${waiting.length - n} stay waiting for someone else.` : ""
                   }`,
                   [
                     { text: "Keep them", style: "cancel" },
-                    { text: `Reject ${n}`, style: "destructive", onPress: () => decide("reject") },
+                    { text: `Reject ${n}`, style: "destructive", onPress: () => decide("reject", saw) },
                   ],
-                )
-              }
+                );
+              }}
             >
               {`Reject ${n}`}
             </Button>
@@ -303,7 +315,7 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
         <View className="gap-2">
           <Text className="px-1 text-[13px] font-semibold text-muted-foreground">{transfers(b.items.length)}</Text>
           <View style={{ boxShadow: shadows.surface }} className="overflow-hidden rounded-surface bg-card">
-            {shown.map((t, i) => (
+            {rows.map((t, i) => (
               <View key={t._id}>
                 {i > 0 && <View className="ml-[66px] h-px bg-border" />}
                 <TransferRow transfer={t} onPress={openTransfer} approvals={t.status === "pending_approval"} />
@@ -341,6 +353,19 @@ function decidedMessage(kind: "approve" | "reject", { decided, skipped }: Pick<T
         ? `${decided === 1 ? "It goes" : "They go"} to the level ${level} approvers next.`
         : `${sent} ${sent === 1 ? "is" : "are"} on the way; ${moved.length} ${moved.length === 1 ? "goes" : "go"} to the next level's approvers.`;
   return `Approved ${decided}. ${what}${others}`;
+}
+
+/**
+ * What changed since the member looked (BATCH_CHANGED), as on the web: "This bulk transfer changed since you opened
+ * it: 3 transfers (₦300,000.00) wait for you now, not 2 (₦200,000.00). Nothing was approved. Check them and try
+ * again." Without the server's figures, `fallback`.
+ */
+function changedMessage(kind: "approve" | "reject", saw: BatchExpectation, now: BatchExpectation | undefined, fallback: string) {
+  if (!now) return fallback;
+  const nothing = kind === "approve" ? "Nothing was approved." : "Nothing was rejected.";
+  if (now.count === 0) return `This bulk transfer changed since you opened it, and nothing in it waits for you now. ${nothing}`;
+  const waits = `${transfers(now.count)} (${formatNaira(now.amountKobo)}) ${now.count === 1 ? "waits" : "wait"} for you now`;
+  return `This bulk transfer changed since you opened it: ${waits}, not ${saw.count} (${formatNaira(saw.amountKobo)}). ${nothing} Check them and try again.`;
 }
 
 /**
