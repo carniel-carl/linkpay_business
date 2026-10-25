@@ -269,3 +269,34 @@ A link can show up to 4 pictures, for example a product photo or an e-book's cov
   - `/payment-links/<id>` is the detail page; `?checkout=<id>` opens that checkout's sheet, which is where the notification link lands.
   - The public page is `/pay/<slug>`. A refresh resumes the payer's checkout with `?checkout=<token>`.
 - **Mobile:** a Payment links screen (list and detail, share the link, copy the embed code) and a checkout detail screen with "Link a payment". `payment_link.paid` opens the checkout.
+
+## Batch 8 changes (2026-10-25)
+
+**Expired checkouts**
+- Once a checkout's hold (`holdUntil`) has passed, `GET /api/public/checkouts/:token` and the slug-bound verify return `payTo: null` and `amountKobo: null`.
+- The pay page then says "This checkout has expired", with Start again and the reference.
+
+**Matching a payment to a checkout**
+- Matching by amount alone needs exactly one live pending checkout at that amount within the 7-day reference window, whose hold covers the transfer's time. Otherwise the payment needs its reference, or a manual link.
+- Amounts whose last checkout is still pending are handed out last; reusing them isn't banned.
+- A late payment that carries its reference still pays its own checkout.
+
+**Payment limits:** on links with `maxPayments`, held places are counted per IP and per email across the whole link, every price included. Each key gets at most `min(existing cap, max(1, floor(maxPayments × 0.1)))`. IPv6 addresses are grouped by /48.
+
+**What merchants check:** `paidKobo` must be at least the order total ("paid" alone doesn't promise that, e.g. on fundraisers), and `overLimit` must not be true if stock is limited. `overLimit` is now on the public checkout. The snippet and the embed card list every check.
+
+**Taken-down links**
+- `GET /pay/:slug` returns only the title, kind and business name, with `available: false` and reason `taken_down`.
+- The link's pictures and logo return 404, and the donor list returns 404 `PAYMENT_LINK_TAKEN_DOWN`.
+- An open checkout loses its images, success message and redirect.
+
+**Test mode**
+- A public simulation sends no notification.
+- A cleared checkout, or a link that isn't in test mode, returns 409 `CHECKOUT_CLEARED`.
+- Gifts simulated from the pay page show without a name or message ("Test gift").
+
+**Linking a payment by hand:** the transaction must be on the checkout's own account, or the invoice's branch. Invoice payment suggestions are scoped the same way.
+
+**Web relays and embeds**
+- Public file relays (link pictures, logos, invoice PDFs) forward the visitor's IP from `CLIENT_IP_HEADER`.
+- The proxy's `frame-ancestors` lookup caches only successful answers. On a failure it serves the last good value, or `'self'` uncached.

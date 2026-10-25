@@ -145,3 +145,9 @@ Other staff changes:
 - one open report about a donation's message
 
 The slug prints in the seed line.
+
+## Batch 8 changes (2026-10-25)
+
+- **Public test gifts:** gifts simulated from the pay page appear on the public list with `name: null`, `message: null` and `test: true`, and are labelled "Test gift". Gifts a team member simulates from the dashboard keep their name and message.
+- **Taken-down fundraisers:** a fundraiser that staff took down shows only its title and status. Its story, pictures and donor messages are hidden.
+- **`paidKobo`:** it is what actually arrived. Merchants with perks check `paidKobo`, not just `status: "paid"`.
