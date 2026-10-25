@@ -5,6 +5,7 @@ import { ApprovalsView } from "@/components/approvals/approvals-view"
 import { WorkflowSummary } from "@/components/approvals/workflow-summary"
 import { PageHeader } from "@/components/common/page-header"
 import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
+import { WriteGate } from "@/components/shell/write-gate"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -84,12 +85,15 @@ export default async function ApprovalsPage({ searchParams }: PageProps<"/approv
       }
       actions={
         canManage && (
-          <Button asChild variant={workflow ? "outline" : "default"}>
-            <Link href="/approvals/setup">
-              <Settings2 data-icon="inline-start" aria-hidden />
-              {workflow ? "Edit approval levels" : "Set up approvals"}
-            </Link>
-          </Button>
+          // Disabled, with the reason, while the business is suspended.
+          <WriteGate>
+            <Button asChild variant={workflow ? "outline" : "default"}>
+              <Link href="/approvals/setup">
+                <Settings2 data-icon="inline-start" aria-hidden />
+                {workflow ? "Edit approval levels" : "Set up approvals"}
+              </Link>
+            </Button>
+          </WriteGate>
         )
       }
     />

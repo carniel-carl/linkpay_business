@@ -2,6 +2,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   BadgeCheck,
+  Ban,
   CalendarClock,
   CircleCheck,
   CircleX,
@@ -15,6 +16,8 @@ import {
   LockOpen,
   PiggyBank,
   ReceiptText,
+  ShieldAlert,
+  ShieldCheck,
   ShieldX,
   TriangleAlert,
   UserCog,
@@ -49,6 +52,9 @@ export const NOTIFICATION_META: Record<NotificationType, { icon: LucideIcon; ton
   "security.new_sign_in": { icon: KeyRound, tone: "warning" },
   "savings.target_reached": { icon: PiggyBank, tone: "success" },
   "savings.safelock_released": { icon: LockOpen, tone: "success" },
+  "business.suspended": { icon: ShieldAlert, tone: "warning" },
+  "business.reinstated": { icon: ShieldCheck, tone: "success" },
+  "business.banned": { icon: Ban, tone: "danger" },
 }
 
 export const TONE_CLASSES: Record<NotificationTone, string> = {

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { Lock, Plus } from "lucide-react"
 import { BalanceAmount } from "@/components/accounts/balance-visibility"
 import { NavTabs } from "@/components/common/nav-tabs"
+import { useReadOnly } from "@/components/shell/write-gate"
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import type { Safelock, SafelockLimits, SafelockList } from "@/lib/api/types"
@@ -41,6 +42,8 @@ function href(status: SavingsQuery["lockStatus"], safelock?: string) {
 export function SafelockView({ locked, released, query, linked, branches, limits, canManage, showBranch, newSafelock }: Props) {
   const router = useRouter()
   const pathname = usePathname()
+  // Suspended: the header's New Safelock shows disabled, so the tile at the end of the list goes.
+  const { readOnly } = useReadOnly()
   const items = query.lockStatus === "released" ? (released ?? []) : locked.items
   const open = query.safelock
     ? (locked.items.find((s) => s._id === query.safelock) ?? released?.find((s) => s._id === query.safelock) ?? linked)
@@ -120,7 +123,7 @@ export function SafelockView({ locked, released, query, linked, branches, limits
                 <SafelockCard lock={s} showBranch={showBranch} href={href(query.lockStatus, s._id)} />
               </li>
             ))}
-            {query.lockStatus === "locked" && canManage && limits && branches.length > 0 && (
+            {query.lockStatus === "locked" && canManage && !readOnly && limits && branches.length > 0 && (
               <li style={{ "--i": items.length } as React.CSSProperties}>
                 <SafelockFormDialog branches={branches} limits={limits} defaultBranchId={branches.length === 1 ? branches[0]._id : undefined}>
                   <button

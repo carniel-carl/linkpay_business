@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/common/page-header"
 import { BeneficiaryMenu, NicknameEdit } from "@/components/payouts/beneficiary-actions"
 import { PayoutsLocked } from "@/components/payouts/parts"
 import { PayoutsUnavailable } from "@/components/payouts/unavailable"
+import { WriteGate } from "@/components/shell/write-gate"
 import { NewTransferDialog, type SourceAccount } from "@/components/transfers/new-transfer-dialog"
 import { TransferAmount, TransferStatusBadge } from "@/components/transfers/parts"
 import { Button } from "@/components/ui/button"
@@ -73,7 +74,8 @@ export default async function BeneficiaryPage({ params, searchParams }: PageProp
         }
         actions={
           canManage && (
-            <>
+            // Disabled, with the reason, while the business is suspended.
+            <WriteGate>
               {sources.length > 0 && (
                 <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId} beneficiary={beneficiary}>
                   <Button>
@@ -83,7 +85,7 @@ export default async function BeneficiaryPage({ params, searchParams }: PageProp
                 </NewTransferDialog>
               )}
               <BeneficiaryMenu beneficiary={beneficiary} />
-            </>
+            </WriteGate>
           )
         }
       />

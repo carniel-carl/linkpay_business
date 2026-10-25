@@ -21,7 +21,7 @@ export default async function TwoFactorPage({ searchParams }: PageProps<"/sign-i
         title="Two-step verification"
         description={
           totp ? (
-            "Open your authenticator app and enter the 6-digit code for LinkPay Staff."
+            "Enter the 6-digit code from your authenticator app for LinkPay Staff, or one of your recovery codes."
           ) : (
             <>
               We sent a 6-digit code to <span className="font-medium text-foreground">{challenge.email}</span>.

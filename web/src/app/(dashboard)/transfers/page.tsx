@@ -7,6 +7,7 @@ import { BulkTransferDialog } from "@/components/transfers/bulk-transfer-dialog"
 import { NewTransferDialog, type SourceAccount } from "@/components/transfers/new-transfer-dialog"
 import { BatchListAction } from "@/components/payouts/save-batch-as-list"
 import { TransfersView } from "@/components/transfers/transfers-view"
+import { WriteGate } from "@/components/shell/write-gate"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -77,8 +78,9 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
   // The sidebar's branch, if its account can send: one that isn't ready isn't among the sources.
   const defaultBranchId = selected && sources.some((s) => s.branch._id === selected._id) ? selected._id : undefined
 
+  // While the business is suspended these show disabled, with the reason (WriteGate).
   const actions = canCreate && sources.length > 0 && (
-    <>
+    <WriteGate>
       <BulkTransferDialog accounts={sources} defaultBranchId={defaultBranchId}>
         {/* Icons only on phones, like the approval rule's, so the header's buttons fit beside each other. `px-0!`
             beats the button's own padding beside an icon, so the icon sits in the middle. */}
@@ -93,7 +95,7 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
           New transfer
         </Button>
       </NewTransferDialog>
-    </>
+    </WriteGate>
   )
 
   const branchNote = selected && branches.length > 1 ? `Showing ${selected.name}. ` : ""
@@ -108,7 +110,11 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
       }
       actions={
         <>
-          {can(overview, "transfers.manage") && settings.ok && <ApprovalRuleDialog settings={settings.data} />}
+          {can(overview, "transfers.manage") && settings.ok && (
+            <WriteGate>
+              <ApprovalRuleDialog settings={settings.data} />
+            </WriteGate>
+          )}
           {actions}
         </>
       }
@@ -139,12 +145,14 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
         newTransfer={
           canCreate &&
           sources.length > 0 && (
-            <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId}>
-              <Button>
-                <Plus data-icon="inline-start" aria-hidden />
-                New transfer
-              </Button>
-            </NewTransferDialog>
+            <WriteGate>
+              <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId}>
+                <Button>
+                  <Plus data-icon="inline-start" aria-hidden />
+                  New transfer
+                </Button>
+              </NewTransferDialog>
+            </WriteGate>
           )
         }
       />

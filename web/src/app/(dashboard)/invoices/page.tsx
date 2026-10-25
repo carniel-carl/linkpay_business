@@ -7,6 +7,7 @@ import { InvoicesLocked } from "@/components/invoices/locked"
 import { InvoicesView } from "@/components/invoices/invoices-view"
 import { InvoiceSummaryCard } from "@/components/invoices/summary-card"
 import { InvoicesUnavailable } from "@/components/invoices/invoices-unavailable"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Button } from "@/components/ui/button"
 import { getInvoices, getInvoiceSummary, getOverview, getSelected } from "@/lib/data"
 import { parseInvoiceQuery, toApiParams } from "@/lib/invoices"
@@ -36,13 +37,16 @@ export default async function InvoicesPage({ searchParams }: PageProps<"/invoice
 
   const [list, summary] = await Promise.all([getInvoices(toApiParams(query, selected?._id)), getInvoiceSummary(summaryParams)])
 
+  // Disabled, with the reason, while the business is suspended.
   const newInvoice = canManage && (
-    <Button asChild>
-      <Link href="/invoices/new">
-        <Plus data-icon="inline-start" aria-hidden />
-        New invoice
-      </Link>
-    </Button>
+    <WriteGate>
+      <Button asChild>
+        <Link href="/invoices/new">
+          <Plus data-icon="inline-start" aria-hidden />
+          New invoice
+        </Link>
+      </Button>
+    </WriteGate>
   )
 
   return (

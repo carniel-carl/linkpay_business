@@ -1,4 +1,5 @@
 // Error shape from backend/src/middleware/errorHandler.ts: { error, code?, details? }.
+import { SUPPORT_EMAIL } from "@/lib/support"
 import { WEAK_PIN_MESSAGE, wrongPinMessage } from "@/lib/transaction-pin"
 import type { ChecklistItem } from "./types"
 
@@ -37,6 +38,9 @@ const MESSAGES: Record<string, string> = {
   BUSINESS_REQUIRED: "Set up your business first.",
   BUSINESS_LOCKED: "Your business is under review, so it can't be edited right now.",
   BUSINESS_NOT_APPROVED: "This is available once your business is verified.",
+  // Compliance (docs/briefs/compliance.md): a suspended business can look but not change anything; a closed one gets nothing.
+  BUSINESS_SUSPENDED: `This business is suspended. You can view your account, but you can't send money or make changes. Contact ${SUPPORT_EMAIL}.`,
+  BUSINESS_BANNED: `This business has been closed. Contact ${SUPPORT_EMAIL}.`,
   KYB_INCOMPLETE: "A few requirements are still missing.",
   UNSUPPORTED_FILE_TYPE: "Upload a PDF, PNG or JPEG file.",
   FILE_REQUIRED: "Choose a file to upload.",
@@ -82,6 +86,8 @@ const MESSAGES: Record<string, string> = {
   INVALID_APPROVAL_RULE: "Two amount bands start at the same amount. Change one of them.",
   ACCOUNT_BUSY: "Another transfer from this account is going through. Try again in a moment.",
   RECIPIENT_BANK_UNKNOWN: "We can't send to this account's bank automatically yet. Contact support.",
+  // The account belongs to a business that has been closed.
+  RECIPIENT_UNAVAILABLE: "This account can't receive transfers.",
   INVALID_ROWS: "Some rows need fixing before anything is sent.",
   // Savings pockets
   INSUFFICIENT_POCKET_BALANCE: "There isn't that much in this pocket.",
@@ -116,6 +122,8 @@ const MESSAGES: Record<string, string> = {
   // Passwords
   INCORRECT_PASSWORD: "That password is incorrect.",
   PASSWORD_NOT_SET: "You haven't set a password yet. Set one with a code we email you.",
+  // Two-step recovery codes (only with the authenticator app)
+  TOTP_NOT_ENABLED: "Recovery codes only work with the authenticator app. Set it up first.",
   // Transaction PIN (docs/briefs/transaction-pin.md)
   TRANSACTION_PIN_REQUIRED: "Set a transaction PIN first. You'll use it to confirm transfers, approvals and team changes.",
   TRANSACTION_PIN_MISSING: "Enter your 4-digit transaction PIN.",
@@ -135,6 +143,9 @@ const MESSAGES: Record<string, string> = {
   IDEMPOTENCY_KEY_REUSED: "These payment details changed after they were first sent. Check Transfers to see whether it went before sending it again.",
   // The bank answered a name check without a name (502, and a per-row code): a passing outage, not a wrong account.
   NAME_CHECK_UNAVAILABLE: "We couldn't check this account with the bank right now. Try again in a moment.",
+  // Statements (docs/briefs/statements.md). STATEMENT_TOO_LARGE has no copy here: the server's message says
+  // what to do for the format asked for (a shorter period, or the CSV), so it's shown as it is.
+  INVALID_STATEMENT_RANGE: "Choose a period of up to 366 days that ends today or earlier, with the first day before the last.",
 }
 
 /** Friendly copy for an error code reported inside a response (a bulk row's), or the server's own message. */

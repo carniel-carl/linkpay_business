@@ -11,6 +11,7 @@ import { changePassword, enableEmailTwoFactor, enableTotp, startTotpSetup } from
 import { CodeInput } from "@/components/auth/code-input"
 import { PasswordInput } from "@/components/auth/password-input"
 import { FormError } from "@/components/common/form-error"
+import { RecoveryCodesSection, RecoveryCodesView } from "@/components/settings/recovery-codes"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,10 +31,15 @@ import { applyResult } from "@/lib/forms"
 import { changePasswordSchema, passwordConfirmSchema } from "@/lib/schemas"
 
 // Two-step is always on for staff (the backend has no "off"), so this only switches the method.
-type Props = { method: TwoFactorMethod; email: string }
+type Props = {
+  method: TwoFactorMethod
+  email: string
+  /** Unused recovery codes; only meaningful with the authenticator app. */
+  recoveryCodesLeft: number
+}
 type Open = "totp" | "email" | null
 
-export function SecuritySettings({ method, email }: Props) {
+export function SecuritySettings({ method, email, recoveryCodesLeft }: Props) {
   const [open, setOpen] = useState<Open>(null)
   const close = () => setOpen(null)
 
@@ -82,12 +88,16 @@ export function SecuritySettings({ method, email }: Props) {
         </ul>
       </section>
 
-      <TotpDialog open={open === "totp"} onClose={close} />
+      {method === "totp" && <RecoveryCodesSection left={recoveryCodesLeft} email={email} />}
+
+      <TotpDialog open={open === "totp"} onClose={close} email={email} />
       <PasswordDialog
         open={open === "email"}
         onClose={close}
         title="Use email codes"
-        description={`Confirm your password. From your next sign-in, we'll email a code to ${email}.`}
+        description={`Confirm your password. From your next sign-in, we'll email a code to ${email}.${
+          method === "totp" ? " Your recovery codes will stop working." : ""
+        }`}
         confirmLabel="Use email codes"
         onConfirm={enableEmailTwoFactor}
         successMessage="Email codes are on."
@@ -133,26 +143,54 @@ function MethodRow({
 
 type TotpSecret = { secret: string; otpauthUrl: string }
 
-function TotpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function TotpDialog({ open, onClose, email }: { open: boolean; onClose: () => void; email: string }) {
+  // The recovery codes from turning it on. Only "I've saved them" closes the dialog while they show.
+  const [codes, setCodes] = useState<string[] | null>(null)
+  const keepOpen = (e: Event) => {
+    if (codes) e.preventDefault()
+  }
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Set up an authenticator app</DialogTitle>
-          <DialogDescription>
-            Confirm your password, scan the code with your app, then enter the 6-digit code it shows.
-          </DialogDescription>
-        </DialogHeader>
-        {/* Mounted only while open, so every setup starts with a fresh secret and empty state. */}
-        {open && <TotpFlow onClose={onClose} />}
+    <Dialog open={open} onOpenChange={(o) => !o && !codes && onClose()}>
+      <DialogContent className="sm:max-w-md" showCloseButton={!codes} onInteractOutside={keepOpen} onEscapeKeyDown={keepOpen}>
+        {codes ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Save your recovery codes</DialogTitle>
+              <DialogDescription>Your authenticator app is set up.</DialogDescription>
+            </DialogHeader>
+            <RecoveryCodesView
+              codes={codes}
+              email={email}
+              onDone={() => {
+                setCodes(null)
+                onClose()
+              }}
+            />
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Set up an authenticator app</DialogTitle>
+              <DialogDescription>
+                Confirm your password, scan the code with your app, then enter the 6-digit code it shows.
+              </DialogDescription>
+            </DialogHeader>
+            {/* Mounted only while open, so every setup starts with a fresh secret and empty state. */}
+            {open && <TotpFlow onClose={onClose} onEnabled={setCodes} />}
+          </>
+        )}
       </DialogContent>
     </Dialog>
   )
 }
 
-function TotpFlow({ onClose }: { onClose: () => void }) {
+function TotpFlow({ onClose, onEnabled }: { onClose: () => void; onEnabled: (codes: string[]) => void }) {
   const [started, setStarted] = useState<TotpSecret | null>(null)
-  return started ? <TotpSetup started={started} onClose={onClose} /> : <TotpPassword onStarted={setStarted} onClose={onClose} />
+  return started ? (
+    <TotpSetup started={started} onClose={onClose} onEnabled={onEnabled} />
+  ) : (
+    <TotpPassword onStarted={setStarted} onClose={onClose} />
+  )
 }
 
 /** The password comes first, so a stolen session alone can't add or swap the authenticator. */
@@ -202,7 +240,15 @@ function TotpPassword({ onStarted, onClose }: { onStarted: (started: TotpSecret)
   )
 }
 
-function TotpSetup({ started, onClose }: { started: TotpSecret; onClose: () => void }) {
+function TotpSetup({
+  started,
+  onClose,
+  onEnabled,
+}: {
+  started: TotpSecret
+  onClose: () => void
+  onEnabled: (codes: string[]) => void
+}) {
   const [qr, setQr] = useState<string>()
   const [code, setCode] = useState("")
   const [error, setError] = useState<string>()
@@ -225,6 +271,7 @@ function TotpSetup({ started, onClose }: { started: TotpSecret; onClose: () => v
     startTransition(async () => {
       const result = await enableTotp({ code: value })
       if (result.ok) {
+        if (result.data.recoveryCodes?.length) return onEnabled(result.data.recoveryCodes)
         toast.success("Authenticator app is set up.")
         onClose()
       } else {

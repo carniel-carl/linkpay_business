@@ -6,6 +6,7 @@ import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
 import { PayoutsLocked } from "@/components/payouts/parts"
 import { PayoutListsView } from "@/components/payouts/payout-lists-view"
 import { PayoutsUnavailable } from "@/components/payouts/unavailable"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Button } from "@/components/ui/button"
 import { getOverview, getPayoutLists, getSelected } from "@/lib/data"
 import { can } from "@/lib/permissions"
@@ -48,12 +49,14 @@ export default async function PayoutListsPage() {
               </Link>
             </Button>
             {canManage && all.length > 0 && (
-              <Button asChild>
-                <Link href="/payout-lists/new">
-                  <Plus data-icon="inline-start" aria-hidden />
-                  New payout list
-                </Link>
-              </Button>
+              <WriteGate>
+                <Button asChild>
+                  <Link href="/payout-lists/new">
+                    <Plus data-icon="inline-start" aria-hidden />
+                    New payout list
+                  </Link>
+                </Button>
+              </WriteGate>
             )}
           </>
         }

@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { History, Lock } from "lucide-react"
 import { PageHeader } from "@/components/common/page-header"
 import { FeaturePlaceholder } from "@/components/dashboard/feature-placeholder"
+import { StatementDialog, type StatementAccount } from "@/components/transactions/statement-dialog"
 import { TransactionsUnavailable } from "@/components/transactions/transactions-unavailable"
 import { TransactionsView } from "@/components/transactions/transactions-view"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -56,6 +57,10 @@ export default async function TransactionsPage({ searchParams }: PageProps<"/tra
   ])
 
   const title = branch && branches.length > 1 ? `Transactions, ${branch.name}` : "Transactions"
+  // Statements are per branch account: every branch this member sees that has one.
+  const statementAccounts: StatementAccount[] = branches.flatMap((b) =>
+    b.account ? [{ branchId: b._id, name: b.name, accountNumber: b.account.accountNumber, bankName: b.account.bankName }] : [],
+  )
   const header = (
     <PageHeader
       title={title}
@@ -64,6 +69,7 @@ export default async function TransactionsPage({ searchParams }: PageProps<"/tra
           ? "Money into and out of this branch's account. Switch to All branches in the sidebar to see every account."
           : "Money into and out of your accounts, as soon as our banking partner reports it."
       }
+      actions={statementAccounts.length > 0 && <StatementDialog accounts={statementAccounts} defaultBranchId={branch?._id} />}
     />
   )
   if (!list.ok) {

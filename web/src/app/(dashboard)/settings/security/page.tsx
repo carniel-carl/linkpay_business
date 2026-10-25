@@ -22,7 +22,13 @@ export default async function SecurityPage() {
     <div className="grid gap-10">
       <PasswordSettings hasPassword={user.hasPassword !== false} email={user.email} />
       <TransactionPinSettings status={pin} hasPassword={user.hasPassword !== false} />
-      <SecuritySettings enabled={!!user.twoFactor?.enabled} method={user.twoFactor?.method ?? null} email={user.email} />
+      <SecuritySettings
+        enabled={!!user.twoFactor?.enabled}
+        method={user.twoFactor?.method ?? null}
+        email={user.email}
+        recoveryCodesLeft={user.twoFactor?.recoveryCodesLeft ?? 0}
+        hasPassword={user.hasPassword !== false}
+      />
       {sessions && (
         <SignedInSessions
           sessions={sessions.map((s) => ({ ...s, lastActive: s.current ? "Active now" : `Last active ${timeAgo(s.lastUsedAt)}` }))}

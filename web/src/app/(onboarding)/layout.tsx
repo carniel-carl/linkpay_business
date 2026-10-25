@@ -8,6 +8,7 @@ import { UserMenu } from "@/components/shell/user-menu"
 import { Button } from "@/components/ui/button"
 import { getMe, getMemberships, getOverview, getUnreadNotificationCount } from "@/lib/data"
 import { EDITABLE, stepStates } from "@/lib/onboarding"
+import { CLOSED_PATH, isClosed } from "@/lib/restriction"
 
 export default async function OnboardingLayout({ children }: LayoutProps<"/">) {
   const [user, overview, memberships, unread] = await Promise.all([
@@ -18,6 +19,8 @@ export default async function OnboardingLayout({ children }: LayoutProps<"/">) {
   ])
   // Onboarding is the owner's job. Team members of someone else's business never land here.
   if (overview?.membership && overview.membership.role !== "owner") redirect("/dashboard")
+  // Compliance can close a business before it's verified; it can't be resubmitted then.
+  if (isClosed(overview)) redirect(CLOSED_PATH)
   const steps = stepStates(overview)
   const locked = !!overview && !EDITABLE.includes(overview.business.status)
   const items = overview?.checklist.items ?? []

@@ -4,16 +4,20 @@ import { BalanceVisibilityProvider } from "@/components/accounts/balance-visibil
 import { StatusBadge } from "@/components/business/status-badge"
 import { NotificationBell } from "@/components/notifications/notification-bell"
 import { NotificationsProvider } from "@/components/notifications/notifications-provider"
+import { RecoveryCodeNotice } from "@/components/settings/recovery-code-notice"
 import { AppSidebar } from "@/components/shell/app-sidebar"
 import { ClearStaleBusiness } from "@/components/shell/clear-stale-business"
 import { PinnedHeader } from "@/components/shell/pinned-header"
+import { SuspendedBadge, SuspendedBanner } from "@/components/shell/restriction-banner"
 import { StatusBanner } from "@/components/shell/status-banner"
 import { UserMenu } from "@/components/shell/user-menu"
+import { ReadOnlyProvider } from "@/components/shell/write-gate"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { BALANCES_HIDDEN_COOKIE } from "@/lib/balance-visibility"
 import { getBusinessCookie } from "@/lib/business-context"
 import { getMe, getMemberships, getOverview, getSelected, getUnreadNotificationCount } from "@/lib/data"
 import { can, isOwner, roleLabel } from "@/lib/permissions"
+import { CLOSED_PATH, isClosed, isSuspended, suspendedHint } from "@/lib/restriction"
 
 export default async function DashboardLayout({ children }: LayoutProps<"/">) {
   const [user, overview, selected, memberships, businessCookie, jar, unread] = await Promise.all([
@@ -26,9 +30,13 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
     getUnreadNotificationCount(),
   ])
   if (!overview) redirect("/onboarding")
+  // A closed business gets nothing from the API, so it gets no dashboard either. Pages also send a BUSINESS_BANNED
+  // read there (lib/data.ts), for a ban that lands while this layout stays on screen.
+  if (isClosed(overview)) redirect(CLOSED_PATH)
 
   const { business, membership } = overview
   const approved = business.status === "approved"
+  const suspended = isSuspended(overview)
 
   return (
     <NotificationsProvider initialUnread={unread} businessId={business._id} showBusiness={memberships.length > 1}>
@@ -57,6 +65,8 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
         />
         {/* The cookie names a business the user was removed from; reads above fell back to their default. */}
         {businessCookie && businessCookie !== business._id && <ClearStaleBusiness />}
+        {/* After a sign-in with a recovery code: one notice of how many are left. */}
+        <RecoveryCodeNotice />
         {/* The header is fixed (see PinnedHeader) and tracks this sheet's width as the sidebar collapses. */}
         <SidebarInset
           data-band
@@ -66,7 +76,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
             <SidebarTrigger className="-ml-1.5 text-brand-surface-muted hover:bg-brand-surface-foreground/10 hover:text-brand-surface-foreground" />
             <div className="flex min-w-0 flex-1 items-center gap-2.5">
               <span className="truncate text-sm text-brand-surface-muted md:hidden">{business.name}</span>
-              <StatusBadge status={business.status} tone="ink" />
+              {suspended ? <SuspendedBadge /> : <StatusBadge status={business.status} tone="ink" />}
               {membership && !isOwner(membership) && (
                 <span className="hidden truncate text-xs text-brand-surface-muted sm:inline">
                   Your role: {roleLabel(membership.role)}
@@ -77,9 +87,11 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
             <UserMenu user={user} tone="ink" />
           </PinnedHeader>
           <StatusBanner overview={overview} />
+          {suspended && <SuspendedBanner businessName={business.name} />}
           <main id="main" className="page-enter w-full max-w-6xl flex-1 px-4 pb-16 md:px-8">
             <BalanceVisibilityProvider defaultHidden={jar.get(BALANCES_HIDDEN_COOKIE)?.value === "true"}>
-              {children}
+              {/* Suspended: write actions wrapped in WriteGate show disabled, with the reason. */}
+              <ReadOnlyProvider reason={suspended ? suspendedHint(business.name) : null}>{children}</ReadOnlyProvider>
             </BalanceVisibilityProvider>
           </main>
         </SidebarInset>

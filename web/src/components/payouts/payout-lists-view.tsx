@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { ListChecks, Plus } from "lucide-react"
+import { WriteGate } from "@/components/shell/write-gate"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import type { PayoutList } from "@/lib/api/types"
@@ -38,12 +39,14 @@ export function PayoutListsView({ lists, total, canManage, showBranch, branchNam
         </EmptyHeader>
         {canManage && (
           <EmptyContent className="gap-3">
-            <Button asChild>
-              <Link href="/payout-lists/new">
-                <Plus data-icon="inline-start" aria-hidden />
-                New payout list
-              </Link>
-            </Button>
+            <WriteGate>
+              <Button asChild>
+                <Link href="/payout-lists/new">
+                  <Plus data-icon="inline-start" aria-hidden />
+                  New payout list
+                </Link>
+              </Button>
+            </WriteGate>
             <p className="text-xs text-muted-foreground">You can also save a past bulk transfer as a list from its page in Transfers.</p>
           </EmptyContent>
         )}
@@ -66,19 +69,21 @@ export function PayoutListsView({ lists, total, canManage, showBranch, branchNam
         ))}
         {canManage && total < MAX_LISTS && (
           <li style={{ "--i": lists.length } as React.CSSProperties}>
-            <Link
-              href="/payout-lists/new"
-              className={cn(
-                "grid h-full min-h-56 w-full place-content-center justify-items-center gap-3 rounded-2xl border-2 border-dashed p-6 text-sm text-muted-foreground",
-                "transition-colors duration-200 hover:border-primary/40 hover:text-foreground",
-                "focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-              )}
-            >
-              <span className="grid size-10 place-items-center rounded-[12px] bg-muted">
-                <Plus className="size-5" aria-hidden />
-              </span>
-              New payout list
-            </Link>
+            <WriteGate block>
+              <Link
+                href="/payout-lists/new"
+                className={cn(
+                  "grid h-full min-h-56 w-full place-content-center justify-items-center gap-3 rounded-2xl border-2 border-dashed p-6 text-sm text-muted-foreground",
+                  "transition-colors duration-200 hover:border-primary/40 hover:text-foreground",
+                  "focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                )}
+              >
+                <span className="grid size-10 place-items-center rounded-[12px] bg-muted">
+                  <Plus className="size-5" aria-hidden />
+                </span>
+                New payout list
+              </Link>
+            </WriteGate>
           </li>
         )}
       </ul>
@@ -114,7 +119,9 @@ function ListCard({ list: l, canManage, showBranch }: { list: PayoutList; canMan
         </div>
         {canManage && (
           <div className="relative z-10">
-            <PayoutListMenu list={l} />
+            <WriteGate>
+              <PayoutListMenu list={l} />
+            </WriteGate>
           </div>
         )}
       </div>
@@ -142,9 +149,12 @@ function ListCard({ list: l, canManage, showBranch }: { list: PayoutList; canMan
           )}
         </span>
         {canManage && (
-          <Button size="sm" asChild className="relative z-10">
-            <Link href={`/payout-lists/${l._id}#pay`}>Pay now</Link>
-          </Button>
+          // Disabled, with the reason, while the business is suspended. Above the card's own link either way.
+          <WriteGate className="relative z-10">
+            <Button size="sm" asChild className="relative z-10">
+              <Link href={`/payout-lists/${l._id}#pay`}>Pay now</Link>
+            </Button>
+          </WriteGate>
         )}
       </div>
     </article>
