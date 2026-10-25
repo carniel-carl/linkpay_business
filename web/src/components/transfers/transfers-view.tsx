@@ -355,7 +355,7 @@ function BatchBanner({ batch, extra, onClear }: { batch: TransferBatch; extra?: 
         <div className="flex flex-wrap gap-2">
           <BatchDecisionButtons batchId={batch._id} awaitingMe={batch.awaitingMe} awaitingMeKobo={batch.awaitingMeKobo} />
           {cancellable > 0 && (
-            <Button variant="outline" disabled={cancelling} onClick={cancel}>
+            <Button write variant="outline" disabled={cancelling} onClick={cancel}>
               {cancelling && <Spinner />}
               Cancel bulk transfer
             </Button>

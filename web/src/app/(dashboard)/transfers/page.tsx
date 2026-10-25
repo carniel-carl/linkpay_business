@@ -110,11 +110,8 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
       }
       actions={
         <>
-          {can(overview, "transfers.manage") && settings.ok && (
-            <WriteGate>
-              <ApprovalRuleDialog settings={settings.data} />
-            </WriteGate>
-          )}
+          {/* Its trigger is gated (Button `write`) while the business is suspended. */}
+          {can(overview, "transfers.manage") && settings.ok && <ApprovalRuleDialog settings={settings.data} />}
           {actions}
         </>
       }

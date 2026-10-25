@@ -18,6 +18,8 @@ type RequestOptions = {
   auth?: boolean
   /** Extra headers, e.g. `Idempotency-Key` on transfers. */
   headers?: Record<string, string>
+  /** Acts on this business instead of the one in the cookie (leaving the business a page showed). */
+  businessId?: string
 }
 
 /** The business in the cookie is no longer one the user can act on (removed, or a stale id). */
@@ -104,13 +106,14 @@ async function request<T>(
  * Server-side fetch to the backend. Throws ApiError for non-2xx responses.
  * Signed-in requests carry the chosen business as `X-Business-Id` (see lib/business-context.ts).
  */
-export async function api<T>(path: string, { method = "GET", json, form, auth = true, headers }: RequestOptions = {}) {
+export async function api<T>(path: string, { method = "GET", json, form, auth = true, headers, businessId: given }: RequestOptions = {}) {
   const token = auth ? await getSessionToken() : null
-  const businessId = token ? await getBusinessCookie() : null
+  const businessId = token ? (given ?? (await getBusinessCookie())) : null
   try {
     return await request<T>(path, method, token, businessId, json, form, headers)
   } catch (err) {
-    if (!businessId || !(err instanceof ApiError) || !err.code || !STALE_BUSINESS.has(err.code)) throw err
+    // A business named by the caller isn't the cookie's choice, so there's no stale choice to drop or fall back from.
+    if (given || !businessId || !(err instanceof ApiError) || !err.code || !STALE_BUSINESS.has(err.code)) throw err
     await forgetBusiness()
     // Reads fall back to the user's default business. Writes never do: they were meant for the
     // business that's gone, and repeating them elsewhere could change the wrong business.

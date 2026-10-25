@@ -231,12 +231,12 @@ function RowMenu({ beneficiary, onAct }: { beneficiary: Beneficiary; onAct: (p: 
             View details
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onAct({ kind: "rename", beneficiary })}>
+        <DropdownMenuItem write onSelect={() => onAct({ kind: "rename", beneficiary })}>
           <Pencil aria-hidden />
           {beneficiary.nickname ? "Change nickname" : "Add a nickname"}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => onAct({ kind: "delete", beneficiary })}>
+        <DropdownMenuItem write variant="destructive" onSelect={() => onAct({ kind: "delete", beneficiary })}>
           <Trash2 aria-hidden />
           Delete
         </DropdownMenuItem>

@@ -277,7 +277,8 @@ export function WorkflowEditor({ settings, approvers }: { settings: TransferSett
           <Button variant="outline" asChild disabled={busy}>
             <Link href="/approvals">Cancel</Link>
           </Button>
-          <Button onClick={save} disabled={busy}>
+          {/* The page can be opened straight from its URL, so the save is gated here too. */}
+          <Button write onClick={save} disabled={busy}>
             {busy && <Spinner />}
             Save approval levels
           </Button>

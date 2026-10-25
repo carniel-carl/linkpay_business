@@ -151,11 +151,12 @@ function AlertDialogAction({
   className,
   variant = "default",
   size = "default",
+  write,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Action> &
-  Pick<React.ComponentProps<typeof Button>, "variant" | "size">) {
+  Pick<React.ComponentProps<typeof Button>, "variant" | "size" | "write">) {
   return (
-    <Button variant={variant} size={size} asChild>
+    <Button variant={variant} size={size} write={write} asChild>
       <AlertDialogPrimitive.Action
         data-slot="alert-dialog-action"
         className={cn(className)}

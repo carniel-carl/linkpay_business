@@ -7,7 +7,6 @@ import { BellRing, Copy, Download, Ellipsis, FilePenLine, Files, Link2, Send, Tr
 import { toast } from "sonner"
 import { actOnInvoice, deleteDraft, sendInvoice } from "@/app/(dashboard)/invoices/actions"
 import { FormError } from "@/components/common/form-error"
-import { WriteGate } from "@/components/shell/write-gate"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -97,16 +96,15 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
   return (
     <>
       {editable && (
-        // Disabled, with the reason, while the business is suspended. The rest (link, PDF) are reads.
-        <WriteGate>
-          <Button onClick={() => setSendOpen(true)}>
-            <Send data-icon="inline-start" aria-hidden />
-            {invoice.lastSentAt ? "Send again" : "Send"}
-          </Button>
-        </WriteGate>
+        // `write`: disabled, with the reason, while the business is suspended. Downloads and copying a link are reads.
+        <Button write onClick={() => setSendOpen(true)}>
+          <Send data-icon="inline-start" aria-hidden />
+          {invoice.lastSentAt ? "Send again" : "Send"}
+        </Button>
       )}
       {invoice.status !== "void" && (
-        <Button variant="outline" disabled={busy} onClick={shareLink}>
+        // A draft has no link until it's marked sent, which is a change; copying an existing link is a read.
+        <Button write={!invoice.publicUrl} variant="outline" disabled={busy} onClick={shareLink}>
           {busy ? <Spinner /> : <Link2 data-icon="inline-start" aria-hidden />}
           {draft ? "Get link" : "Copy link"}
         </Button>
@@ -125,7 +123,7 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
             </a>
           </DropdownMenuItem>
           {editable && (
-            <DropdownMenuItem asChild>
+            <DropdownMenuItem write asChild>
               <Link href={`/invoices/${invoice._id}/edit`}>
                 <FilePenLine aria-hidden />
                 Edit
@@ -133,12 +131,12 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
             </DropdownMenuItem>
           )}
           {unpaid && invoice.customer.email && (
-            <DropdownMenuItem disabled={busy} onSelect={() => act("remind")}>
+            <DropdownMenuItem write disabled={busy} onSelect={() => act("remind")}>
               <BellRing aria-hidden />
               Send a reminder
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem disabled={busy} onSelect={() => act("duplicate")}>
+          <DropdownMenuItem write disabled={busy} onSelect={() => act("duplicate")}>
             <Files aria-hidden />
             Duplicate
           </DropdownMenuItem>
@@ -150,13 +148,13 @@ export function InvoiceActions({ invoice }: { invoice: Invoice }) {
           )}
           {(unpaid && invoice.payments.length === 0) || draft ? <DropdownMenuSeparator /> : null}
           {unpaid && invoice.payments.length === 0 && (
-            <DropdownMenuItem variant="destructive" onSelect={() => setConfirm("void")}>
+            <DropdownMenuItem write variant="destructive" onSelect={() => setConfirm("void")}>
               <Ban aria-hidden />
               Void invoice
             </DropdownMenuItem>
           )}
           {draft && (
-            <DropdownMenuItem variant="destructive" onSelect={() => setConfirm("delete")}>
+            <DropdownMenuItem write variant="destructive" onSelect={() => setConfirm("delete")}>
               <Trash2 aria-hidden />
               Delete draft
             </DropdownMenuItem>

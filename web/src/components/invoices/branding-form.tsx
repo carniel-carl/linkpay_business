@@ -151,12 +151,13 @@ export function BrandingForm({ branding, business, payTo }: Props) {
             </div>
             <div className="flex flex-wrap gap-2">
               <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" onChange={onFile} tabIndex={-1} aria-hidden />
-              <Button type="button" variant="outline" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+              {/* Uploading or removing the logo saves straight away; all three are gated while the business is suspended. */}
+              <Button write type="button" variant="outline" disabled={!!busy} onClick={() => fileRef.current?.click()}>
                 {busy === "upload" ? <Spinner /> : <ImageUp data-icon="inline-start" aria-hidden />}
                 {logo ? "Replace logo" : "Upload logo"}
               </Button>
               {logo && (
-                <Button type="button" variant="ghost" disabled={!!busy} onClick={onRemoveLogo}>
+                <Button write type="button" variant="ghost" disabled={!!busy} onClick={onRemoveLogo}>
                   {busy === "remove" ? <Spinner /> : <Trash2 data-icon="inline-start" aria-hidden />}
                   Remove
                 </Button>
@@ -331,7 +332,7 @@ export function BrandingForm({ branding, business, payTo }: Props) {
           </Field>
         </section>
 
-        <Button type="submit" className="w-fit" disabled={!!busy}>
+        <Button write type="submit" className="w-fit" disabled={!!busy}>
           {busy === "save" && <Spinner />}
           Save branding
         </Button>

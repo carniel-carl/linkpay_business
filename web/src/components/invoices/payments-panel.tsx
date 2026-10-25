@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { recordPayment, removePayment, setReminders, suggestedPayments } from "@/app/(dashboard)/invoices/actions"
 import { FormError } from "@/components/common/form-error"
 import { NairaInput } from "@/components/common/naira-input"
+import { WriteGate } from "@/components/shell/write-gate"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -115,7 +116,7 @@ export function PaymentsPanel({ invoice, canManage }: { invoice: Invoice; canMan
                 </span>
                 <span className="text-sm font-medium figure">{formatNaira(p.amountKobo)}</span>
                 {canManage && invoice.status !== "void" && (
-                  <Button variant="ghost" size="icon-xs" aria-label={`Remove the ${formatNaira(p.amountKobo)} payment`} onClick={() => setRemoving(p)}>
+                  <Button write variant="ghost" size="icon-xs" aria-label={`Remove the ${formatNaira(p.amountKobo)} payment`} onClick={() => setRemoving(p)}>
                     <X aria-hidden />
                   </Button>
                 )}
@@ -133,7 +134,7 @@ export function PaymentsPanel({ invoice, canManage }: { invoice: Invoice; canMan
       )}
 
       {canManage && unpaid && (
-        <Button variant="outline" onClick={() => setRecordOpen(true)}>
+        <Button write variant="outline" onClick={() => setRecordOpen(true)}>
           <Plus data-icon="inline-start" aria-hidden />
           Record a payment
         </Button>
@@ -188,7 +189,9 @@ function RemindersToggle({ invoice }: { invoice: Invoice }) {
     }
   }
 
+  // Turning reminders on or off saves straight away, so the whole row is gated while the business is suspended.
   return (
+    <WriteGate block>
     <label className="flex items-start gap-2.5 border-t pt-5 text-sm">
       <Checkbox className="mt-0.5" checked={enabled} disabled={busy || !invoice.customer.email} onCheckedChange={(v) => toggle(v === true)} />
       <span className="grid gap-0.5">
@@ -202,6 +205,7 @@ function RemindersToggle({ invoice }: { invoice: Invoice }) {
         </span>
       </span>
     </label>
+    </WriteGate>
   )
 }
 

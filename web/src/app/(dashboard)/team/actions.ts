@@ -7,7 +7,7 @@ import type { ActionResult } from "@/lib/action-result"
 import { api } from "@/lib/api/client"
 import { pinHeader } from "@/lib/api/transaction-pin"
 import type { Invite, TeamMember } from "@/lib/api/types"
-import { setBusinessCookie } from "@/lib/business-context"
+import { getBusinessCookie, setBusinessCookie } from "@/lib/business-context"
 import { accessSchema, inviteSchema } from "@/lib/schemas"
 
 const member = (id: string) => `/api/team/members/${encodeURIComponent(id)}`
@@ -63,11 +63,16 @@ export async function revokeInvite(id: string) {
   return change(() => api<null>(invite(id), { method: "DELETE" }))
 }
 
-/** Leaves the current business and goes back to the user's default one (or onboarding if there's none). */
-export async function leaveBusiness(): Promise<ActionResult> {
-  const result = await runAction(() => api<null>("/api/team/leave", { method: "POST" }))
+/**
+ * Leaves the business the page showed (sent as X-Business-Id, so a switch in another tab can't change which) and
+ * goes on to the user's default business, or onboarding if there's none. Works for a suspended or closed business too.
+ */
+export async function leaveBusiness(businessId: string): Promise<ActionResult> {
+  const result = await runAction(() => api<null>("/api/team/leave", { method: "POST", businessId }))
   if (!result.ok) return { ok: false, error: result.error, code: result.code }
-  await setBusinessCookie(null)
+  // No cookie means the default business, which was this one. A cookie for another business stays.
+  const chosen = await getBusinessCookie()
+  if (!chosen || chosen === businessId) await setBusinessCookie(null)
   revalidatePath("/", "layout")
   redirect("/dashboard")
 }

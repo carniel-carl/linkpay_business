@@ -95,7 +95,7 @@ function SaveBatchAsListDialog({ batch }: { batch: TransferBatch }) {
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="outline">
+        <Button write variant="outline">
           <ListPlus data-icon="inline-start" aria-hidden />
           Save as a list
         </Button>
