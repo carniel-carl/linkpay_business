@@ -19,9 +19,12 @@ export const MAX_LIST_ROWS = 200;
 export const MAX_LIST_TITLE = 80;
 export const MAX_NARRATION = 100;
 
-/** A list's row as the API gives it. `beneficiary` is null when that beneficiary was deleted since: it can't be paid. */
+/**
+ * A list's row as the API gives it. `beneficiary` is null when that beneficiary was deleted since: it can't be paid.
+ * Its account number and bank uuid are what a run's Idempotency-Key follows (runKeyBody).
+ */
 export type PayoutListItem = {
-  beneficiary: { _id: string; accountName: string; nickname: string | null; accountNumber: string; bankName: string | null } | null;
+  beneficiary: { _id: string; accountName: string; nickname: string | null; accountNumber: string; bankName: string | null; bankUuid: string } | null;
   amountKobo: number;
   narration: string | null;
 };

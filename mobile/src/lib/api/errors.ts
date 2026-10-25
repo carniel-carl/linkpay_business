@@ -1,5 +1,6 @@
 // Error shape from backend/src/middleware/errorHandler.ts: { error, code?, details? }.
 // Messages mirror web/src/lib/api/errors.ts; keep the two in step.
+import { SUPPORT_EMAIL } from "@/lib/config";
 
 type ZodIssue = { path: (string | number)[]; message: string };
 
@@ -33,6 +34,9 @@ const MESSAGES: Record<string, string> = {
   // The server's minimum app version is newer than this build (the update screen covers the app). Mobile only.
   APP_UPDATE_REQUIRED: "This version of LinkPay Business is out of date. Update the app to keep using it.",
   BUSINESS_NOT_APPROVED: "This is available once your business is verified.",
+  // Compliance (docs/briefs/compliance.md): a suspended business can look but not change anything; a closed one gets nothing.
+  BUSINESS_SUSPENDED: `This business is suspended. You can view your account, but you can't send money or make changes. Contact ${SUPPORT_EMAIL}.`,
+  BUSINESS_BANNED: `This business has been closed. Contact ${SUPPORT_EMAIL}.`,
   FORBIDDEN: "You don't have access to this.",
   PROVIDER_ERROR: "We can't reach our banking partner right now. Try again in a moment.",
   PERMISSION_DENIED: "Your role doesn't allow this. Ask an owner or admin.",
@@ -120,6 +124,8 @@ const MESSAGES: Record<string, string> = {
   // Passwords (same copy as the web)
   INCORRECT_PASSWORD: "That password is incorrect.",
   PASSWORD_NOT_SET: "You haven't set a password yet. Set one with a code we email you.",
+  // Two-step recovery codes, only with the authenticator app (same copy as the web)
+  TOTP_NOT_ENABLED: "Recovery codes only work with the authenticator app. Set it up first.",
   // Transaction PIN (docs/briefs/transaction-pin.md). The confirmation sheet words most of these itself.
   TRANSACTION_PIN_REQUIRED: "Set a transaction PIN first. You'll need it to send money, approve transfers and change your team.",
   TRANSACTION_PIN_MISSING: "Enter your 4-digit transaction PIN.",
@@ -127,6 +133,9 @@ const MESSAGES: Record<string, string> = {
   TRANSACTION_PIN_LOCKED: "Your transaction PIN is locked after too many wrong tries. Reset it, or wait and try again later.",
   TRANSACTION_PIN_ALREADY_SET: "You already have a transaction PIN. Change it instead.",
   WEAK_TRANSACTION_PIN: "That PIN is too easy to guess. Avoid repeated digits, runs like 1234, years and other common PINs.",
+  // Statements (docs/briefs/statements.md; same copy as the web). STATEMENT_TOO_LARGE has no copy here: the server's message says
+  // what to do for the format asked for (a shorter period, or the CSV), so it's shown as it is.
+  INVALID_STATEMENT_RANGE: "Choose a period of up to 366 days that ends today or earlier, with the first day before the last.",
 };
 
 /** Friendly copy for a code reported inside a response (a bulk row's), or the server's own message. */

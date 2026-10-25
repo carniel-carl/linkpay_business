@@ -141,8 +141,11 @@ export const listItems = (rows: ListRow[]): PayoutListRowInput[] =>
 export type RunRow = {
   /** Local only: the row's place on the list and its beneficiary. */
   key: string;
-  /** The saved name is the one the member reviews; a changed one (ACCOUNT_NAME_CHANGED) replaces it once shown. */
-  beneficiary: SavedRecipient;
+  /**
+   * The saved name is the one the member reviews; a changed one (ACCOUNT_NAME_CHANGED) replaces it once shown. Always
+   * with its bank's uuid, which the run's key follows.
+   */
+  beneficiary: SavedRecipient & { bankUuid: string };
   /** The amount saved on the list. */
   savedKobo: number;
   narration: string | null;
@@ -199,7 +202,7 @@ const runRows = (list: PayoutListWithItems): RunRow[] =>
       ? [
           {
             key: `${n}:${i.beneficiary._id}`,
-            beneficiary: pick(i.beneficiary),
+            beneficiary: { ...pick(i.beneficiary), bankUuid: i.beneficiary.bankUuid },
             savedKobo: i.amountKobo,
             narration: i.narration,
             amount: formatNairaInput(koboToInput(i.amountKobo)),
@@ -283,15 +286,26 @@ export const runItems = (rows: RunRow[]) =>
     .map((r) => ({ beneficiary: r.beneficiary._id, amountKobo: runKobo(r) ?? 0, narration: r.narration ?? undefined, accountName: r.beneficiary.accountName }));
 
 /**
- * What a run's Idempotency-Key follows: the list, the account and each row's beneficiary, amount and narration,
- * as the API's request hash sees them. The reviewed names are left out (the hash ignores them, so a retry after a
- * changed name was checked replays), and so is "save these changes", so ticking it after a lost answer can't pay
- * the same people again.
+ * What a run's Idempotency-Key follows: the list, the account paid from, and each row's account number, bank uuid,
+ * amount and narration, exactly as the API's request hash sees them (docs/briefs/bulk-payouts.md) and as the web
+ * keys a run. A row is the account it pays, not the saved beneficiary: after a lost answer, an edit that points a
+ * row at another beneficiary for the same account (deleted and saved again) keeps the key, so the retry replays
+ * instead of paying again.
+ *
+ * Left out: the reviewed names (the hash ignores them, so a retry after a changed name was checked replays) and
+ * "save these changes", so ticking it after a lost answer can't pay the same people again.
  */
 export const runKeyBody = (listId: string, branch: string, rows: RunRow[]) => ({
   list: listId,
   branch,
-  items: runItems(rows).map((i) => ({ beneficiary: i.beneficiary, amountKobo: i.amountKobo, narration: i.narration ?? null })),
+  items: rows
+    .filter((r) => r.include)
+    .map((r) => ({
+      accountNumber: r.beneficiary.accountNumber,
+      bankUuid: r.beneficiary.bankUuid,
+      amountKobo: runKobo(r) ?? 0,
+      narration: r.narration ?? null,
+    })),
 });
 
 /** What a preview was worked out for: the account and the rows, not the names (they can be checked again). */

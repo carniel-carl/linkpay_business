@@ -1,21 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { newRecoveryCodes } from "@/lib/auth/api";
 import { api } from "./client";
 import { idSegment } from "./paths";
-import type { User } from "./types";
+import type { RecoveryCodes, User } from "./types";
 
 const ME = ["me"];
 
 export const useMe = () => useQuery({ queryKey: ME, queryFn: () => api<User>("/api/auth/me") });
 
-function useUserMutation<TVars>(fn: (vars: TVars) => Promise<unknown>) {
+function useUserMutation<TVars, TData>(fn: (vars: TVars) => Promise<TData>) {
   const qc = useQueryClient();
   return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ME }) });
 }
 
 export const useUpdateName = () => useUserMutation(({ id, name }: { id: string; name: string }) => api<User>(`/api/users/${idSegment(id)}`, { method: "PATCH", json: { name } }));
 
-/** Starts authenticator setup: a secret for the authenticator app (otpauth link, or typed by hand). */
-export const useEnableTotp = () => useUserMutation((code: string) => api("/api/auth/2fa/totp/enable", { method: "POST", json: { code } }));
+/** Turns the authenticator app on with a code from it. Returns the 10 recovery codes, shown once. */
+export const useEnableTotp = () =>
+  useUserMutation((code: string) => api<{ user: User } & RecoveryCodes>("/api/auth/2fa/totp/enable", { method: "POST", json: { code } }));
+
+/** Authenticator app only: 10 new recovery codes (shown once) replace the old ones. */
+export const useNewRecoveryCodes = () => useUserMutation(newRecoveryCodes);
 
 export const useEnableEmailTwoFactor = () =>
   useUserMutation((password: string) => api("/api/auth/2fa/email/enable", { method: "POST", json: { password } }));
