@@ -11,6 +11,7 @@ delete process.env.LIQUIFIA_WEBHOOK_SECRET; // suites that test webhooks set env
 process.env.JWT_SECRET ??= "test-jwt-secret";
 process.env.STAFF_JWT_SECRET = "test-staff-jwt-secret";
 process.env.ENCRYPTION_KEY = "0".repeat(64);
+delete process.env.CLIENT_IP_SECRET; // tests/clientIp.test.ts sets env.clientIpSecret itself
 process.env.MONGODB_URI = "mongodb://127.0.0.1:1/unset"; // replaced with an in-memory server by startTestEnv()
 delete process.env.MONGODB_USERNAME;
 delete process.env.MONGODB_PASSWORD;

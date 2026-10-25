@@ -129,6 +129,30 @@ function staffJwtSecret(): string {
   return secret;
 }
 
+/**
+ * Optional. The web and admin servers send it with the visitor's address (middleware/clientIp.ts) when they can't be
+ * listed in TRUST_PROXY, as on Vercel, which has no fixed outgoing addresses. Whoever holds it chooses the address
+ * every rate limit counts, so it follows the token secrets' rules, in every NODE_ENV: at least 32 characters, none of
+ * the other secrets, and (live or in production) not a value from this repo. It travels in a header, so no spaces
+ * or characters outside printable ASCII. Surrounding whitespace is dropped, as the web and admin servers drop it.
+ */
+function clientIpSecret(): string | undefined {
+  const secret = process.env.CLIENT_IP_SECRET?.trim();
+  if (!secret) return undefined;
+  if (!/^[\x21-\x7e]+$/.test(secret)) {
+    throw new Error(`CLIENT_IP_SECRET must be letters, digits and symbols only (no spaces), since it's sent in a header. ${GENERATE}`);
+  }
+  if (secret.length < 32) throw new Error(`CLIENT_IP_SECRET must be at least 32 characters. ${GENERATE}`);
+  for (const name of ["JWT_SECRET", "STAFF_JWT_SECRET", "ENCRYPTION_KEY"]) {
+    const other = process.env[name];
+    if (other && secret.toLowerCase() === other.toLowerCase()) throw new Error(`CLIENT_IP_SECRET must be different from ${name}. ${GENERATE}`);
+  }
+  if ((live || nodeEnv === "production") && REPO_SECRETS.has(secret)) {
+    throw new Error(`CLIENT_IP_SECRET is a development value committed in this repo, so anyone could choose the address the rate limits see. ${GENERATE}`);
+  }
+  return secret;
+}
+
 const DAY_LIMITS = { idle: { min: 1, max: 365 }, maxAge: { min: 1, max: 730 } };
 
 export const env = {
@@ -148,6 +172,9 @@ export const env = {
   apiPublicUrl: (process.env.API_URL ?? `http://localhost:${process.env.PORT ?? 4000}`).replace(/\/$/, ""),
   // Proxies whose X-Forwarded-For is believed (Express "trust proxy"): the web server and any load balancer.
   trustProxy: process.env.TRUST_PROXY ?? "loopback",
+  // Optional: with it, X-LinkPay-Client-IP is believed from any address when X-LinkPay-Client-Secret matches
+  // (middleware/clientIp.ts). For web and admin servers that can't be listed in TRUST_PROXY (Vercel). Unset: never.
+  clientIpSecret: clientIpSecret(),
   // Public URL of the admin console (admin/), used in staff invite links.
   adminAppUrl: (process.env.ADMIN_APP_URL ?? "http://localhost:3001").replace(/\/$/, ""),
   // Phone pushes: "expo" sends through Expo's push service; anything else prints them to the console.

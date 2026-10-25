@@ -24,6 +24,7 @@ const SECRETS = {
   JWT_SECRET: hex(),
   STAFF_JWT_SECRET: hex(),
   ENCRYPTION_KEY: KEY,
+  CLIENT_IP_SECRET: hex(),
   LIQUIFIA_SECRET_KEY: "sk_live_preflight_not_a_real_key",
   LIQUIFIA_WEBHOOK_SECRET: "whsec_preflight_not_a_real_secret",
 };
@@ -280,6 +281,22 @@ describe("environment (subprocess with explicit env)", () => {
       has(checkEnv(production({ TRUST_PROXY: value })).find((c) => c.name === "TRUST_PROXY"), "FAIL", "trusts every address");
     }
     expect(status({ TRUST_PROXY: "loopback, 10.0.0.0/8, fd00::1" }, "TRUST_PROXY")).toEqual(["PASS"]);
+
+    // Optional: unset, web and admin need a proxy TRUST_PROXY lists; set, the backend's own rules.
+    const clientIpSecret = (vars: Record<string, string | undefined>) => checkEnv(production(vars)).find((c) => c.name === "CLIENT_IP_SECRET");
+    for (const value of [undefined, "", "   "]) {
+      has(clientIpSecret({ CLIENT_IP_SECRET: value }), "WARN", "web and admin must then reach the API through a proxy listed in TRUST_PROXY");
+    }
+    has(clientIpSecret({ CLIENT_IP_SECRET: "x".repeat(31) }), "FAIL", "only 31 characters");
+    has(clientIpSecret({ CLIENT_IP_SECRET: `${"x".repeat(20)} ${"x".repeat(20)}` }), "FAIL", "spaces");
+    has(clientIpSecret({ CLIENT_IP_SECRET: `${"é".repeat(40)}` }), "FAIL", "spaces");
+    has(clientIpSecret({ CLIENT_IP_SECRET: "dev-secret-for-simulator-not-for-production" }), "FAIL", "from this repo");
+    for (const name of ["JWT_SECRET", "STAFF_JWT_SECRET", "ENCRYPTION_KEY"] as const) {
+      has(clientIpSecret({ CLIENT_IP_SECRET: SECRETS[name].toUpperCase() }), "FAIL", `same as ${name}`);
+    }
+    const ok = clientIpSecret({ CLIENT_IP_SECRET: ` ${SECRETS.CLIENT_IP_SECRET}\n` });
+    has(ok, "PASS", "set (64 characters)");
+    expect(ok?.detail).not.toContain(SECRETS.CLIENT_IP_SECRET);
 
     expect(status({ API_URL: "https://localhost:4000" }, "API_URL")).toEqual(["FAIL"]);
     expect(status({ API_URL: "https://127.0.0.1" }, "API_URL")).toEqual(["FAIL"]);
