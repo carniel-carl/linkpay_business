@@ -89,36 +89,55 @@ function decodePath(pathname: string) {
   }
 }
 
-// A link's allowed websites, briefly remembered so a page and its follow-up requests don't each ask.
+// A link's allowed websites as the API last gave them, so a page and its follow-up requests don't each ask: asked
+// again after 30 seconds. Only the API's answers are kept, never a failure to get one.
 const framers = new Map<string, { at: number; value: string }>()
 const FRAMERS_TTL_MS = 30_000
+const MAX_FRAMERS = 1000
+
+/**
+ * The link's frame-ancestors as the API gives them now (`keep`: worth remembering), or null when it couldn't say:
+ * a timeout, a 5xx, or a 429. It's asked as this server, not the visitor, so the answer doesn't depend on the
+ * visitor's own rate limit. If this server's limit is spent (someone asking about made-up links, say), it's asked
+ * again as the visitor, so that can't stop every embed working; whatever that visitor's limit makes of it is
+ * theirs alone, since a failure is never remembered.
+ */
+async function lookUpFramers(slug: string, visitorIp: string | undefined) {
+  const signal = AbortSignal.timeout(3000)
+  const ask = (ip?: string) =>
+    fetch(`${API_URL}/api/public/pay/${slug}`, { cache: "no-store", signal, headers: ip ? { "X-Forwarded-For": ip } : undefined })
+  try {
+    let res = await ask()
+    if (res.status === 429 && visitorIp) res = await ask(visitorIp)
+    // No such link: the page says "not found", and nothing is remembered.
+    if (res.status === 404) return { value: "'self'", keep: false }
+    if (!res.ok) return null
+    const body = (await res.json()) as { embed?: { allowedOrigins?: string[] } }
+    const allowed = (body.embed?.allowedOrigins ?? []).filter((o) => /^https?:\/\/[a-z0-9.*:[\]-]+$/i.test(o))
+    return { value: allowed.length ? ["'self'", ...allowed].join(" ") : "*", keep: true }
+  } catch {
+    return null
+  }
+}
 
 /**
  * Who may show a payment-link page in a frame: the link's allowed websites, or any site when it has none
- * (docs/briefs/payment-links.md §5). Unknown links get 'self' only; the page itself says "not found".
+ * (docs/briefs/payment-links.md §5). Unknown links get 'self' only; the page itself says "not found". When the
+ * API can't be asked, the last answer it gave stands (a merchant's embed keeps working through a blip), and with
+ * none, 'self' for this request only: no other sites frame it meanwhile, and the next request asks again.
  */
 async function frameAncestors(slug: string, visitorIp: string | undefined) {
   const hit = framers.get(slug)
   if (hit && Date.now() - hit.at < FRAMERS_TTL_MS) return hit.value
-  let value = "'self'"
-  try {
-    const res = await fetch(`${API_URL}/api/public/pay/${slug}`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(3000),
-      // The payer's address, so the backend's rate limit counts them and not this server.
-      headers: visitorIp ? { "X-Forwarded-For": visitorIp } : undefined,
-    })
-    if (res.ok) {
-      const body = (await res.json()) as { embed?: { allowedOrigins?: string[] } }
-      const allowed = (body.embed?.allowedOrigins ?? []).filter((o) => /^https?:\/\/[a-z0-9.*:[\]-]+$/i.test(o))
-      value = allowed.length ? ["'self'", ...allowed].join(" ") : "*"
-    }
-  } catch {
-    // Backend unreachable: the page will show its own error; don't let other sites frame it meanwhile.
+  const answer = await lookUpFramers(slug, visitorIp)
+  if (!answer) return hit?.value ?? "'self'"
+  // Re-added, so the oldest answers are the ones let go.
+  framers.delete(slug)
+  if (answer.keep) {
+    framers.set(slug, { at: Date.now(), value: answer.value })
+    if (framers.size > MAX_FRAMERS) framers.delete(framers.keys().next().value!)
   }
-  framers.set(slug, { at: Date.now(), value })
-  if (framers.size > 1000) framers.delete(framers.keys().next().value!)
-  return value
+  return answer.value
 }
 
 export async function proxy(request: NextRequest) {
@@ -159,7 +178,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except Next internals, static files, the file proxy (it answers 401 itself)
-  // and the sign-out handler.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/|auth/sign-out|.*\\.(?:svg|png|jpg|jpeg|webp|ico)$).*)"],
+  // Everything except Next internals, the icons in src/app (the only static files at the root), the file proxy (it
+  // answers 401 itself) and the sign-out handler. Named files only: a page whose address ends in ".png" is still a
+  // page, and gets its policy.
+  matcher: ["/((?!_next/static|_next/image|api/|auth/sign-out|(?:favicon\\.ico|icon\\.svg|apple-icon\\.png)$).*)"],
 }

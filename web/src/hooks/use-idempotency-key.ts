@@ -7,8 +7,12 @@ const newKey = () => crypto.randomUUID().replaceAll("-", "")
  * attempt: the same details get the same key, so sending again after any error (a refusal, a dropped
  * response, a 5xx, the banking partner being down) can't move money twice. If the first try got through,
  * the server replays it; a refusal isn't stored under the key, so a retry after fixing the cause (say,
- * topping up) is checked again. Changing anything that's sent gets a new key, and `reset()` after a
- * success makes the next request a new one.
+ * topping up) is checked again.
+ *
+ * Pass `keyFor` exactly what the API compares a repeat with (its request hash), nothing more: a detail the API
+ * ignores (a batch's name, "save to beneficiaries") must not get a new key, or changing it after a lost answer
+ * would pay again. Call `reset()` only after a success, or after IDEMPOTENCY_KEY_REUSED (the key went with other
+ * details), never when a dialog closes or opens: sending the same details again after reopening must replay.
  */
 export function useIdempotencyKey() {
   // A ref, not state: a second click before the re-render still sees the key the first one made.

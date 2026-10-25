@@ -389,9 +389,17 @@ export type TransferBatchHead = {
    * not their own, no earlier level of it approved by them, from one of their branches.
    */
   awaitingMe: number
+  /** What the `awaitingMe` rows send in all (their `amountKobo`, before fees). */
+  awaitingMeKobo: number
 }
 
 export type TransferBatch = TransferBatchHead & { items: Transfer[] }
+
+/**
+ * What the member saw waiting for them in a bulk transfer, sent as `expect` with approve and reject: if it isn't
+ * what waits for them now, nothing is decided (409 BATCH_CHANGED, with what waits now as `details`).
+ */
+export type BatchExpectation = { count: number; amountKobo: number }
 
 /**
  * POST /api/transfers/batches/:id/approve | reject: the batch now, plus `decided` (rows this request approved a
@@ -1042,9 +1050,12 @@ export type PublicCheckout = {
   mode: PaymentMode
   priceKobo: number
   /** Send exactly this. */
-  amountKobo: number
+  /** null once the checkout's hold has passed: there's nothing left to send to. */
+  amountKobo: number | null
   currency: "NGN"
   payTo: PayTo | null
+  /** Paid after the link reached its payment limit: the business refunds it or honours it. */
+  overLimit?: boolean
   expiresAt: string
   paidKobo: number | null
   paidAt: string | null

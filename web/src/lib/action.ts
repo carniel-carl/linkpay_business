@@ -19,7 +19,14 @@ export async function runAction<T>(fn: () => Promise<T>): Promise<ActionResult<T
         redirect("/sign-in?expired=1")
       }
       const details = err.details as
-        | { retryAt?: string; rows?: { row: number; error: string; code?: string; accountName?: string }[]; attemptsLeft?: number; lockedUntil?: string }
+        | {
+            retryAt?: string
+            rows?: { row: number; error: string; code?: string; accountName?: string }[]
+            attemptsLeft?: number
+            lockedUntil?: string
+            count?: number
+            amountKobo?: number
+          }
         | undefined
       return {
         ok: false,
@@ -31,6 +38,10 @@ export async function runAction<T>(fn: () => Promise<T>): Promise<ActionResult<T
         rows: details?.rows,
         attemptsLeft: typeof details?.attemptsLeft === "number" ? details.attemptsLeft : undefined,
         lockedUntil: details?.lockedUntil,
+        waitingNow:
+          err.code === "BATCH_CHANGED" && typeof details?.count === "number" && typeof details.amountKobo === "number"
+            ? { count: details.count, amountKobo: details.amountKobo }
+            : undefined,
       }
     }
     console.error(err)

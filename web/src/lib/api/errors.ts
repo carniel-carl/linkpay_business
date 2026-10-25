@@ -75,6 +75,8 @@ const MESSAGES: Record<string, string> = {
   // Bulk transfers: nothing left in it waits for this member (other levels, or someone else just decided it).
   NOTHING_TO_DECIDE:
     "Nothing in this bulk transfer is waiting for you now. What's still waiting is for someone at another approval level, or someone else has just decided it.",
+  // Bulk transfers: what waits for this member changed since they looked (`expect`), so nothing was decided.
+  BATCH_CHANGED: "This bulk transfer changed since you opened it, so nothing was decided. Check what's waiting for you now and try again.",
   INVALID_APPROVER: "One of the approvers can no longer approve transfers. Remove them and save again.",
   DUPLICATE_APPROVER: "The same person can't be at two levels of one amount band.",
   INVALID_APPROVAL_RULE: "Two amount bands start at the same amount. Change one of them.",

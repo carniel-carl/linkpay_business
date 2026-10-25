@@ -45,7 +45,7 @@ export function WaitingBatches({ data, showBranch }: { data: TransferBatchList; 
               <p className="shrink-0 font-medium figure">{formatNaira(b.amountKobo)}</p>
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
-              <BatchDecisionButtons batchId={b._id} awaitingMe={b.awaitingMe} size="sm" />
+              <BatchDecisionButtons batchId={b._id} awaitingMe={b.awaitingMe} awaitingMeKobo={b.awaitingMeKobo} size="sm" />
             </div>
           </li>
         ))}

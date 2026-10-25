@@ -1,5 +1,7 @@
 import "server-only"
+import { headers } from "next/headers"
 import { apiFile } from "@/lib/api/client"
+import { clientIp } from "@/lib/client-ip"
 
 /** Streams a file from the backend (a KYB document, an invoice PDF), passing the session token along. */
 export async function proxyFile(path: string, download: boolean) {
@@ -10,11 +12,17 @@ export async function proxyFile(path: string, download: boolean) {
  * Streams a file anyone with the link may see (a customer's invoice PDF, the business's logo on it).
  * Never sends the visitor's session, so it shows the same thing signed in or not. Only images whose URL
  * changes with them (the logo's `?v=`) should pass a cache lifetime; invoice PDFs change when paid.
+ * Sends the visitor's address, as publicApi does, so the backend's public rate limit counts each visitor: as
+ * this server, every logo, picture and PDF would share one limit, and one busy page could use it up for everyone.
  */
 export async function proxyPublicFile(path: string, download: boolean, cacheControl = "no-store") {
+  const ip = clientIp(await headers())
   let upstream: Response
   try {
-    upstream = await fetch(`${process.env.API_URL ?? "http://localhost:4000"}${path}`, { cache: "no-store" })
+    upstream = await fetch(`${process.env.API_URL ?? "http://localhost:4000"}${path}`, {
+      cache: "no-store",
+      headers: ip ? { "X-Forwarded-For": ip } : undefined,
+    })
   } catch {
     return Response.json({ error: "File not available" }, { status: 503 })
   }

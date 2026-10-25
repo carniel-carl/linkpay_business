@@ -4,16 +4,32 @@ import { formatDate, formatDateTime, formatTime } from "@/lib/format"
 export const PIN_LENGTH = 4
 
 /**
- * 0000, 1111 … and straight runs up or down (1234, 9876, 0123): the first PINs anyone would try.
- * Mirrors isWeakPin in backend/src/services/transactionPin.ts, which refuses them with WEAK_TRANSACTION_PIN.
+ * The most common PINs the rules in isWeakPin don't already catch: pairs and mirrors (1212, 1122, 1221), keypad
+ * shapes (2580, 1379, 7890) and PINs with a meaning (1004, 6969, 5683). The same list as COMMON_PINS in
+ * backend/src/services/transactionPin.ts.
+ */
+const COMMON_PINS: ReadonlySet<string> = new Set([
+  "0101", "1010", "1212", "1313", "1414", "1515", "2121", "2323", "2525", "4545", "6969",
+  "0011", "1100", "1122", "2211",
+  "0110", "1001", "1221", "2112",
+  "0741", "0852", "0963", "1470", "2580", "3690", "1379", "1397", "7913", "9731", "1590", "3570", "2468", "7890", "0987",
+  "0007", "1004", "5683",
+])
+
+/**
+ * 0000, 1111 …, straight runs up or down (1234, 9876, 0123), years from 1950 to 2030, and COMMON_PINS: the first
+ * PINs anyone would try. Mirrors isWeakPin in backend/src/services/transactionPin.ts, which refuses them with
+ * WEAK_TRANSACTION_PIN.
  */
 export function isWeakPin(pin: string) {
   const digits = [...pin].map(Number)
   const steps = new Set(digits.slice(1).map((d, i) => d - digits[i]))
-  return steps.size === 1 && [0, 1, -1].includes([...steps][0])
+  if (steps.size === 1 && [0, 1, -1].includes([...steps][0])) return true
+  const asYear = Number(pin)
+  return (asYear >= 1950 && asYear <= 2030) || COMMON_PINS.has(pin)
 }
 
-export const WEAK_PIN_MESSAGE = "That PIN is too easy to guess. Avoid repeated digits and runs like 1234."
+export const WEAK_PIN_MESSAGE = "That PIN is too easy to guess. Avoid repeated digits, runs like 1234, years and other common PINs."
 
 /** What a covered request answers when the PIN is the problem. Any other answer is the action's own. */
 const PIN_ERRORS = new Set(["TRANSACTION_PIN_REQUIRED", "TRANSACTION_PIN_MISSING", "TRANSACTION_PIN_INVALID", "TRANSACTION_PIN_LOCKED"])

@@ -7,7 +7,7 @@ import { api } from "@/lib/api/client"
 import { messageForCode } from "@/lib/api/errors"
 import { pinHeader } from "@/lib/api/transaction-pin"
 import type { Bank, BulkPreview, BulkResolvedRow, FeeQuote, ResolvedAccount, Transfer, TransferBatch, TransferSettings } from "@/lib/api/types"
-import type { TransferBatchDecision } from "@/lib/api/types"
+import type { BatchExpectation, TransferBatchDecision } from "@/lib/api/types"
 import { BULK_CHECK_SLICE } from "@/lib/transfers"
 
 const id = z.string().regex(/^[a-f\d]{24}$/i)
@@ -161,21 +161,24 @@ export async function approveTransfer(transferId: string, text: string | undefin
 // Bulk transfers. Approving and rejecting decide only the rows waiting for the member (at a level that names
 // them or is open to anyone, not their own, no earlier level approved by them) and leave the rest for their
 // approvers: the answer says how many were `decided` and `skipped`. NOTHING_TO_DECIDE: none of it waits for them.
+// `expect` is what the member was shown waiting for them (awaitingMe, awaitingMeKobo): if that's changed since,
+// nothing is decided (BATCH_CHANGED, with what waits now as `waitingNow`).
+const expectation = z.object({ count: z.number().int().min(1), amountKobo: z.number().int().min(0) })
 
 /** Approves the rows of a bulk transfer waiting for the member, at their level. Takes the PIN. */
-export async function approveBatch(batchId: string, pin: string, text?: string) {
+export async function approveBatch(batchId: string, expect: BatchExpectation, pin: string, text?: string) {
   const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/approve`
-  const result = await runAction(() =>
-    api<TransferBatchDecision>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: pinHeader(pin) }),
-  )
+  const json = { note: note.parse(text) || undefined, expect: expectation.parse(expect) }
+  const result = await runAction(() => api<TransferBatchDecision>(path, { method: "POST", json, headers: pinHeader(pin) }))
   if (result.ok) refresh()
   return result
 }
 
 /** Rejects the rows of a bulk transfer waiting for the member. No PIN. */
-export async function rejectBatch(batchId: string, text?: string) {
+export async function rejectBatch(batchId: string, expect: BatchExpectation, text?: string) {
   const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/reject`
-  const result = await runAction(() => api<TransferBatchDecision>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
+  const json = { note: note.parse(text) || undefined, expect: expectation.parse(expect) }
+  const result = await runAction(() => api<TransferBatchDecision>(path, { method: "POST", json }))
   if (result.ok) refresh()
   return result
 }

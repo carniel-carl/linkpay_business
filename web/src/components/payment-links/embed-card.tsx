@@ -144,10 +144,18 @@ export function EmbedCard({ embed }: { embed: PaymentLinkEmbed | null }) {
             </li>
             <li>
               <span className="font-mono">currency</span> is <span className="font-mono">NGN</span> and <span className="font-mono">priceKobo</span> is the
-              order total in kobo (<span className="font-mono">paidKobo</span> is at least that)
+              order total in kobo
+            </li>
+            <li>
+              <span className="font-mono">paidKobo</span> is at least the order total. &ldquo;Paid&rdquo; on its own doesn&apos;t promise that, for
+              example on a fundraiser
             </li>
             <li>
               <span className="font-mono">clientReference</span> is your order number
+            </li>
+            <li>
+              <span className="font-mono">overLimit</span> isn&apos;t true, if you have limited stock (it means the payment came after the link&apos;s
+              payment limit)
             </li>
             <li>you haven&apos;t fulfilled that order already. Then mark it paid, so the same checkout can&apos;t be used twice.</li>
           </ul>
