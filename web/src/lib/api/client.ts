@@ -2,7 +2,7 @@ import "server-only"
 import { headers as requestHeaders } from "next/headers"
 import { unstable_rethrow } from "next/navigation"
 import { getBusinessCookie, setBusinessCookie } from "@/lib/business-context"
-import { clientIp } from "@/lib/client-ip"
+import { clientIp, forwardIpHeaders } from "@/lib/client-ip"
 import { getSessionToken } from "@/lib/session"
 import { ApiError } from "./errors"
 
@@ -35,15 +35,14 @@ async function forgetBusiness() {
 }
 
 /**
- * The visitor's address and browser, so the API's rate limits count each visitor rather than this server, and
- * its sessions list shows the browser.
+ * The visitor's address and browser for a call to `url`, so the API's rate limits count each visitor rather than
+ * this server, and its sessions list shows the browser.
  */
-async function visitorHeaders(): Promise<Record<string, string>> {
+async function visitorHeaders(url: string): Promise<Record<string, string>> {
   try {
     const incoming = await requestHeaders()
-    const ip = clientIp(incoming)
     const userAgent = incoming.get("user-agent")
-    return { ...(ip && { "X-Forwarded-For": ip }), ...(userAgent && { "User-Agent": userAgent }) }
+    return { ...forwardIpHeaders(clientIp(incoming), url), ...(userAgent && { "User-Agent": userAgent }) }
   } catch (err) {
     // Next's own signals (such as prerendering bailing out) go on up; outside a request there's nothing to forward.
     unstable_rethrow(err)
@@ -67,9 +66,10 @@ async function request<T>(
   form?: FormData,
   extra?: Record<string, string>,
 ) {
+  const url = `${API_URL}${path}`
   const headers: Record<string, string> = {
     Accept: "application/json",
-    ...(await visitorHeaders()),
+    ...(await visitorHeaders(url)),
     ...extra,
     ...headersFor(token, businessId),
   }
@@ -77,7 +77,7 @@ async function request<T>(
 
   let res: Response
   try {
-    res = await fetch(`${API_URL}${path}`, {
+    res = await fetch(url, {
       method,
       headers,
       body: form ?? (json !== undefined ? JSON.stringify(json) : undefined),

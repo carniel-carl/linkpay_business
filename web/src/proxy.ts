@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { clientIp } from "@/lib/client-ip"
+import { clientIp, forwardIpHeaders } from "@/lib/client-ip"
 import { CSP_REPORT_GROUP, CSP_REPORT_PATH, REPORTING_ENDPOINTS } from "@/lib/csp-report"
 import { safeNext } from "@/lib/safe-next"
 
@@ -104,8 +104,8 @@ const MAX_FRAMERS = 1000
  */
 async function lookUpFramers(slug: string, visitorIp: string | undefined) {
   const signal = AbortSignal.timeout(3000)
-  const ask = (ip?: string) =>
-    fetch(`${API_URL}/api/public/pay/${slug}`, { cache: "no-store", signal, headers: ip ? { "X-Forwarded-For": ip } : undefined })
+  const url = `${API_URL}/api/public/pay/${slug}`
+  const ask = (ip?: string) => fetch(url, { cache: "no-store", signal, headers: forwardIpHeaders(ip, url) })
   try {
     let res = await ask()
     if (res.status === 429 && visitorIp) res = await ask(visitorIp)
