@@ -1,4 +1,4 @@
-// Usage: bun run preflight [--liquifia]
+// Usage: bun run preflight [--liquifia] [--email] [--storage]
 //
 // Read-only checks to run before a production deploy, and again after it (docs/DEPLOY.md says when). Run it
 // from backend/ with the production environment: `bun --env-file=<production env file> scripts/preflight.ts`
@@ -10,15 +10,20 @@
 //   and it never calls syncIndexes;
 // - migrate:kyb, migrate:encryption and migrate:staff run as dry runs, through their exported functions (so not
 //   even the syncIndexes that `bun run migrate:staff` does before its dry run);
-// - it loads the modules index.ts imports, to see whether they wire an email provider, but never runs index.ts,
-//   so nothing listens, syncs or sends;
-// - --liquifia makes two GET calls, GET /me and GET /banks, as `bun run check` does.
+// - it loads the modules index.ts imports, to see which email provider and file storage they wire
+//   (src/services/providers.ts), but never runs index.ts, so nothing listens, syncs or sends;
+// - --liquifia makes two GET calls, GET /me and GET /banks, as `bun run check` does;
+// - --email calls Resend's GET /domains (no email is sent), and --storage lists at most one key in the bucket
+//   (nothing is uploaded or deleted).
 // It never prints a secret, only lengths and modes.
 import { readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import express from "express";
 import { SignJWT } from "jose";
 import mongoose, { type mongo, type Types } from "mongoose";
+// Neither reads the environment when loaded (src/services/resend.ts imports email.ts for its types only).
+import { describeS3, S3_VARS, storageSettings, type EmailSettings, type S3Settings, type StorageSettings } from "../src/config/providerSettings";
+import { RESEND_API_URL, resendErrorName } from "../src/services/resend";
 
 const BACKEND_DIR = join(import.meta.dir, "..");
 
@@ -121,16 +126,10 @@ const codeOnly = (source: string) =>
 /** Whether `source` calls `fn(` (outside comments and strings). */
 const calls = (source: string, fn: string) => new RegExp(`\\b${fn}\\s*\\(`).test(codeOnly(source));
 
-/** Files under src/ (and index.ts) that call `fn(`, other than where it's defined. Read-only. */
-function callersOf(fn: string, definedIn: string) {
-  const files = ["index.ts", ...readdirSync(join(BACKEND_DIR, "src"), { recursive: true }).map((f) => join("src", String(f)))];
-  return files.filter((f) => /\.ts$/.test(f) && f !== definedIn && calls(readFileSync(join(BACKEND_DIR, f), "utf8"), fn));
-}
-
 /** "a, b, c and 12 more": long lists (a fresh database misses every index) stay readable. */
 const listOf = (items: string[], max = 12) => (items.length > max ? `${items.slice(0, max).join(", ")} and ${items.length - max} more` : items.join(", "));
 
-/** Every environment check. Pure apart from reading the backend's own source (for setFileStorage). */
+/** Every environment check. Pure apart from reading the backend's own source (for the secrets committed in it). */
 export function checkEnv(vars: Vars): Check[] {
   const { pass, warn, fail } = check("Environment");
   const out: Check[] = [];
@@ -296,23 +295,34 @@ export function checkEnv(vars: Vars): Check[] {
   return out;
 }
 
-/** Where uploads (KYB documents, logos, link pictures) go. */
+/**
+ * Where uploads (KYB documents, logos, link pictures) go, read from the variables with the backend's own rules
+ * (src/config/providerSettings.ts), so it's reported even when the backend config doesn't load.
+ */
 export function checkFiles(vars: Vars): Check {
-  const { pass, warn } = check("Email and files");
-  const callers = callersOf("setFileStorage", join("src", "services", "storage.ts"));
-  if (callers.length) {
-    return pass("File storage", `setFileStorage() is called in ${callers.join(", ")}; migrate:kyb only removes files through it if it runs there too`);
+  const { pass, warn, fail } = check("Email and files");
+  let storage: StorageSettings;
+  try {
+    storage = storageSettings(vars);
+  } catch (err) {
+    return fail("File storage", `the backend refuses these settings: ${errorText(err)}`);
   }
+  if (storage.provider === "s3") {
+    return pass("File storage", `${describeS3(storage)}: keep public access blocked on it, since the API serves every file. --storage lists one key to confirm the keys work`);
+  }
+  const unused = S3_VARS.filter((name) => vars[name]?.trim());
+  const ignored = unused.length ? `. ${unused.join(", ")} ${unused.length === 1 ? "is" : "are"} set but unused, since STORAGE_PROVIDER isn't s3` : "";
   const dir = vars.UPLOAD_DIR;
-  if (dir && isAbsolute(dir)) return pass("File storage", `local disk at ${dir}: keep it on a persistent volume, and in the backups`);
+  if (dir && isAbsolute(dir)) return (ignored ? warn : pass)("File storage", `local disk at ${dir}: keep it on a persistent volume, and in the backups${ignored}`);
   return warn(
     "File storage",
-    `local disk at ${dir ? `"${dir}"` : '"uploads"'}, relative to where the server starts: use an absolute UPLOAD_DIR on a persistent, backed-up volume, or wire setFileStorage()`,
+    `local disk at ${dir ? `"${dir}"` : '"uploads"'}, relative to where the server starts: use an absolute UPLOAD_DIR on a persistent, backed-up volume, or STORAGE_PROVIDER=s3${ignored}`,
   );
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Email: the provider is set by whatever index.ts imports, so load those modules (never index.ts itself).
+// Email (and the file storage it's wired with): src/services/providers.ts sets them up when index.ts imports it,
+// so load those modules (never index.ts itself).
 // ---------------------------------------------------------------------------------------------------------
 
 /** Imports every module index.ts imports, in order, as starting the server would. Returns the ones that failed. */
@@ -326,27 +336,122 @@ export async function loadStartupModules() {
   return { failed, setsProviderItself: calls(source, "setEmailProvider") };
 }
 
-/** `strict`: production, or a live Liquifia key: real customers and money, so email must really go out. */
-export async function checkEmail(strict: boolean): Promise<Check[]> {
+/** Domains nobody can verify (RFC 2606 and 6761): .env.example's placeholder among them. */
+const PLACEHOLDER_DOMAIN = /(^|\.)example\.(com|net|org)$|\.(test|example|invalid|localhost)$/i;
+
+/**
+ * `strict`: production, or a live Liquifia key: real customers and money, so email must really go out. `settings`
+ * is what env.ts read (env.email, env.storage); this checks that loading index.ts's imports wires them.
+ */
+export async function checkEmail(strict: boolean, settings: { email: EmailSettings; storage: StorageSettings }): Promise<Check[]> {
   const { pass, warn, fail } = check("Email and files");
   const out: Check[] = [];
   const { failed, setsProviderItself } = await loadStartupModules();
   for (const f of failed) out.push(fail("Startup modules", `${f.path} doesn't load, so the server won't start: ${f.error}`));
 
-  const { usingConsoleEmail } = await import("../src/services/email");
+  const { emailProviderName, usingConsoleEmail } = await import("../src/services/email");
+  const { usingLocalStorage } = await import("../src/services/storage");
+  const notWired = "index.ts must import ./src/services/providers, which wires it";
+  if (settings.storage.provider === "s3" && usingLocalStorage()) {
+    out.push(fail("File storage", `STORAGE_PROVIDER=s3, but once the backend's modules load, files still go to local disk: ${notWired}`));
+  }
+
+  const { email } = settings;
   if (!usingConsoleEmail()) {
-    out.push(pass("Email provider", "a real provider is set once the backend's modules load (no test email sent)"));
+    const detail = `${emailProviderName() ?? "a real provider"}, set once the backend's modules load (no test email sent)`;
+    if (email.provider !== "resend") out.push(pass("Email provider", detail));
+    else if (PLACEHOLDER_DOMAIN.test(email.fromDomain) || email.fromDomain === "resend.dev") {
+      const domain = email.fromDomain === "resend.dev" ? "Resend's testing domain, which only delivers to the Resend account's own address" : "a placeholder nobody can verify";
+      out.push((strict ? fail : warn)("Email provider", `EMAIL_FROM is on ${email.fromDomain}, ${domain}: use an address on your own domain, verified in Resend`));
+    } else {
+      const replies = email.replyTo ? `; replies go to ${email.replyTo} unless an email names its own` : "";
+      out.push(pass("Email provider", `${detail}${replies}. --email checks the key and the domain`));
+    }
+    return out;
+  }
+  if (email.provider === "resend") {
+    out.push(fail("Email provider", `EMAIL_PROVIDER=resend, but once the backend's modules load, email still goes to the console: ${notWired}`));
     return out;
   }
   const why = setsProviderItself
     ? "index.ts calls setEmailProvider() in its own body, which preflight can't run: move the call into a module index.ts imports"
-    : "nothing calls setEmailProvider(): every email, sign-in codes and invite links included, would only be printed to the log";
+    : "EMAIL_PROVIDER isn't resend, so every email, sign-in codes and invite links included, would only be printed to the log: set EMAIL_PROVIDER=resend, with RESEND_API_KEY and EMAIL_FROM";
   out.push(
     strict
       ? fail("Email provider", `still the console provider, with NODE_ENV=production or a live Liquifia key: real customers would get no email. ${why}`)
       : warn("Email provider", `still the console provider. ${why}`),
   );
   return out;
+}
+
+type ResendDomain = { id?: string; name?: string; status?: string; region?: string; capabilities?: { sending?: string } };
+
+/**
+ * --email: Resend's GET /domains, read-only (no email is sent). Is the key accepted, and is EMAIL_FROM's domain
+ * verified? A sending-only key, the least the backend needs, can't list domains: then only the key is confirmed.
+ */
+export async function checkResend({ apiKey, fromDomain }: { apiKey: string; fromDomain: string }, baseUrl = RESEND_API_URL): Promise<Check[]> {
+  const { pass, warn, fail } = check("Email and files");
+  const domains: ResendDomain[] = [];
+  let after: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    let res: Response;
+    try {
+      const query = `limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`;
+      res = await fetch(`${baseUrl}/domains?${query}`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000) });
+    } catch (err) {
+      return [fail("Resend key", `couldn't reach Resend: ${errorText(err)}`)];
+    }
+    if (!res.ok) {
+      const name = await resendErrorName(res);
+      if (name === "restricted_api_key") {
+        return [
+          pass("Resend key", "accepted: a sending-only key, so it can send but not list domains"),
+          warn("Resend domain", `not checked, since a sending-only key can't list domains: check in Resend's dashboard that ${fromDomain} is verified`),
+        ];
+      }
+      return [fail("Resend key", `refused by GET /domains: ${res.status} ${name}`)];
+    }
+    const body = (await res.json().catch(() => null)) as { data?: unknown; has_more?: unknown } | null;
+    const data = Array.isArray(body?.data) ? (body.data as ResendDomain[]) : [];
+    domains.push(...data);
+    after = data.at(-1)?.id;
+    if (body?.has_more !== true || !after) break;
+  }
+
+  const out = [pass("Resend key", `accepted by GET /domains (${domains.length} domain(s) on the account)`)];
+  const domain = domains.find((d) => d.name?.toLowerCase() === fromDomain);
+  if (!domain) {
+    const listed = domains.length ? ` (it has ${listOf(domains.map((d) => d.name ?? "?"))})` : "";
+    out.push(fail("Resend domain", `${fromDomain}, EMAIL_FROM's domain, isn't on this Resend account${listed}: add it and its DNS records, or Resend refuses every email`));
+  } else if (domain.status !== "verified") {
+    out.push(fail("Resend domain", `${fromDomain} is "${domain.status}", not verified: Resend refuses to send from it until its DNS records check out`));
+  } else if (domain.capabilities?.sending === "disabled") {
+    out.push(fail("Resend domain", `${fromDomain} is verified, but sending is turned off for it in Resend`));
+  } else {
+    out.push(pass("Resend domain", `${fromDomain} is verified${domain.region ? ` (region ${domain.region})` : ""}`));
+  }
+  return out;
+}
+
+/** --storage: lists at most one key under S3_PREFIX, read-only (nothing is uploaded or deleted). Are the endpoint, bucket and keys right? */
+export async function checkBucket(storage: S3Settings): Promise<Check> {
+  const { pass, fail } = check("Email and files");
+  const { s3Client } = await import("../src/services/storage");
+  try {
+    const listed = await s3Client(storage).list({ maxKeys: 1, ...(storage.prefix && { prefix: storage.prefix }) });
+    const holds = (listed.contents?.length ?? 0) > 0 ? "it already holds files" : "nothing in it yet";
+    return pass("Storage bucket", `listed at most one key${storage.prefix ? ` under "${storage.prefix}"` : ""}: the endpoint, bucket and keys work; ${holds}`);
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    const hint =
+      code === "AccessDenied"
+        ? ". This check needs s3:ListBucket on the bucket; the backend needs s3:GetObject, s3:PutObject and s3:DeleteObject"
+        : code === "NoSuchBucket"
+          ? ": check S3_BUCKET, S3_REGION and S3_ENDPOINT"
+          : "";
+    return fail("Storage bucket", `couldn't list bucket "${storage.bucket}": ${typeof code === "string" ? `${code}: ` : ""}${errorText(err)}${hint}`);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -698,6 +803,13 @@ export async function checkDatabase({ requireV2 }: { requireV2: boolean }): Prom
   });
   await run("KYB documents", checkKyb);
   await run("Encrypted BVNs", () => checkBvns(requireV2));
+  await run("TOTP secrets", async () => {
+    const { plain } = await (await import("./migrate-encryption")).migrateTotpSecrets(); // the dry run: reads only
+    const refused = requireV2 ? ", which ENCRYPTION_REQUIRE_V2=1 refuses at sign-in" : "";
+    return plain
+      ? warn("TOTP secrets", `${plain} authenticator secret(s) stored in plain text${refused}: run \`bun run migrate:encryption\` (dry run), then \`--apply\``)
+      : pass("TOTP secrets", "none stored in plain text");
+  });
   await run("Staff", checkStaff);
   await run("Old indexes", checkOldIndexes);
   await run("Indexes", checkIndexes);
@@ -750,14 +862,20 @@ export function formatReport(checks: Check[]) {
   return lines.join("\n");
 }
 
-const USAGE = "Usage: bun run preflight [--liquifia]\n  --liquifia  also call Liquifia read-only (GET /me, GET /banks) to confirm the key";
+const FLAGS = ["--liquifia", "--email", "--storage"];
+const USAGE = [
+  "Usage: bun run preflight [--liquifia] [--email] [--storage]",
+  "  --liquifia  also call Liquifia read-only (GET /me, GET /banks) to confirm the key",
+  "  --email     also call Resend read-only (GET /domains): is the key accepted, is EMAIL_FROM's domain verified?",
+  "  --storage   also list at most one key in the bucket (read-only) to confirm the endpoint, bucket and keys",
+].join("\n");
 
 async function main(argv: string[]) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
     return 0;
   }
-  const unknown = argv.filter((a) => a !== "--liquifia");
+  const unknown = argv.filter((a) => !FLAGS.includes(a));
   if (unknown.length) {
     console.error(`Unknown option: ${unknown.join(" ")}\n${USAGE}`);
     return 2;
@@ -784,7 +902,14 @@ async function main(argv: string[]) {
     return 1;
   }
 
-  checks.push(...(await checkEmail(env.nodeEnv === "production" || !!vars.LIQUIFIA_SECRET_KEY?.startsWith("sk_live_"))));
+  checks.push(...(await checkEmail(env.nodeEnv === "production" || !!vars.LIQUIFIA_SECRET_KEY?.startsWith("sk_live_"), env)));
+  const { skip } = check("Email and files");
+  if (env.email.provider !== "resend") checks.push(skip("Resend key", "EMAIL_PROVIDER isn't resend: nothing to check"));
+  else if (argv.includes("--email")) checks.push(...(await checkResend(env.email)));
+  else checks.push(skip("Resend key", "not checked: add --email for a read-only GET /domains (is the key accepted, is EMAIL_FROM's domain verified?)"));
+  if (env.storage.provider !== "s3") checks.push(skip("Storage bucket", "STORAGE_PROVIDER isn't s3: nothing to check"));
+  else if (argv.includes("--storage")) checks.push(await checkBucket(env.storage));
+  else checks.push(skip("Storage bucket", "not checked: add --storage to list at most one key in the bucket (read-only)"));
 
   const connection = await connectReadOnly(vars);
   checks.push(connection);

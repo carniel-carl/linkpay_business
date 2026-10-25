@@ -5,7 +5,7 @@ import { accentPalette } from "../services/branding";
 import { balanceDue, isOverdue, payToAccount, todayInLagos } from "../services/invoices";
 import { invoiceViewed } from "../services/notificationEvents";
 import { HttpError } from "../utils/HttpError";
-import { sendLogo } from "./branding";
+import { PUBLIC_LOGO_CACHE, sendLogo } from "./branding";
 import { sendInvoicePdf } from "./invoices";
 
 type TokenParams = { token: string };
@@ -90,7 +90,9 @@ export const getPublicInvoicePdf: RequestHandler<TokenParams> = async (req, res)
   await sendInvoicePdf(res, business, invoice, req.query);
 };
 
+/** The business's logo on the invoice. A refusal (404) is never cached: see PUBLIC_LOGO_CACHE. */
 export const getPublicInvoiceLogo: RequestHandler<TokenParams> = async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const { business } = await findPublic(req.params.token);
-  await sendLogo(res, business);
+  await sendLogo(res, business, PUBLIC_LOGO_CACHE);
 };

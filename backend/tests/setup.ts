@@ -16,5 +16,12 @@ delete process.env.MONGODB_USERNAME;
 delete process.env.MONGODB_PASSWORD;
 process.env.PUSH_PROVIDER = "console"; // never Expo's push service
 delete process.env.EXPO_ACCESS_TOKEN;
+// Never Resend or a real bucket, whatever backend/.env says: console email and local files (suites that test the
+// Resend and S3 code point it at local fakes themselves). AWS_* goes too: Bun's S3 client can read it.
+process.env.EMAIL_PROVIDER = "console";
+process.env.STORAGE_PROVIDER = "local";
+for (const key of Object.keys(process.env)) {
+  if (/^(RESEND_|S3_|AWS_)/.test(key) || key === "EMAIL_FROM" || key === "EMAIL_REPLY_TO") delete process.env[key];
+}
 // Uploaded files go to a fresh temp folder per run (the OS clears it), not backend/uploads.
 process.env.UPLOAD_DIR = mkdtempSync(join(tmpdir(), "linkpay-test-uploads-"));

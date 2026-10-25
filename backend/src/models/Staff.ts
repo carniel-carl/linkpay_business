@@ -16,17 +16,26 @@ const staffSchema = new Schema(
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true, select: false },
+    // The last password change. A sign-in challenge issued before it can't be finished (services/staffAuth.ts).
+    // Absent until the first change.
+    passwordChangedAt: Date,
     role: { type: String, enum: STAFF_ROLES, required: true },
     status: { type: String, enum: STAFF_STATUSES, default: "active" },
     invitedBy: { type: Types.ObjectId, ref: "Staff" },
     lastSignInAt: Date,
     twoFactor: {
       method: { type: String, enum: STAFF_TWO_FACTOR_METHODS, default: "email" },
+      // Both secrets are encrypted, bound to this staff member and field (services/totp.ts). Ones saved before that
+      // are plain base32 until `bun run migrate:encryption --apply` encrypts them.
       totpSecret: { type: String, select: false },
       // Holds the secret between /2fa/totp/setup and /2fa/totp/enable.
       pendingTotpSecret: { type: String, select: false },
       // The 30-second step of the last authenticator code accepted. That step and earlier ones aren't accepted again.
       totpLastStep: { type: Number, select: false },
+      // Keyed hashes of the recovery codes not used yet (services/recoveryCodes.ts), only while the method is "totp",
+      // and how many there are. Every update that changes one changes the other with it.
+      recoveryCodes: { type: [String], select: false, default: undefined },
+      recoveryCodesLeft: { type: Number, default: 0 },
     },
   },
   {
@@ -34,11 +43,13 @@ const staffSchema = new Schema(
     toJSON: {
       transform: (_doc, ret: Record<string, any>) => {
         delete ret.password;
+        delete ret.passwordChangedAt;
         delete ret.__v;
         if (ret.twoFactor) {
           delete ret.twoFactor.totpSecret;
           delete ret.twoFactor.pendingTotpSecret;
           delete ret.twoFactor.totpLastStep;
+          delete ret.twoFactor.recoveryCodes;
         }
         return ret;
       },

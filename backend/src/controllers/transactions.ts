@@ -14,7 +14,8 @@ type IdParams = { id: string };
 const SYNC_MAX_AGE_MS = 30_000;
 const SYNC_WAIT_MS = 3_000;
 
-async function freshen() {
+/** Pulls new payments from Liquifia first if the last sync is older than 30 s, waiting at most 3 s for it. */
+export async function freshen() {
   await Promise.race([syncIfStale(SYNC_MAX_AGE_MS).catch(() => {}), new Promise((r) => setTimeout(r, SYNC_WAIT_MS))]);
 }
 

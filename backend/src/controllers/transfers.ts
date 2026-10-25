@@ -800,22 +800,40 @@ export const getBatch: RequestHandler<IdParams> = async (req, res) => {
 };
 
 const batchDecision = note.extend({
-  // What the member was shown: the batch's `awaitingMe` and `awaitingMeKobo`. When it's sent and the rows they can
-  // decide now differ, nothing is decided (409 BATCH_CHANGED with the count and total now).
+  // What the member was shown: the batch's `awaitingMe` and `awaitingMeKobo`. If the rows they can decide now
+  // differ, nothing is decided (409 BATCH_CHANGED with the count and total now). Required (batchDecisionOf).
   expect: z.object({ count: z.number().int().min(0), amountKobo: z.number().int().min(0) }).strict().optional(),
 });
 
 /**
+ * A batch decision's body. `expect` is required: without it the request is refused here, before the batch is
+ * read, with 400 EXPECT_REQUIRED (a malformed one is the usual 400 "Validation failed"). So the state errors
+ * (TRANSFER_NOT_PENDING, CANNOT_APPROVE_OWN, NOTHING_TO_DECIDE, then BATCH_CHANGED) are only ever answered to a
+ * request that says what it was shown. The PIN guard on approve runs before this.
+ */
+function batchDecisionOf(body: unknown) {
+  const { note: text, expect } = batchDecision.parse(body ?? {});
+  if (!expect) {
+    throw new HttpError(
+      400,
+      "Send expect with the count and total you were shown waiting for you (awaitingMe and awaitingMeKobo), so only those are decided.",
+      "EXPECT_REQUIRED",
+    );
+  }
+  return { note: text, expect };
+}
+
+/**
  * Approves or rejects the rows waiting for the signed-in member and leaves the rest. Answers with the batch plus
  * `decided` (rows this request approved a level of, or rejected) and `skipped` (rows that were waiting but
- * weren't decided here: other levels or approvers, or decided by someone else at the same moment). With
- * `expect: { count, amountKobo }`, only if the rows waiting for the member are still exactly those
- * (decideBatchTransfers); without it, whatever waits for them now, as before.
+ * weren't decided here: other levels or approvers, or decided by someone else at the same moment). Only if the
+ * rows waiting for the member are still exactly the `expect: { count, amountKobo }` they were shown
+ * (decideBatchTransfers).
  */
 const decideBatch =
   (decision: "approve" | "reject"): RequestHandler<IdParams> =>
   async (req, res) => {
-    const { note: text, expect } = batchDecision.parse(req.body ?? {});
+    const { note: text, expect } = batchDecisionOf(req.body);
     const { batch, transfers } = await findBatch(req, req.params.id);
     const { decided, skipped } = await decideBatchTransfers({ transfers, membership: req.membership!, userId: req.userId!, decision, note: text, expect });
     const batchNow = await serializeBatch(req, batch, await TransferModel.find({ batch: batch._id }).sort({ _id: 1 }));

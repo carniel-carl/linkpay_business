@@ -6,6 +6,7 @@ import { staffPermissionsOf } from "../config/staffPermissions";
 import type { StaffDocument } from "../models/Staff";
 import { StaffSessionModel } from "../models/StaffSession";
 import { HttpError } from "../utils/HttpError";
+import { passwordStamp } from "./tokens";
 
 // Staff tokens use their own secret and token types, so a business token never verifies here and
 // a staff token never verifies in requireAuth.
@@ -18,7 +19,7 @@ const TOUCH_INTERVAL_MS = 60 * 1000;
 
 const key = () => new TextEncoder().encode(env.staffJwtSecret);
 
-function sign(staffId: string, typ: StaffTokenType, expiresAt: Date | string, claims: Record<string, string> = {}) {
+function sign(staffId: string, typ: StaffTokenType, expiresAt: Date | string, claims: Record<string, string | number> = {}) {
   return new SignJWT({ typ, ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(staffId)
@@ -39,15 +40,17 @@ async function verify(token: string, typ: StaffTokenType) {
 
 /**
  * Short-lived token proving the password step passed; exchanged for an access token after the second step.
- * Its `jti` is what wrong authenticator codes are counted against.
+ * Its `jti` is what wrong authenticator codes are counted against. `pwd` is the staff member's password stamp as
+ * the first step loaded it (services/tokens.ts): once the password changes, the challenge can't be finished.
  */
-export const signStaffChallengeToken = (staffId: string) =>
-  sign(staffId, "staff_2fa_challenge", "10m", { jti: crypto.randomUUID() });
+export const signStaffChallengeToken = (staffId: string, passwordChangedAt?: Date | null) =>
+  sign(staffId, "staff_2fa_challenge", "10m", { jti: crypto.randomUUID(), pwd: passwordStamp(passwordChangedAt) });
 
+/** The staff id, the challenge's id and its password stamp (0 for a token from before stamps). */
 export async function verifyStaffChallengeToken(token: string) {
   const payload = await verify(token, "staff_2fa_challenge");
   if (typeof payload.jti !== "string") throw new HttpError(401, "Invalid or expired staff token", "INVALID_STAFF_TOKEN");
-  return { staffId: payload.sub!, challengeId: payload.jti };
+  return { staffId: payload.sub!, challengeId: payload.jti, passwordStamp: typeof payload.pwd === "number" ? payload.pwd : 0 };
 }
 
 export async function verifyStaffAccessToken(token: string) {
@@ -69,7 +72,11 @@ export function serializeStaff(staff: StaffDocument) {
     role: staff.role,
     permissions: staffPermissionsOf(staff.role),
     status: staff.status,
-    twoFactor: { method: staff.twoFactor?.method ?? "email" },
+    twoFactor: {
+      method: staff.twoFactor?.method ?? "email",
+      // Recovery codes only stand in for the authenticator app.
+      recoveryCodesLeft: staff.twoFactor?.method === "totp" ? (staff.twoFactor.recoveryCodesLeft ?? 0) : 0,
+    },
     lastSignInAt: staff.lastSignInAt ?? null,
     createdAt: staff.createdAt,
   };

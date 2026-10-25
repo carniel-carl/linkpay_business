@@ -1,5 +1,6 @@
 // Bun loads .env automatically.
 import { SignJWT } from "jose";
+import { emailSettings, storageSettings } from "./providerSettings";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -174,6 +175,13 @@ export const env = {
   // (bound to no record) are then refused instead of read, so one copied in from elsewhere can't be used.
   encryptionRequireV2: process.env.ENCRYPTION_REQUIRE_V2 === "1",
   uploadDir: process.env.UPLOAD_DIR ?? "uploads",
+  // EMAIL_PROVIDER: "console" (the default) prints every email to the log, which index.ts refuses in production or
+  // with a live key; "resend" sends through Resend (RESEND_API_KEY, EMAIL_FROM, optional EMAIL_REPLY_TO).
+  email: emailSettings(process.env),
+  // STORAGE_PROVIDER: "local" (the default) keeps uploads in uploadDir; "s3" in a private S3-compatible bucket
+  // (S3_BUCKET, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, optional S3_ENDPOINT and S3_PREFIX).
+  // Both are wired by src/services/providers.ts; the rules are in ./providerSettings.ts.
+  storage: storageSettings(process.env),
   liquifia: {
     baseUrl: process.env.LIQUIFIA_BASE_URL ?? "https://fiat-api.pouchfinance.xyz/api/v1",
     // Server-side secret key (sk_live_ / sk_test_). Never expose it to web or mobile clients.

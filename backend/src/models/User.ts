@@ -27,11 +27,17 @@ const userSchema = new Schema(
     twoFactor: {
       enabled: { type: Boolean, default: false },
       method: { type: String, enum: ["totp", "email", null], default: null },
+      // Both secrets are encrypted, bound to this account and field (services/totp.ts). Ones saved before that are
+      // plain base32 until `bun run migrate:encryption --apply` encrypts them.
       totpSecret: { type: String, select: false },
       // Holds the secret between /2fa/totp/setup and /2fa/totp/enable.
       pendingTotpSecret: { type: String, select: false },
       // The 30-second step of the last authenticator code accepted. That step and earlier ones aren't accepted again.
       totpLastStep: { type: Number, select: false },
+      // Keyed hashes of the recovery codes not used yet (services/recoveryCodes.ts), only while the method is "totp",
+      // and how many there are. Every update that changes one changes the other with it.
+      recoveryCodes: { type: [String], select: false, default: undefined },
+      recoveryCodesLeft: { type: Number, default: 0 },
     },
   },
   {
@@ -49,6 +55,10 @@ const userSchema = new Schema(
           delete ret.twoFactor.totpSecret;
           delete ret.twoFactor.pendingTotpSecret;
           delete ret.twoFactor.totpLastStep;
+          delete ret.twoFactor.recoveryCodes;
+          // Recovery codes only stand in for the authenticator app.
+          const totp = ret.twoFactor.enabled && ret.twoFactor.method === "totp";
+          ret.twoFactor.recoveryCodesLeft = totp ? (ret.twoFactor.recoveryCodesLeft ?? 0) : 0;
         }
         return ret;
       },

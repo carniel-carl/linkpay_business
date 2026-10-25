@@ -219,7 +219,8 @@ const COVERED: Covered[] = [
         },
       });
       expect(pending.status).toBe(201);
-      return { path: `/api/transfers/batches/${pending.body.batch._id}/approve`, body: {} };
+      // What the owner is shown waiting for them: both rows.
+      return { path: `/api/transfers/batches/${pending.body.batch._id}/approve`, body: { expect: { count: 2, amountKobo: 20_000 } } };
     },
   },
   // (c) Savings: locking money away, and taking it out of a pocket.

@@ -1,17 +1,19 @@
 // scripts/preflight.ts: the environment checks in a subprocess with only the variables given (as the boot guards
 // are tested in hardening.test.ts), the database checks on the in-memory MongoDB, and proof that nothing is
-// written. Liquifia is only ever a stub on 127.0.0.1, or an .invalid host that never resolves and isn't called.
+// written. Liquifia is only ever a stub on 127.0.0.1, or an .invalid host that never resolves and isn't called;
+// Resend and the S3 bucket are stand-ins on 127.0.0.1 too.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createCipheriv, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import mongoose, { Types } from "mongoose";
-import { analyseIndexes, checkDatabase, checkEnv, loadModels, repoSecrets, type Check } from "../scripts/preflight";
+import { analyseIndexes, checkDatabase, checkEnv, checkFiles, checkResend, loadModels, repoSecrets, type Check } from "../scripts/preflight";
 import { bvnContext } from "../src/models/Business";
 import { KybDocumentModel } from "../src/models/KybDocument";
 import { StaffModel } from "../src/models/Staff";
 import { encrypt } from "../src/utils/crypto";
+import { FAKE_S3_KEYS, serveStandIn, startFakeS3, type FakeS3 } from "./fakeS3";
 import { startTestEnv, type TestEnv } from "./helpers";
 
 const BACKEND = join(import.meta.dir, "..");
@@ -226,8 +228,7 @@ describe("environment (subprocess with explicit env)", () => {
     expect(r.line("TRUST_PROXY").status).toBe("FAIL");
     expect(r.all("Startup modules").some((l) => l.detail.includes("./src/app") && l.detail.includes("TRUST_PROXY"))).toBe(true);
     has(r.line("Email provider"), "FAIL", "console provider");
-    // index.ts names setEmailProvider() only in its error message, which isn't a call.
-    expect(r.line("Email provider").detail).toContain("nothing calls setEmailProvider()");
+    expect(r.line("Email provider").detail).toContain("EMAIL_PROVIDER isn't resend");
   });
 
   test("repo secrets and bad formats FAIL, whether or not the backend config would also refuse them", async () => {
@@ -297,6 +298,166 @@ describe("environment (subprocess with explicit env)", () => {
     expect(detailOf(checkEnv(production({ MONGODB_URI: "mongodb+srv://u:secret-password@cluster0.example.net/db" })), "MONGODB_URI")).toBe(
       "mongodb+srv://cluster0.example.net",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+
+const RESEND_KEY = `re_preflight_${randomBytes(12).toString("hex")}`;
+const FROM = "LinkPay Business <no-reply@mail.linkpay.ng>";
+const RESEND_VARS = { EMAIL_PROVIDER: "resend", RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: FROM, EMAIL_REPLY_TO: "support@linkpay.ng" };
+const s3Vars = (bucket: FakeS3) => ({
+  STORAGE_PROVIDER: "s3",
+  S3_BUCKET: bucket.bucket,
+  S3_REGION: "auto",
+  S3_ENDPOINT: bucket.url, // plain http, but to this machine: allowed in production
+  S3_ACCESS_KEY_ID: FAKE_S3_KEYS.accessKeyId,
+  S3_SECRET_ACCESS_KEY: FAKE_S3_KEYS.secretAccessKey,
+  S3_PREFIX: "production",
+});
+
+describe("email and files", () => {
+  test("Resend and a bucket, wired by index.ts's imports: named, no secret printed, and nothing called without --email or --storage", async () => {
+    const bucket = startFakeS3({ bucket: "linkpay-files" });
+    try {
+      // No preload: src/services/providers.ts, which index.ts imports, does the wiring.
+      const r = await preflight(production({ ...RESEND_VARS, ...s3Vars(bucket) }));
+      expect(r.code).toBe(0);
+      has(r.line("Email provider"), "PASS", `Resend, from ${FROM}, set once the backend's modules load (no test email sent); replies go to support@linkpay.ng`);
+      has(r.line("File storage"), "PASS", `S3 bucket "linkpay-files" at endpoint ${bucket.url} (region auto, prefix "production/")`);
+      has(r.line("Resend key"), "SKIP", "add --email");
+      has(r.line("Storage bucket"), "SKIP", "add --storage");
+      expect(bucket.requests).toEqual([]);
+      for (const value of [RESEND_KEY, FAKE_S3_KEYS.secretAccessKey]) expect(r.output).not.toContain(value);
+
+      // Console email and local disk: nothing to check remotely, whatever the flags.
+      const plain = await preflight(production(), { args: ["--email", "--storage"], emailProvider: true });
+      has(plain.line("Resend key"), "SKIP", "EMAIL_PROVIDER isn't resend");
+      has(plain.line("Storage bucket"), "SKIP", "STORAGE_PROVIDER isn't s3");
+    } finally {
+      bucket.stop();
+    }
+  });
+
+  test("from addresses nobody can verify FAIL in production, and settings the backend refuses stop the rest", async () => {
+    for (const [EMAIL_FROM, text] of [
+      ["LinkPay <no-reply@mail.example.com>", "a placeholder nobody can verify"],
+      ["no-reply@linkpay.test", "a placeholder nobody can verify"],
+      ["onboarding@resend.dev", "Resend's testing domain"],
+    ] as const) {
+      const r = await preflight(production({ ...RESEND_VARS, EMAIL_FROM }));
+      expect(r.code).toBe(1);
+      has(r.line("Email provider"), "FAIL", text);
+    }
+
+    const refused = await preflight(production({ EMAIL_PROVIDER: "smtp", STORAGE_PROVIDER: "s3" }));
+    expect(refused.code).toBe(1);
+    has(refused.line("Backend config"), "FAIL", 'EMAIL_PROVIDER must be console or resend, not "smtp"');
+    has(refused.line("File storage"), "FAIL", "STORAGE_PROVIDER=s3 needs S3_BUCKET");
+    has(refused.line("Email provider"), "SKIP", "not checked until the backend config loads");
+  });
+
+  test("File storage from the variables, rule by rule", () => {
+    const files = (vars: Record<string, string | undefined>) => checkFiles(production(vars));
+    has(files({}), "PASS", "local disk at /var/lib/linkpay/uploads: keep it on a persistent volume");
+    has(files({ UPLOAD_DIR: "uploads" }), "WARN", "relative to where the server starts");
+    has(files({ UPLOAD_DIR: undefined }), "WARN", 'local disk at "uploads"');
+    has(files({ S3_BUCKET: "linkpay-files", S3_REGION: "auto" }), "WARN", "S3_BUCKET, S3_REGION are set but unused, since STORAGE_PROVIDER isn't s3");
+    has(files({ STORAGE_PROVIDER: "gcs" }), "FAIL", 'STORAGE_PROVIDER must be local or s3, not "gcs"');
+    has(files({ STORAGE_PROVIDER: "s3", S3_BUCKET: "linkpay-files" }), "FAIL", "missing: S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY");
+    const aws = { STORAGE_PROVIDER: "s3", S3_BUCKET: "linkpay-files", S3_REGION: "eu-west-2", S3_ACCESS_KEY_ID: "AKIA1", S3_SECRET_ACCESS_KEY: "s3-secret-for-rules" };
+    has(files(aws), "PASS", `S3 bucket "linkpay-files" at AWS's endpoint for eu-west-2 (no prefix)`);
+    has(files({ ...aws, S3_ENDPOINT: "http://minio.internal:9000" }), "FAIL", "plain http with NODE_ENV=production");
+    has(files({ ...aws, S3_ENDPOINT: "https://acc.r2.cloudflarestorage.com/linkpay-files" }), "FAIL", "the bucket goes in S3_BUCKET");
+    expect(JSON.stringify([files(aws), files({ ...aws, S3_BUCKET: "Bad Bucket" })])).not.toContain("s3-secret-for-rules");
+  });
+
+  test("--storage lists at most one key and writes nothing; wrong keys, a missing bucket or a key that can't list FAIL", async () => {
+    const bucket = startFakeS3({ bucket: "linkpay-files" });
+    const denied = startFakeS3({ bucket: "linkpay-files", denyList: true });
+    try {
+      bucket.objects.set("production/kyb/biz_1/doc.pdf", new TextEncoder().encode("%PDF"));
+      const opts = { args: ["--storage"], emailProvider: true };
+      const r = await preflight(production(s3Vars(bucket)), opts);
+      has(r.line("Storage bucket"), "PASS", 'listed at most one key under "production/": the endpoint, bucket and keys work; it already holds files');
+      expect(bucket.requests).toHaveLength(1);
+      expect(bucket.requests[0]).toMatchObject({ method: "GET", path: "/linkpay-files/" });
+      expect(bucket.requests[0]!.query).toContain("list-type=2");
+      expect(bucket.requests[0]!.query).toContain("max-keys=1");
+      expect(bucket.requests[0]!.query).toContain("prefix=production%2F");
+
+      const wrongKey = await preflight(production({ ...s3Vars(bucket), S3_ACCESS_KEY_ID: "AKIAWRONG" }), opts);
+      expect(wrongKey.code).toBe(1);
+      has(wrongKey.line("Storage bucket"), "FAIL", 'couldn\'t list bucket "linkpay-files": InvalidAccessKeyId');
+      const noBucket = await preflight(production({ ...s3Vars(bucket), S3_BUCKET: "no-such-bucket" }), opts);
+      has(noBucket.line("Storage bucket"), "FAIL", "NoSuchBucket");
+      expect(noBucket.line("Storage bucket").detail).toContain("check S3_BUCKET, S3_REGION and S3_ENDPOINT");
+      const cantList = await preflight(production(s3Vars(denied)), opts);
+      has(cantList.line("Storage bucket"), "FAIL", "AccessDenied");
+      expect(cantList.line("Storage bucket").detail).toContain("needs s3:ListBucket");
+
+      expect([...bucket.requests, ...denied.requests].every((q) => q.method === "GET")).toBe(true);
+      expect([...bucket.objects.keys()]).toEqual(["production/kyb/biz_1/doc.pdf"]);
+      for (const out of [r, wrongKey, noBucket, cantList]) expect(out.output).not.toContain(FAKE_S3_KEYS.secretAccessKey);
+    } finally {
+      bucket.stop();
+      denied.stop();
+    }
+  });
+
+  test("--email (in process, against a stand-in Resend): is the key accepted, and is EMAIL_FROM's domain verified?", async () => {
+    let answer: (url: URL) => Response = () => new Response(null, { status: 500 });
+    const requests: { method: string; path: string; query: string; auth: string | null }[] = [];
+    const server = serveStandIn({
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push({ method: req.method, path: url.pathname, query: url.search, auth: req.headers.get("authorization") });
+        return answer(url);
+      },
+    });
+    const url = `http://127.0.0.1:${server.port}`;
+    const domain = (name: string, status = "verified", extra: Record<string, unknown> = {}) => ({ id: `d_${name}`, name, status, region: "eu-west-1", ...extra });
+    const list = (data: unknown[], has_more = false) => Response.json({ object: "list", has_more, data });
+    const error = (status: number, name: string) => Response.json({ statusCode: status, name, message: `about ${RESEND_KEY}` }, { status });
+    const run = async (reply: (url: URL) => Response) => {
+      answer = reply;
+      const checks = await checkResend({ apiKey: RESEND_KEY, fromDomain: "mail.linkpay.ng" }, url);
+      expect(JSON.stringify(checks)).not.toContain(RESEND_KEY);
+      return checks;
+    };
+    try {
+      let checks = await run(() => list([domain("linkpay.ng"), domain("mail.linkpay.ng")]));
+      has(checks.find((c) => c.name === "Resend key"), "PASS", "accepted by GET /domains (2 domain(s) on the account)");
+      has(checks.find((c) => c.name === "Resend domain"), "PASS", "mail.linkpay.ng is verified (region eu-west-1)");
+      expect(requests[0]).toEqual({ method: "GET", path: "/domains", query: "?limit=100", auth: `Bearer ${RESEND_KEY}` });
+
+      checks = await run(() => list([domain("mail.linkpay.ng", "pending")]));
+      has(checks.find((c) => c.name === "Resend domain"), "FAIL", 'mail.linkpay.ng is "pending", not verified');
+      checks = await run(() => list([domain("linkpay.ng"), domain("other.ng")]));
+      has(checks.find((c) => c.name === "Resend domain"), "FAIL", "isn't on this Resend account (it has linkpay.ng, other.ng)");
+      checks = await run(() => list([domain("mail.linkpay.ng", "verified", { capabilities: { sending: "disabled", receiving: "disabled" } })]));
+      has(checks.find((c) => c.name === "Resend domain"), "FAIL", "sending is turned off");
+
+      // More than one page: followed with `after`.
+      requests.length = 0;
+      checks = await run((u) => (u.searchParams.get("after") === "d_other.ng" ? list([domain("mail.linkpay.ng")]) : list([domain("other.ng")], true)));
+      has(checks.find((c) => c.name === "Resend domain"), "PASS", "is verified");
+      expect(requests.map((q) => q.query)).toEqual(["?limit=100", "?limit=100&after=d_other.ng"]);
+
+      // A sending-only key can't list domains; Resend still had to recognise it to say so.
+      checks = await run(() => error(401, "restricted_api_key"));
+      has(checks.find((c) => c.name === "Resend key"), "PASS", "a sending-only key");
+      has(checks.find((c) => c.name === "Resend domain"), "WARN", "check in Resend's dashboard that mail.linkpay.ng is verified");
+
+      checks = await run(() => error(403, "invalid_api_key"));
+      expect(checks).toEqual([{ section: "Email and files", status: "FAIL", name: "Resend key", detail: "refused by GET /domains: 403 invalid_api_key" }]);
+      expect(requests.every((q) => q.method === "GET" && q.path === "/domains")).toBe(true);
+
+      const unreachable = await checkResend({ apiKey: RESEND_KEY, fromDomain: "mail.linkpay.ng" }, "http://127.0.0.1:1");
+      has(unreachable[0], "FAIL", "couldn't reach Resend");
+    } finally {
+      server.stop(true);
+    }
   });
 });
 

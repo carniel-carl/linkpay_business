@@ -93,8 +93,16 @@ async function serialize(lists: PayoutListDocument[], withItems = false) {
         items: l.items.map((i) => {
           const ben = beneficiaries.find((x) => x._id.equals(i.beneficiary));
           return {
+            // The account with its bank's uuid, as a run's request hash sees a row: the apps key a run by it.
             beneficiary: ben
-              ? { _id: ben.id, accountName: ben.accountName, nickname: ben.nickname ?? null, accountNumber: ben.accountNumber, bankName: ben.bankName ?? null }
+              ? {
+                  _id: ben.id,
+                  accountName: ben.accountName,
+                  nickname: ben.nickname ?? null,
+                  accountNumber: ben.accountNumber,
+                  bankName: ben.bankName ?? null,
+                  bankUuid: ben.bankUuid,
+                }
               : null,
             amountKobo: i.amountKobo,
             narration: i.narration ?? null,

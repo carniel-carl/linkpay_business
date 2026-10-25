@@ -5,13 +5,18 @@ import { BiometricKeyModel } from "../models/BiometricKey";
 import { SessionModel } from "../models/Session";
 import { UserModel } from "../models/User";
 import { HttpError } from "../utils/HttpError";
-import { revokeBiometricKeys, signInResponse, type DeviceInfo } from "./sessions";
+import { isSessionActive, revokeBiometricKeys, signInResponse, type DeviceInfo } from "./sessions";
 
 // Biometric sign-in for the mobile app. Turning it on inside a signed-in device session issues a random
 // secret that the phone keeps behind Face ID or a fingerprint. Presenting it later opens a new session
 // for that installation without the password. The key was made inside a session that already passed
 // any 2FA, and using it needs both this phone and its owner's enrolled biometrics, so no second step
-// is asked for. Remote sign-out, "sign out other devices" and refresh-token reuse all end it.
+// is asked for. Remote sign-out, "sign out other devices", a password change or reset, and refresh-token
+// reuse all end it.
+//
+// Ending keys races with making and using them, so both check again afterwards: a key made in a session that was
+// ended meanwhile is ended too, and a sign-in whose key was ended meanwhile closes the session it opened. Ending
+// keys before sessions (services/sessions.ts) is what makes the second check enough.
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -41,6 +46,12 @@ export async function createBiometricKey(userId: string, sessionId: string | und
     expiresAt: new Date(Math.min(now + env.biometricIdleDays * DAY, absoluteExpiresAt.getTime())),
     absoluteExpiresAt,
   });
+  // A password reset or "sign out everywhere" may have ended this session while the key was being made, after it
+  // ended the keys: then the key goes too, before its secret is ever handed out.
+  if (!(await isSessionActive(sessionId!, userId))) {
+    await BiometricKeyModel.updateOne({ _id: key._id, revokedAt: null }, { revokedAt: new Date(), revokedReason: "signed_out_everywhere" });
+    throw new HttpError(401, "This session has been signed out.", "SESSION_REVOKED");
+  }
   return { secret, expiresAt: key.absoluteExpiresAt };
 }
 
@@ -59,10 +70,22 @@ export async function signInWithBiometricKey(req: Request, secret: string, devic
   const user = await UserModel.findById(key.user);
   if (!user?.emailVerified) throw invalidKey();
 
-  key.set({
-    lastUsedAt: new Date(now),
-    expiresAt: new Date(Math.min(now + env.biometricIdleDays * DAY, key.absoluteExpiresAt.getTime())),
-  });
-  await key.save();
-  return signInResponse(req, user, { ...device, installationId: key.installationId });
+  // Only while the key is still live: one ended since it was read above isn't used.
+  const used = await BiometricKeyModel.updateOne(
+    { _id: key._id, revokedAt: null },
+    { lastUsedAt: new Date(now), expiresAt: new Date(Math.min(now + env.biometricIdleDays * DAY, key.absoluteExpiresAt.getTime())) },
+  );
+  if (!used.matchedCount) throw invalidKey();
+
+  const signedIn = await signInResponse(req, user, { ...device, installationId: key.installationId });
+  // A password reset, a change made elsewhere or "sign out everywhere" ends keys first and sessions after
+  // (services/sessions.ts). If one ended the sessions before this one was opened, it had ended this key before
+  // that: so a key still live now means this session was open in time to be ended with the others.
+  if (!(await BiometricKeyModel.exists({ _id: key._id, revokedAt: null }))) {
+    if ("sessionId" in signedIn) {
+      await SessionModel.updateOne({ _id: signedIn.sessionId, revokedAt: null }, { revokedAt: new Date(), revokedReason: "signed_out_everywhere" });
+    }
+    throw invalidKey();
+  }
+  return signedIn;
 }

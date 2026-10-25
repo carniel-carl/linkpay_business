@@ -6,7 +6,7 @@ type TokenType = "access" | "2fa_challenge";
 
 const key = new TextEncoder().encode(env.jwtSecret);
 
-function sign(userId: string, typ: TokenType, expiresIn: string | Date, claims: Record<string, string> = {}) {
+function sign(userId: string, typ: TokenType, expiresIn: string | Date, claims: Record<string, string | number> = {}) {
   return new SignJWT({ typ, ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
@@ -29,11 +29,16 @@ export async function signAccessToken(
   return sign(userId, "access", expiresIn, { sid: sessionId });
 }
 
+/** An account's password stamp for a challenge token: its last password change in ms, or 0 if it never changed. */
+export const passwordStamp = (passwordChangedAt?: Date | null) => passwordChangedAt?.getTime() ?? 0;
+
 /**
  * Short-lived token proving the password (or email OTP) step passed; exchanged for an access token after 2FA.
- * Its `jti` is what wrong authenticator codes are counted against.
+ * Its `jti` is what wrong authenticator codes are counted against. `pwd` is the password stamp of the account as
+ * the first step loaded it: once the password is changed or reset, the challenge can't be finished.
  */
-export const signChallengeToken = (userId: string) => sign(userId, "2fa_challenge", "10m", { jti: crypto.randomUUID() });
+export const signChallengeToken = (userId: string, passwordChangedAt?: Date | null) =>
+  sign(userId, "2fa_challenge", "10m", { jti: crypto.randomUUID(), pwd: passwordStamp(passwordChangedAt) });
 
 const invalidToken = () => new HttpError(401, "Invalid or expired token", "INVALID_TOKEN");
 
@@ -52,11 +57,14 @@ export async function verifyToken(token: string, typ: TokenType): Promise<string
   return (await verify(token, typ)).sub!;
 }
 
-/** Returns the user id and the challenge's id. */
-export async function verifyChallengeToken(token: string): Promise<{ userId: string; challengeId: string }> {
+/**
+ * Returns the user id, the challenge's id and its password stamp. A token from before stamps (no `pwd`) has 0, so
+ * it's only good for an account whose password never changed.
+ */
+export async function verifyChallengeToken(token: string): Promise<{ userId: string; challengeId: string; passwordStamp: number }> {
   const payload = await verify(token, "2fa_challenge");
   if (typeof payload.jti !== "string") throw invalidToken();
-  return { userId: payload.sub!, challengeId: payload.jti };
+  return { userId: payload.sub!, challengeId: payload.jti, passwordStamp: typeof payload.pwd === "number" ? payload.pwd : 0 };
 }
 
 /**

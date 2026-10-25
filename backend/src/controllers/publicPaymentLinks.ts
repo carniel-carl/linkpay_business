@@ -13,7 +13,7 @@ import { describePublicImage, linkImages, sendLinkImage } from "../services/paym
 import { syncIfStale } from "../services/transactions";
 import { serveLinkStream } from "../services/linkStream";
 import { HttpError } from "../utils/HttpError";
-import { sendLogo } from "./branding";
+import { PUBLIC_LOGO_CACHE, sendLogo } from "./branding";
 
 type SlugParams = { slug: string };
 type TokenParams = { token: string };
@@ -403,20 +403,37 @@ export const simulatePublicCheckout: RequestHandler<TokenParams> = async (req, r
   res.setHeader("Cache-Control", "private, no-store").json(await describeCheckout(settled, link, business));
 };
 
-/** The business's logo next to the link's page (and in its emails); not once the link is taken down. */
+/**
+ * The business's logo next to the link's page (and in its emails); not once the link is taken down. A refusal
+ * (404) is never cached, and a CDN keeps the logo only minutes (PUBLIC_LOGO_CACHE).
+ */
 export const getPublicPaymentLinkLogo: RequestHandler<SlugParams> = async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const { link, business } = await findPublicLink(req.params.slug);
   if (isTakenDown(link)) throw new HttpError(404, "No logo", "LOGO_NOT_FOUND");
-  await sendLogo(res, business);
+  await sendLogo(res, business, PUBLIC_LOGO_CACHE);
 };
 
-/** One of the link's pictures. Only pictures attached to this link; never the uploaded file; none once it's taken down. */
+/**
+ * How long a link's public picture may be kept. URLs carry ?v= and a picture never changes under its URL, so a
+ * browser keeps it a week. A shared cache (a CDN in front of the web or the API) keeps it 5 minutes and then
+ * asks again (Express's ETag makes that a 304 while nothing changed), so once a link is taken down, or its
+ * business suspended, no cache serves its pictures for more than about 5 minutes. Not `immutable`, and no
+ * stale-while-revalidate: nothing should treat a picture as fresh past that. The web's /pay/:slug/images
+ * route sends the same.
+ */
+export const PUBLIC_LINK_IMAGE_CACHE = "public, max-age=604800, s-maxage=300";
+
+/**
+ * One of the link's pictures. Only pictures attached to this link; never the uploaded file; none once it's taken
+ * down. A refusal (404) is never cached, so a picture comes back as soon as a link is restored.
+ */
 export const getPublicPaymentLinkImage: RequestHandler<SlugParams & { imageId: string }> = async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const { link } = await findPublicLink(req.params.slug);
   const notFound = new HttpError(404, "Picture not found", "IMAGE_NOT_FOUND");
   if (!/^[a-f0-9]{24}$/.test(req.params.imageId) || isTakenDown(link)) throw notFound;
   const image = await PaymentLinkImageModel.findOne({ _id: req.params.imageId, link: link._id });
   if (!image) throw notFound;
-  // URLs carry ?v=, so a picture never changes under the same URL.
-  await sendLinkImage(res, image, "public, max-age=604800, immutable");
+  await sendLinkImage(res, image, PUBLIC_LINK_IMAGE_CACHE);
 };

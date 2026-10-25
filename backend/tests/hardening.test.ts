@@ -11,7 +11,7 @@ import { OtpFailureModel, OtpModel } from "../src/models/Otp";
 import { StaffModel } from "../src/models/Staff";
 import { UserModel } from "../src/models/User";
 import { sendStaffInviteEmail, sendTeamInviteEmail, setEmailProvider, type EmailMessage } from "../src/services/email";
-import { createOtp, MAX_DAILY_FAILURES, verifyOtp } from "../src/services/otp";
+import { createOtp, MAX_DAILY_FAILURES, MAX_DAILY_FAILURES_ALL_CLIENTS, verifyOtp } from "../src/services/otp";
 import { signAccessToken } from "../src/services/tokens";
 import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
@@ -93,8 +93,9 @@ describe("OTP attempts", () => {
 
   test("past the cap, the answer is the same as for an email with no account", async () => {
     const { user: u } = await user();
+    // The cap across every address (the per-address one is covered in tests/authLows.test.ts).
     await OtpFailureModel.insertMany(
-      Array.from({ length: MAX_DAILY_FAILURES }, () => ({ email: u.email, purpose: "login", expiresAt: new Date(Date.now() + 60_000) })),
+      Array.from({ length: MAX_DAILY_FAILURES_ALL_CLIENTS }, () => ({ email: u.email, purpose: "login", expiresAt: new Date(Date.now() + 60_000) })),
     );
     await t.api("POST", "/api/auth/otp/request", { body: { email: u.email } });
     const capped = await verifyLogin(u.email, lastCode(u.email)!);

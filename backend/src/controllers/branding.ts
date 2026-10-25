@@ -52,19 +52,30 @@ export const removeLogo: RequestHandler = async (req, res) => {
   res.json(describeBranding(req.business!));
 };
 
+/**
+ * How long a business's logo on a public page (a payment link, an invoice) may be kept. Logo URLs carry
+ * ?v=<updatedAt>, so a new upload gets a new URL and a browser keeps one a day. A shared cache (a CDN) keeps it 5
+ * minutes and then asks again, so once a link is taken down, or its business suspended, no cache serves the logo
+ * for more than about 5 minutes, as for a link's pictures (PUBLIC_LINK_IMAGE_CACHE). The web's logo routes send
+ * the same. A refusal is `no-store` (the public handlers set it first).
+ */
+export const PUBLIC_LOGO_CACHE = "public, max-age=86400, s-maxage=300";
+
+/** The signed-in GET /branding/logo: the member's browser keeps it a day, no shared cache ever does. */
+const OWN_LOGO_CACHE = "private, max-age=86400";
+
 /** Serves a business's logo: always a PNG we produced ourselves, never the uploaded file. */
-export async function sendLogo(res: Response, business: BusinessDocument) {
+export async function sendLogo(res: Response, business: BusinessDocument, cache: string) {
   const png = await readLogo(business);
   if (!png) throw new HttpError(404, "No logo", "LOGO_NOT_FOUND");
   res
     .type("image/png")
     .setHeader("X-Content-Type-Options", "nosniff")
     .setHeader("Content-Security-Policy", "default-src 'none'")
-    // Logo URLs carry ?v=<updatedAt>, so a new upload gets a new URL.
-    .setHeader("Cache-Control", "public, max-age=86400")
+    .setHeader("Cache-Control", cache)
     .send(png);
 }
 
 export const getLogo: RequestHandler = async (req, res) => {
-  await sendLogo(res, req.business!);
+  await sendLogo(res, req.business!, OWN_LOGO_CACHE);
 };

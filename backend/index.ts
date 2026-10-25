@@ -8,6 +8,8 @@ import { usingConsoleEmail } from "./src/services/email";
 import { startInvoiceReminders } from "./src/services/invoices";
 import { isLiveMode } from "./src/services/liquifia/client";
 import { flushPushes } from "./src/services/push";
+// Importing it wires the email provider and file storage the environment names (EMAIL_PROVIDER, STORAGE_PROVIDER).
+import { providersMessage } from "./src/services/providers";
 import { startRiskChecks } from "./src/services/risk";
 import { startSafelockReleases } from "./src/services/safelocks";
 import { startLinkImageCleanup } from "./src/services/paymentLinkImages";
@@ -21,7 +23,9 @@ import { encryptionModeMessage } from "./src/utils/crypto";
 const realWorld = env.nodeEnv === "production" || isLiveMode();
 if (realWorld && usingConsoleEmail()) {
   const where = env.nodeEnv === "production" ? "in production" : `with a live Liquifia key (NODE_ENV=${env.nodeEnv})`;
-  throw new Error(`Refusing to start ${where} without an email provider: call setEmailProvider() at startup (src/services/email.ts).`);
+  throw new Error(
+    `Refusing to start ${where} without an email provider: set EMAIL_PROVIDER=resend, with RESEND_API_KEY and EMAIL_FROM (docs/DEPLOY.md).`,
+  );
 }
 if (realWorld && env.pushProvider !== "expo") {
   console.warn(
@@ -32,6 +36,7 @@ if (realWorld && env.pushProvider !== "expo") {
 await connectDB();
 // Whether BVNs still in the old encryption format are read or refused (ENCRYPTION_REQUIRE_V2).
 console.log(encryptionModeMessage());
+console.log(providersMessage());
 // Mongoose builds the declared indexes in the background and drops any error; this waits for them and says loudly
 // which didn't build (GET /health shows it too). It doesn't stop the server: see checkIndexes in src/config/db.ts.
 void checkIndexes()
