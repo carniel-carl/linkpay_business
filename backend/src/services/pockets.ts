@@ -116,6 +116,9 @@ const accountBusy = () => new HttpError(409, "Another payment from this account 
  * 3. The movement marked `applied`.
  * A crash after 1 or 2 leaves a pending movement; settleMovement() then reads off the pocket whether step 2
  * landed and finishes it, or voids it (so step 2 can never land late) and removes it.
+ *
+ * A retry with the Idempotency-Key is answered before anything is checked, so it gets its first answer even
+ * once the pocket is closed or its balance has moved on; and again under the lock, for two requests at once.
  */
 export async function movePocketMoney(move: Move) {
   const { pocket, kind, amountKobo } = move;
@@ -138,11 +141,25 @@ export async function movePocketMoney(move: Move) {
     return { movement: first, replayed: true };
   };
 
+  // A move this key already made, before the lock and the checks. One a crash left half-done is settled under
+  // the lock below, where nothing else can move this pocket's money.
+  if (move.clientKey) {
+    const first = await PocketMovementModel.findOne({ pocket: pocket._id, createdBy: move.userId, clientKey: move.clientKey });
+    if (first?.state === "applied") {
+      assertSameRequest(first.requestHash, hash);
+      return { movement: first, replayed: true };
+    }
+  }
+
   const result = await withAccountLock(pocket.virtualAccount, async (lock) => {
     // Anything an earlier move left half-done on this pocket is settled first, so the checks below see it.
     await settlePocketMovements(pocket._id);
     const replayed = await replay();
     if (replayed) return replayed;
+    // A closed pocket is refused before the balance is asked for.
+    if ((await PocketModel.findById(pocket._id).select("status"))?.status !== "active") {
+      throw new HttpError(409, "This pocket is closed", "POCKET_CLOSED");
+    }
 
     if (direction === "in") {
       const account = await VirtualAccountModel.findById(pocket.virtualAccount);

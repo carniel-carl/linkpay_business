@@ -130,6 +130,8 @@ transferSchema.index({ "provider.payoutId": 1 }, { sparse: true });
 // A batch's rows, and (with status) whether a batch has a row in a Fund approvals tab or waiting for someone.
 transferSchema.index({ batch: 1, status: 1 });
 transferSchema.index({ "recipient.beneficiary": 1, createdAt: -1 });
+// A saved beneficiary's payment history: everything the business sent to its account (paymentsToBeneficiary).
+transferSchema.index({ business: 1, "recipient.accountNumber": 1, createdAt: -1 });
 transferSchema.index({ business: 1, status: 1, "approval.waitingOn": 1 });
 // A member's 24-hour total from a branch, which decides whether their next transfer needs approval.
 transferSchema.index({ createdBy: 1, branch: 1, createdAt: -1 });

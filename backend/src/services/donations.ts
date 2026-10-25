@@ -48,18 +48,25 @@ function decodeCursor(cursor: string) {
   return { value: Number(value), id: new Types.ObjectId(id) };
 }
 
-/** What anyone can see of one donation: never the email, and no name when the donor asked to stay anonymous. */
+/**
+ * What anyone can see of one donation: never the email, and no name when the donor asked to stay anonymous.
+ * A test gift simulated from the public page shows no name or message either: anyone can start one with any
+ * words and "pay" it, so they'd be posting to the page. One a team member simulated from the dashboard shows
+ * as given, as the business chose to let it through.
+ */
 export function describePublicDonation(c: CheckoutDocument) {
   const anonymous = !!c.donor?.anonymous;
+  const test = c.mode === "test";
+  const unvouched = test && !c.matchedByUser;
   return {
     _id: c.id as string,
-    name: anonymous ? null : c.payer!.name,
+    name: anonymous || unvouched ? null : c.payer!.name,
     anonymous,
     amountKobo: c.paidKobo ?? 0,
-    message: c.donor?.message ?? null,
+    message: unvouched ? null : (c.donor?.message ?? null),
     paidAt: c.paidAt ?? null,
     // A simulated gift, shown while the link is in test mode.
-    test: c.mode === "test",
+    test,
   };
 }
 

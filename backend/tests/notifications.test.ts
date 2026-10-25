@@ -15,7 +15,7 @@ import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
 import { notifyStaff, notifyUsers } from "../src/services/notifications";
 import { liveStreamTimerCount, openStreamCount, streamTimers } from "../src/services/notificationStream";
-import { setPushProvider, type PushMessage } from "../src/services/push";
+import { flushPushes, setPushProvider, type PushMessage } from "../src/services/push";
 import { signInResponse, startWebSession } from "../src/services/sessions";
 import { signAccessToken } from "../src/services/tokens";
 import { notifyOverdueInvoices } from "../src/services/invoices";
@@ -43,7 +43,8 @@ beforeAll(async () => {
   streamTimers.heartbeatMs = 100;
 });
 afterAll(() => t.stop());
-beforeEach(() => {
+beforeEach(async () => {
+  await flushPushes(); // none from the last test arriving in this one
   pushes.length = 0;
   invalidPushTokens = [];
 });
@@ -174,6 +175,7 @@ describe("what triggers a notification", () => {
     expect(await notificationsOf(viewer.id, "transfer.approval_requested")).toHaveLength(0);
     expect(await notificationsOf(finance.id, "transfer.approval_requested")).toHaveLength(0);
     // It's a push too.
+    await flushPushes();
     expect(pushes).toHaveLength(0); // nobody has a phone registered
 
     await t.api("POST", `/api/transfers/${held.body._id}/approve`, { token: owner.token });
@@ -567,6 +569,7 @@ describe("phone pushes", () => {
     expect(reg.status).toBe(204);
 
     const [n] = await notifyUsers([me.id], { type: "payment.received", title: "Money in", body: "₦5,000.00", link: "/transactions", data: { transactionId: "t1" } });
+    await flushPushes(); // pushes go in the background
     expect(pushes).toEqual([
       {
         to: "ExponentPushToken[abc123]",
@@ -577,6 +580,7 @@ describe("phone pushes", () => {
       },
     ]);
     await notifyUsers([me.id], { type: "invoice.viewed", title: "Viewed", body: "x" }); // in-app only
+    await flushPushes();
     expect(pushes).toHaveLength(1);
 
     // The same phone signing in to another account moves the token over.
@@ -587,6 +591,7 @@ describe("phone pushes", () => {
     // Signed out: no more pushes, and the token is forgotten.
     await SessionModel.updateOne({ _id: other.sessionId }, { revokedAt: new Date() });
     await notifyUsers([other.id], { type: "payment.received", title: "After sign-out", body: "x" });
+    await flushPushes();
     expect(pushes).toHaveLength(1);
     expect(await PushTokenModel.countDocuments({ token: "ExponentPushToken[abc123]" })).toBe(0);
   });
@@ -598,6 +603,7 @@ describe("phone pushes", () => {
     }
     invalidPushTokens = ["ExpoPushToken[dead]"];
     await notifyUsers([me.id], { type: "payment.received", title: "x", body: "y" });
+    await flushPushes();
     expect(pushes.map((p) => p.to).sort()).toEqual(["ExpoPushToken[alive]", "ExpoPushToken[dead]"]);
     expect((await PushTokenModel.find({ user: me.id })).map((p) => p.token)).toEqual(["ExpoPushToken[alive]"]);
 

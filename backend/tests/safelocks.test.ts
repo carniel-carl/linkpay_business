@@ -7,9 +7,10 @@ import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { setEmailProvider } from "../src/services/email";
 import { todayInLagos } from "../src/services/pockets";
-import { addDays, releaseDueSafelocks } from "../src/services/safelocks";
+import { addDays, releaseDueSafelocks, startOfLagosDay } from "../src/services/safelocks";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
+import { requestHash } from "../src/utils/idempotency";
 import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
 let t: TestEnv;
@@ -131,6 +132,40 @@ describe("safelocks", () => {
     const again = await lock({ amountKobo: 5_000_00 }, undefined, key);
     expect([first.status, again.status]).toEqual([201, 200]);
     expect(again.body._id).toBe(first.body._id);
+  });
+
+  test("a retry after midnight replays, though its unlock date is no longer allowed", async () => {
+    const { owner, business, headOfficeId, headVa, kanoId, lock, member } = await setup();
+    // Made yesterday (as far as the window goes): its date was the earliest then and is a day short now.
+    const unlockOn = inDays(9);
+    const details = { title: "Rent 2027", amountKobo: 100_000_00, unlockOn };
+    const first = await SafelockModel.create({
+      business: business._id,
+      branch: headOfficeId,
+      virtualAccount: headVa._id,
+      ...details,
+      unlockAt: startOfLagosDay(unlockOn),
+      createdBy: owner.user._id,
+      clientKey: "lock-midnight-1",
+      requestHash: requestHash({ branch: headOfficeId, ...details }),
+    });
+    const key = { "Idempotency-Key": "lock-midnight-1" };
+    const again = await lock(details, undefined, key);
+    expect(again.status).toBe(200);
+    expect(again.body._id).toBe(first.id);
+    // Other details under the key are refused as reused, before the date or amount is looked at.
+    expect((await lock({ ...details, unlockOn: inDays(8) }, undefined, key)).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await lock({ ...details, amountKobo: 999_00 }, undefined, key)).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    // A new key gets the usual checks.
+    expect((await lock(details, undefined, { "Idempotency-Key": "lock-midnight-2" })).body.code).toBe("INVALID_UNLOCK_DATE");
+    expect(await SafelockModel.countDocuments({ business: business._id })).toBe(1);
+
+    // A replay is still only for the member's branches.
+    const finance = await member("finance");
+    const own = await lock({}, finance.token, { "Idempotency-Key": "lock-member-1" });
+    expect(own.status).toBe(201);
+    await MembershipModel.updateOne({ business: business._id, user: finance.user._id }, { branches: [kanoId] });
+    expect((await lock({}, finance.token, { "Idempotency-Key": "lock-member-1" })).status).toBe(404);
   });
 
   test("can't be broken, topped up or shortened; only renamed", async () => {

@@ -1,10 +1,13 @@
+import type { AddressInfo } from "node:net";
 import { app } from "./src/app";
-import { connectDB, disconnectDB } from "./src/config/db";
+import { checkIndexes, connectDB, disconnectDB, logIndexReport } from "./src/config/db";
 import { env } from "./src/config/env";
 import { RISK_CHECK_INTERVAL_MS } from "./src/config/compliance";
 import { SAFELOCK_RELEASE_INTERVAL_MS } from "./src/config/safelock";
 import { usingConsoleEmail } from "./src/services/email";
 import { startInvoiceReminders } from "./src/services/invoices";
+import { isLiveMode } from "./src/services/liquifia/client";
+import { flushPushes } from "./src/services/push";
 import { startRiskChecks } from "./src/services/risk";
 import { startSafelockReleases } from "./src/services/safelocks";
 import { startLinkImageCleanup } from "./src/services/paymentLinkImages";
@@ -13,17 +16,30 @@ import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
 import { encryptionModeMessage } from "./src/utils/crypto";
 
-// The console provider prints every sign-in code and invite link, which in production means into the logs.
-if (env.nodeEnv === "production" && usingConsoleEmail()) {
-  throw new Error("Refusing to start in production without an email provider: call setEmailProvider() at startup (src/services/email.ts).");
+// The console providers print every sign-in code, invite link and push into the logs. Wherever real money and real
+// customers are involved (production, or a live Liquifia key with any NODE_ENV) email must really be sent.
+const realWorld = env.nodeEnv === "production" || isLiveMode();
+if (realWorld && usingConsoleEmail()) {
+  const where = env.nodeEnv === "production" ? "in production" : `with a live Liquifia key (NODE_ENV=${env.nodeEnv})`;
+  throw new Error(`Refusing to start ${where} without an email provider: call setEmailProvider() at startup (src/services/email.ts).`);
+}
+if (realWorld && env.pushProvider !== "expo") {
+  console.warn(
+    `⚠️  WARN: phone pushes are only printed to this log, never sent (PUSH_PROVIDER is "${env.pushProvider}"). Set PUSH_PROVIDER=expo.`,
+  );
 }
 
 await connectDB();
 // Whether BVNs still in the old encryption format are read or refused (ENCRYPTION_REQUIRE_V2).
 console.log(encryptionModeMessage());
+// Mongoose builds the declared indexes in the background and drops any error; this waits for them and says loudly
+// which didn't build (GET /health shows it too). It doesn't stop the server: see checkIndexes in src/config/db.ts.
+void checkIndexes()
+  .then(logIndexReport)
+  .catch((err) => console.error("Couldn't check the database indexes:", err));
 
 const server = app.listen(env.port, () => {
-  console.log(`Server running on http://localhost:${env.port}`);
+  console.log(`Server running on http://localhost:${(server.address() as AddressInfo).port}`);
 });
 
 // Pulls incoming payments from Liquifia every minute (webhooks only speed this up once configured).
@@ -49,6 +65,8 @@ async function shutdown() {
   stopSafelockReleases();
   stopImageCleanup();
   server.close();
+  // Pushes already started still go (each Expo call gives up after 10 s), but shutdown waits 15 s at most.
+  await Promise.race([flushPushes(), Bun.sleep(15_000)]);
   await disconnectDB();
   process.exit(0);
 }

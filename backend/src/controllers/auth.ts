@@ -8,7 +8,7 @@ import {
   signInWithBiometricKey,
 } from "../services/biometricKeys";
 import { createOtp, verifyOtp } from "../services/otp";
-import { confirmEmail, passwordSchema, registrationTokenSchema, startRegistration } from "../services/passwords";
+import { confirmEmail, passwordSchema, registrationTokenSchema, sendCodeIgnoringCooldown, startRegistration } from "../services/passwords";
 import {
   sendLoginCodeEmail,
   sendTwoFactorCodeEmail,
@@ -34,8 +34,9 @@ const email = z.email().trim().toLowerCase();
 const code = z.string().trim().regex(/^\d{6}$/, "Code must be 6 digits");
 const password = passwordSchema;
 
-// Compared against when the email doesn't exist, so failed logins take the same time either way.
-const DUMMY_HASH = await Bun.password.hash("dummy-password-for-timing");
+// Compared against when there is no hash to check (no such account, or no password yet), so every failed
+// sign-in takes as long. It hashes a random value, so no known string can ever match it.
+const DUMMY_HASH = await Bun.password.hash(crypto.randomUUID());
 
 const invalidCode = () => new HttpError(400, "Invalid or expired code", "INVALID_CODE");
 
@@ -114,8 +115,9 @@ export const resendVerification: RequestHandler = async (req, res) => {
 
   const user = await UserModel.findOne({ email: body.email });
   if (user && !user.emailVerified) {
-    // Within the cooldown the code already sent stands: a 429 here would show the account exists.
-    await sendIgnoringCooldown(async () => sendVerificationEmail(user.email, await createOtp(user.email, "verify_email")));
+    // Within the cooldown the code already sent stands: a 429 here would show the account exists. The email isn't
+    // waited for, so a slow or failing provider can't show it either.
+    await sendCodeIgnoringCooldown(user.email, "verify_email", sendVerificationEmail);
   }
   // Same response whether or not the account exists, to avoid leaking registered emails.
   res.json({ message: "If that account needs verification, a new code has been sent." });
@@ -128,7 +130,9 @@ export const login: RequestHandler = async (req, res) => {
 
   const user = await UserModel.findOne({ email: body.email }).select("+password");
   const valid = await Bun.password.verify(body.password, user?.password ?? DUMMY_HASH);
-  if (!user || !valid) throw new HttpError(401, "Invalid email or password", "INVALID_CREDENTIALS");
+  // An account with no password yet (verification removed one chosen before the email was proven) signs in with
+  // an email code or sets one with a reset; it must never pass here, whatever the dummy comparison returns.
+  if (!user?.password || !valid) throw new HttpError(401, "Invalid email or password", "INVALID_CREDENTIALS");
 
   if (!user.emailVerified) {
     await sendIgnoringCooldown(async () => sendVerificationEmail(user.email, await createOtp(user.email, "verify_email")));
@@ -144,8 +148,9 @@ export const requestLoginOtp: RequestHandler = async (req, res) => {
   const body = z.object({ email }).parse(req.body);
 
   if (await UserModel.exists({ email: body.email })) {
-    // Within the cooldown the code already sent stands: a 429 here would show the account exists.
-    await sendIgnoringCooldown(async () => sendLoginCodeEmail(body.email, await createOtp(body.email, "login")));
+    // Within the cooldown the code already sent stands: a 429 here would show the account exists. The email isn't
+    // waited for, so a slow or failing provider can't show it either.
+    await sendCodeIgnoringCooldown(body.email, "login", sendLoginCodeEmail);
   }
   res.json({ message: "If an account exists for that email, a sign-in code has been sent." });
 };

@@ -5,7 +5,8 @@ import { StaffInviteModel } from "../models/StaffInvite";
 import { sendTwoFactorCodeEmail } from "../services/email";
 import { RESEND_COOLDOWN_MS, createOtp, verifyOtp } from "../services/otp";
 import { staffInviteAccepted } from "../services/notificationEvents";
-import { hashStaffInviteToken, staffInviteStatus, staffRoleLabel } from "../services/staff";
+import { audit } from "../services/audit";
+import { hashStaffInviteToken, managesStaff, staffInviteStatus, staffRoleLabel } from "../services/staff";
 import { isStaffRole } from "../config/staffPermissions";
 import {
   noRoleError,
@@ -27,8 +28,9 @@ const code = z.string().trim().regex(/^\d{6}$/, "Code must be 6 digits");
 // Same rules as business sign-up.
 export const staffPassword = z.string().min(8, "Password must be at least 8 characters").max(128);
 
-// Compared against when the email doesn't exist, so failed logins take the same time either way.
-const DUMMY_HASH = await Bun.password.hash("dummy-password-for-timing");
+// Compared against when there is no staff member, so every failed sign-in takes as long. A random value, so no
+// known string can match it.
+const DUMMY_HASH = await Bun.password.hash(crypto.randomUUID());
 
 const disabled = () => new HttpError(403, "This staff account is disabled", "STAFF_DISABLED");
 
@@ -67,7 +69,7 @@ export const login: RequestHandler = async (req, res) => {
 
   const staff = await StaffModel.findOne({ email: body.email }).select("+password");
   const valid = await Bun.password.verify(body.password, staff?.password ?? DUMMY_HASH);
-  if (!staff || !valid) throw new HttpError(401, "Invalid email or password", "INVALID_CREDENTIALS");
+  if (!staff?.password || !valid) throw new HttpError(401, "Invalid email or password", "INVALID_CREDENTIALS");
   if (staff.status !== "active") throw disabled();
   if (!isStaffRole(staff.role)) throw noRoleError();
 
@@ -142,6 +144,13 @@ export const acceptInvite: RequestHandler<TokenParams> = async (req, res) => {
   if (await StaffModel.exists({ email: invite.email })) {
     throw new HttpError(409, "This person is already a staff member", "ALREADY_STAFF");
   }
+  // An invite is only as good as whoever sent it: someone disabled, or moved to a role without staff.manage, can't
+  // add staff any more, so neither can their invite. Changing their access cancels their invites already; this
+  // catches any left open.
+  const inviter = await StaffModel.findById(invite.invitedBy).select("name role status");
+  if (!inviter || !managesStaff(inviter.role, inviter.status)) {
+    throw new HttpError(410, "The person who invited you can no longer add staff. Ask another admin to invite you again.", "INVITER_CANT_INVITE");
+  }
 
   // Claim the invite first so the same link can't create two accounts.
   const claimed = await StaffInviteModel.findOneAndUpdate(
@@ -167,6 +176,16 @@ export const acceptInvite: RequestHandler<TokenParams> = async (req, res) => {
     throw err;
   }
   await StaffInviteModel.updateOne({ _id: invite._id }, { acceptedStaff: staff._id });
+  // By the new staff member (nobody else is signed in here), on the invite's own record.
+  await audit(
+    { type: "staff", staff: staff.id, name: staff.name, ip: req.ip },
+    {
+      action: "staff.invite_accepted",
+      target: { kind: "staff_invite", id: invite._id },
+      summary: `${staff.name} joined as ${staffRoleLabel(invite.role)}, invited by ${inviter.name}`,
+      details: { staff: staff.id, email: staff.email, role: invite.role, invitedBy: { _id: inviter.id, name: inviter.name } },
+    },
+  );
   await staffInviteAccepted(invite.invitedBy, staff);
 
   await sendCode(staff.email);

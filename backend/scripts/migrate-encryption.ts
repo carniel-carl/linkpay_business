@@ -79,9 +79,10 @@ export function requireV2Advice(report: EncryptionMigrationReport, apply: boolea
 }
 
 if (import.meta.main) {
-  const { connectDB, disconnectDB } = await import("../src/config/db");
+  const { connectScriptDB, disconnectDB } = await import("../src/config/db");
   const apply = process.argv.includes("--apply");
-  await connectDB();
+  // No automatic index builds or collections: the dry run reads only.
+  await connectScriptDB();
   const r = await migrateEncryption({ apply });
   console.log(`${apply ? "Applied" : "Dry run (pass --apply to write)"} on database "${mongoose.connection.name}"`);
   console.log(`BVNs in the old format: ${r.legacy}`);

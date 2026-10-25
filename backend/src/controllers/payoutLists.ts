@@ -4,7 +4,7 @@ import { z } from "zod";
 import { BeneficiaryModel } from "../models/Beneficiary";
 import { BranchModel } from "../models/Branch";
 import { PayoutListModel, type PayoutListDocument } from "../models/PayoutList";
-import { TransferBatchModel, TransferModel } from "../models/Transfer";
+import { TransferBatchModel, TransferModel, type TransferDocument } from "../models/Transfer";
 import { UserModel } from "../models/User";
 import { keyedPayoutRows, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
 import { todayInLagos } from "../services/pockets";
@@ -12,7 +12,7 @@ import { branchScope, canAccessBranch } from "../services/team";
 import { createTransfers, keyedTransferRow, replayBeforeLookups } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
 import { assertSameRequest, isDuplicateClientKey, requestHash } from "../utils/idempotency";
-import { describeBulkResult, MAX_BULK_ITEMS, reviewedName } from "./transfers";
+import { describeBulkResult, MAX_BULK_ITEMS, requiredClientKey, reviewedName } from "./transfers";
 
 type IdParams = { id: string };
 
@@ -227,9 +227,36 @@ export const deletePayoutList: RequestHandler<IdParams> = async (req, res) => {
 };
 
 /**
+ * After a run has been sent: notes it on the list ("last paid" links to its batch, or to its one transfer when a
+ * single row was paid), and with `saveItems` keeps the run's rows as the list's. Best effort: the money has
+ * moved, so nothing here may turn the run into an error. If a beneficiary in the rows was deleted meanwhile,
+ * the list keeps its rows; if the list itself was deleted, there's nothing to note.
+ */
+async function recordRun(
+  req: Request,
+  list: PayoutListDocument,
+  run: { transfers: TransferDocument[]; batch: { _id: Types.ObjectId } | null; saveItems?: z.infer<typeof items> },
+) {
+  try {
+    const lastBatch = run.batch?._id ?? run.transfers[0]?.batch ?? undefined;
+    list.set({ lastRunAt: new Date(), lastBatch, lastTransfer: lastBatch ? undefined : run.transfers[0]?._id });
+    if (run.saveItems) {
+      const kept = await checkItems(req, run.saveItems).catch((err) => {
+        console.error(`Payout list ${list.id}: the run was sent, but its rows weren't saved to the list:`, err);
+        return null;
+      });
+      if (kept) list.set("items", kept);
+    }
+    await list.save();
+  } catch (err) {
+    console.error(`Payout list ${list.id}: the run was sent, but couldn't be noted on the list:`, err);
+  }
+}
+
+/**
  * Pays the list as a bulk transfer, so the approval rules apply as usual. `branch` overrides the list's
  * account; `items` overrides the rows for this run (e.g. this month's amounts), and `saveItems: true` keeps
- * them on the list. Send an Idempotency-Key header to retry safely.
+ * them on the list. Needs an Idempotency-Key header (the same one to retry), as POST /transfers/bulk does.
  */
 export const runPayoutList: RequestHandler<IdParams> = async (req, res) => {
   const body = z
@@ -237,10 +264,11 @@ export const runPayoutList: RequestHandler<IdParams> = async (req, res) => {
     .parse(req.body ?? {});
   if (!isValidObjectId(req.params.id)) throw new HttpError(400, "Invalid id");
   const business = req.business!;
-  const key = clientKey(req);
-  // A retry is answered before the list is looked up, so it gets the first run's result even if the list was
-  // deleted or changed since. What the body left to the list (the account, the rows) is read from what that run
-  // created; the list's id is part of the request, so a key used for another list is still refused.
+  const key = requiredClientKey(req);
+  // A retry is answered before the list is looked up, so it gets the first run's result even if the list, or a
+  // beneficiary in it, was deleted or changed since. The rows (the body's, matched with what the run sent, or
+  // the run's own when the body left them to the list) and the account are read from what that run created;
+  // the list's id is part of the request, so a key used for another list is still refused.
   const early = await replayBeforeLookups({
     business,
     membership: req.membership!,
@@ -248,7 +276,7 @@ export const runPayoutList: RequestHandler<IdParams> = async (req, res) => {
     branchId: body.branch,
     payoutList: new Types.ObjectId(req.params.id),
     clientKey: key,
-    rows: async (sent) => (body.items ? keyedPayoutRows(business, body.items) : sent.map(keyedTransferRow)),
+    rows: (sent) => (body.items ? keyedPayoutRows(business, body.items, sent) : sent.map(keyedTransferRow)),
   });
   if (early) return void res.status(200).json(await describeBulkResult(req, early.transfers, early.batch));
 
@@ -269,12 +297,6 @@ export const runPayoutList: RequestHandler<IdParams> = async (req, res) => {
     clientKey: key,
   });
 
-  if (!replayed) {
-    // "Last paid" links to the run: its batch, or its one transfer when a single row was paid (no batch).
-    const lastBatch = batch?._id ?? transfers[0]?.batch ?? undefined;
-    list.set({ lastRunAt: new Date(), lastBatch, lastTransfer: lastBatch ? undefined : transfers[0]?._id });
-    if (body.items && body.saveItems) list.set("items", await checkItems(req, body.items));
-    await list.save();
-  }
+  if (!replayed) await recordRun(req, list, { transfers, batch, saveItems: body.saveItems ? body.items : undefined });
   res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
 };

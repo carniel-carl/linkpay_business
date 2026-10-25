@@ -171,8 +171,13 @@ describe("donation links", () => {
 
     const page = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
     expect(page.donation).toMatchObject({ raisedKobo: real.amountKobo + start.body.amountKobo, donationsCount: 2, testKobo: start.body.amountKobo });
-    expect(page.donation.recent.items[0]).toMatchObject({ name: "Tester", message: "Trying it out", test: true });
+    // Anyone can simulate a gift on the public page, so its name and words aren't published: a test gift.
+    expect(page.donation.recent.items[0]).toMatchObject({ name: null, message: null, test: true, amountKobo: start.body.amountKobo });
     expect(page.donation.recent.items[1]).toMatchObject({ test: false });
+    expect(JSON.stringify(page)).not.toContain("Trying it out");
+    // No notification to the team either.
+    const simulatedId = (await CheckoutModel.findOne({ token: start.body.token }))!.id;
+    expect(await NotificationModel.exists({ type: "payment_link.paid", "data.checkoutId": simulatedId })).toBeNull();
     const feed = (await t.api("GET", `/api/public/pay/${link.slug}/donations?sort=top`)).body;
     expect(feed.progress.testKobo).toBe(start.body.amountKobo);
     // The dashboard shows it the same way, beside the real money; collected and the summary's totals never count it.
@@ -187,7 +192,17 @@ describe("donation links", () => {
     expect((await tests(link._id)).body.total).toBe(1);
     expect((await t.api("GET", `/api/payment-links/checkouts?link=${link._id}&mode=live&status=all`, { token: owner.token })).body.total).toBe(1);
 
-    // Live again: the test gift is gone from the page and the figures.
+    // One the team simulates from the dashboard shows as given: they chose to let it through.
+    const vouched = await t.api("POST", `/api/public/pay/${link.slug}/checkouts`, {
+      body: { name: "Team Tester", email: "team@example.com", amountKobo: 2_000_00, message: "Checking the roll" },
+    });
+    const vouchedId = (await CheckoutModel.findOne({ token: vouched.body.token }))!.id;
+    expect((await t.api("POST", `/api/payment-links/checkouts/${vouchedId}/simulate`, { token: owner.token, body: {} })).status).toBe(200);
+    const roll = (await t.api("GET", `/api/public/pay/${link.slug}/donations`)).body.items;
+    expect(roll[0]).toMatchObject({ name: "Team Tester", message: "Checking the roll", test: true });
+    expect(roll[1]).toMatchObject({ name: null, message: null, test: true });
+
+    // Live again: the test gifts are gone from the page and the figures.
     expect((await t.api("PATCH", `/api/payment-links/${link._id}`, { token: owner.token, body: { mode: "live" } })).status).toBe(200);
     const live = (await t.api("GET", `/api/public/pay/${link.slug}`)).body;
     expect(live.donation).toMatchObject({ raisedKobo: real.amountKobo, donationsCount: 1, testKobo: 0 });

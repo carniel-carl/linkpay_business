@@ -231,7 +231,7 @@ export const createFlag: RequestHandler<IdParams> = async (req, res) => {
       transferIds: z.array(objectId).max(50).default([]),
     })
     .parse(req.body);
-  const business = await findBusiness(req.params.id);
+  const business = await findDecidableBusiness(req.staffId!, req.params.id);
   // Evidence must belong to this business.
   const [transactions, transfers] = await Promise.all([
     TransactionModel.find({ _id: { $in: body.transactionIds }, business: business._id }).select("_id"),
@@ -287,7 +287,8 @@ export const getBusinessCompliance: RequestHandler<IdParams> = async (req, res) 
 
 export const addNote: RequestHandler<IdParams> = async (req, res) => {
   const body = z.object({ body: note }).parse(req.body);
-  const business = await findBusiness(req.params.id);
+  // A note is on the business's compliance record, so it's a decision like a flag: not by its own people.
+  const business = await findDecidableBusiness(req.staffId!, req.params.id);
   const entry = await audit(await staffActor(req), {
     action: "note.added",
     business: business._id,

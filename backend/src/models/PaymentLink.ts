@@ -137,7 +137,7 @@ const checkoutSchema = new Schema(
     // paid or after `holdUntil`, so the amount can be used again.
     amountReserved: { type: Boolean },
     // Who started it, for the caps on open checkouts (CHECKOUT_RULES.maxOpenPerIp): the payer's address, with
-    // IPv6 grouped by /56. Never shown to the business or the payer.
+    // IPv6 grouped by /48 (CHECKOUT_RULES.ipv6Subnet). Never shown to the business or the payer.
     clientIp: { type: String },
     // SHA-256 of the random key the payer's browser sent (the pay page keeps one). Only a start with the same
     // key gets this checkout back, so knowing someone's email isn't enough to take over their checkout.
@@ -165,6 +165,9 @@ checkoutSchema.index({ link: 1, createdAt: -1 });
 // One reserved checkout per exact amount on an account: this is what makes amount matching unambiguous.
 checkoutSchema.index({ virtualAccount: 1, amountKobo: 1 }, { unique: true, partialFilterExpression: { amountReserved: true } });
 checkoutSchema.index({ amountReserved: 1, holdUntil: 1 }, { partialFilterExpression: { amountReserved: true } });
+// Open checkouts by exact amount on an account, past their hold too: matching on amount (which refuses to guess
+// when an older one at the same amount is still open) and picking amounts nobody was recently asked to send.
+checkoutSchema.index({ virtualAccount: 1, amountKobo: 1, createdAt: -1 }, { partialFilterExpression: { status: "pending" } });
 // A payer refreshing the page gets their open checkout back instead of a new one.
 checkoutSchema.index({ link: 1, "payer.email": 1, status: 1, expiresAt: 1 });
 // The public donor list of a donation link: newest and largest first.

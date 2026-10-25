@@ -10,16 +10,24 @@ import {
   approvalBlocker,
   approvalPlan,
   awaitingFilter,
-  canDecide,
   currentLevel,
   levelsOf,
   MAX_APPROVERS_PER_LEVEL,
   MAX_LEVELS,
   MAX_TIERS,
 } from "../services/approvals";
-import { beneficiaryRecipient, checkPayoutRows, findBeneficiary, keyedPayoutRows, resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
+import {
+  beneficiaryRecipient,
+  checkPayoutRows,
+  findBeneficiary,
+  keyedPayoutRows,
+  paymentsToBeneficiary,
+  resolvePayoutRows,
+  saveBeneficiary,
+} from "../services/beneficiaries";
 import { branchScope, canAccessBranch, ensureOwnerMembership, hasPermission } from "../services/team";
 import {
+  awaitingMember,
   cancelTransfers,
   createTransfers,
   decideBatchTransfers,
@@ -34,6 +42,8 @@ import {
   resolveBankRecipient,
   resolveBankRecipients,
   resolveBranchRecipient,
+  spendNameChecks,
+  uncachedNameChecks,
 } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
 
@@ -46,10 +56,27 @@ const amountKobo = z.number().int().min(100, "The smallest transfer is ₦1").ma
 const narration = z.string().trim().max(100).optional();
 const note = z.object({ note: z.string().trim().max(300).optional() });
 
+/** The request's Idempotency-Key header, if it has one. */
 function clientKey(req: Request) {
   const key = req.header("idempotency-key")?.trim();
   if (key && !/^[A-Za-z0-9_-]{8,100}$/.test(key)) throw new HttpError(400, "Invalid Idempotency-Key header");
   return key || undefined;
+}
+
+/**
+ * The Idempotency-Key a request that sends money must have (400 IDEMPOTENCY_KEY_REQUIRED without one), so a
+ * retry after a dropped response replays the first request instead of paying again, whichever client sends it.
+ */
+export function requiredClientKey(req: Request) {
+  const key = clientKey(req);
+  if (!key) {
+    throw new HttpError(
+      400,
+      "Send an Idempotency-Key header with a new value for each payment, and the same value when you retry it.",
+      "IDEMPOTENCY_KEY_REQUIRED",
+    );
+  }
+  return key;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -193,11 +220,14 @@ async function serializeBatch(req: Request, batch: InstanceType<typeof TransferB
     UserModel.findById(batch.createdBy).select("name"),
   ]);
   const counts = Object.fromEntries(TRANSFER_STATUSES.map((s) => [s, items.filter((i) => i.status === s).length]));
+  const mine = awaitingMember(transfers, req.membership!, req.userId!);
   return {
     ...batchHead(batch.toObject() as BatchFields, branch, creator),
     statusCounts: counts,
-    // Rows this member can approve or reject now, for "Approve N waiting for you".
-    awaitingMe: transfers.filter((t) => canDecide(t, req.membership!, req.userId!)).length,
+    // Rows this member can approve or reject now, and their total before fees, for "Approve N (₦X) waiting for
+    // you". Send them back as `expect` when deciding, so the decision covers what was shown.
+    awaitingMe: mine.count,
+    awaitingMeKobo: mine.amountKobo,
     items,
   };
 }
@@ -214,6 +244,7 @@ export const getBanks: RequestHandler = async (_req, res) => {
 /** Name enquiry before sending: who owns this account, and is it on LinkPay? */
 export const resolveAccount: RequestHandler = async (req, res) => {
   const body = z.object({ accountNumber, bankUuid: z.string().trim().min(1) }).parse(req.body);
+  await spendNameChecks(req.userId!, 1);
   const recipient = await resolveBankRecipient(req.business!, body.accountNumber, body.bankUuid);
   res.json({
     accountNumber: recipient.accountNumber,
@@ -236,6 +267,8 @@ export const resolveAccounts: RequestHandler = async (req, res) => {
       items: z.array(z.object({ accountNumber: z.string().trim().max(20), bankUuid: z.string().trim().min(1).max(100) })).min(1).max(MAX_BULK_ITEMS),
     })
     .parse(req.body);
+  // From the member's name-check budget: the accounts the bank will be asked about (not the cached answers).
+  await spendNameChecks(req.userId!, uncachedNameChecks(body.items));
   const items = await resolveBankRecipients(req.business!, body.items);
   const failed = items.filter((i) => "error" in i).length;
   res.json({ items, resolved: items.length - failed, failed });
@@ -403,8 +436,10 @@ const listFilters = z.object({
   status: z.enum(TRANSFER_STATUSES).optional(),
   kind: z.enum(TRANSFER_KINDS).optional(),
   branch: objectId.optional(),
-  batch: objectId.optional(),
-  // Payments to one saved beneficiary.
+  // One bulk transfer's rows, or "none": only transfers that aren't part of a bulk transfer (the singles a list
+  // shows beside GET batches, which has a row for each bulk transfer).
+  batch: z.union([z.literal("none"), objectId]).optional(),
+  // Payment history for one saved beneficiary: every transfer to its account (paymentsToBeneficiary).
   beneficiary: objectId.optional(),
   // "me": waiting for the signed-in member's approval at its current level.
   awaiting: z.literal("me").optional(),
@@ -419,7 +454,7 @@ const listFilters = z.object({
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Newest first. `?status=&kind=&branch=&batch=&awaiting=me&from=&to=&q=&skip=&take=` */
+/** Newest first. `?status=&kind=&branch=&batch=<id>|none&beneficiary=&approval=&awaiting=me&from=&to=&q=&skip=&take=` */
 export const listTransfers: RequestHandler = async (req, res) => {
   const f = listFilters.parse(req.query);
   if (f.branch && !canAccessBranch(req.membership!, f.branch)) throw new HttpError(404, "Branch not found");
@@ -429,8 +464,10 @@ export const listTransfers: RequestHandler = async (req, res) => {
   else if (scope) filter.branch = { $in: scope };
   if (f.status) filter.status = f.status;
   if (f.kind) filter.kind = f.kind;
-  if (f.batch) filter.batch = new Types.ObjectId(f.batch);
-  if (f.beneficiary) filter["recipient.beneficiary"] = new Types.ObjectId(f.beneficiary);
+  // Null also matches a missing field: transfers sent on their own never had a batch.
+  if (f.batch === "none") filter.batch = null;
+  else if (f.batch) filter.batch = new Types.ObjectId(f.batch);
+  if (f.beneficiary) Object.assign(filter, await paymentsToBeneficiary(req.business!, f.beneficiary));
   if (f.awaiting) {
     if (!hasPermission(req.membership!, "transfers.approve")) {
       return void res.json({ items: [], total: 0, skip: f.skip, take: f.take });
@@ -468,30 +505,28 @@ const recipientInput = z.discriminatedUnion("type", [
 ]);
 
 /**
- * Sends money from one of the business's branch accounts. Send an Idempotency-Key header to retry safely.
- * `saveBeneficiary: true` adds a new bank recipient to the saved beneficiaries.
+ * Sends money from one of the business's branch accounts. Needs an Idempotency-Key header (the same one to
+ * retry). `saveBeneficiary: true` adds a new bank recipient to the saved beneficiaries.
  */
 export const createTransfer: RequestHandler = async (req, res) => {
   const body = z
     .object({ branch: objectId, amountKobo, narration, recipient: recipientInput, saveBeneficiary: z.boolean().optional() })
     .parse(req.body);
   const business = req.business!;
-  const key = clientKey(req);
-  // A retry is answered before the bank is asked about the recipient again, so it still works while the bank is down.
+  const key = requiredClientKey(req);
+  // A retry is answered before the bank is asked about the recipient again, so it still works while the bank is
+  // down, and from what the key sent, so it still replays after the beneficiary it paid (or saved) is deleted.
   const early = await replayBeforeLookups({
     business,
     membership: req.membership!,
     userId: req.userId!,
     branchId: body.branch,
     clientKey: key,
-    rows: async () => {
+    rows: (sent) => {
       const { recipient: r, amountKobo, narration } = body;
-      if (r.type === "branch") {
-        const row = await keyedBranchRow(business, r.branch, { amountKobo, narration });
-        return row && [row];
-      }
+      if (r.type === "branch") return [keyedBranchRow(r.branch, { amountKobo, narration }, sent)];
       const row = r.type === "bank" ? { accountNumber: r.accountNumber, bankUuid: r.bankUuid, amountKobo, narration } : { beneficiary: r.beneficiary, amountKobo, narration };
-      return keyedPayoutRows(business, [row], { save: body.saveBeneficiary });
+      return keyedPayoutRows(business, [row], sent);
     },
   });
   if (early) return void res.status(200).json((await serialize(req, early.transfers.slice(0, 1)))[0]);
@@ -544,19 +579,21 @@ const bulkBody = z.object({
 /**
  * Several transfers from one account at once. Every row is checked first; if any row fails, nothing is
  * created and the errors come back per row (`details.rows`). `saveBeneficiaries: true` saves the new accounts.
+ * Needs an Idempotency-Key header, as POST / does.
  */
 export const createBulkTransfer: RequestHandler = async (req, res) => {
   const body = bulkBody.parse(req.body);
   const business = req.business!;
-  const key = clientKey(req);
-  // A retry is answered before every row's name enquiry, so it still works while the bank is down.
+  const key = requiredClientKey(req);
+  // A retry is answered before every row's name enquiry, so it still works while the bank is down, and from
+  // what the key sent, so it still replays after a beneficiary it paid (or saved) is deleted.
   const early = await replayBeforeLookups({
     business,
     membership: req.membership!,
     userId: req.userId!,
     branchId: body.branch,
     clientKey: key,
-    rows: () => keyedPayoutRows(business, body.items, { save: body.saveBeneficiaries }),
+    rows: (sent) => keyedPayoutRows(business, body.items, sent),
   });
   if (early) return void res.status(200).json(await describeBulkResult(req, early.transfers, early.batch));
 
@@ -579,6 +616,8 @@ export const createBulkTransfer: RequestHandler = async (req, res) => {
  */
 export const previewBulkTransfer: RequestHandler = async (req, res) => {
   const body = bulkBody.parse(req.body);
+  // The preview shows each new account's name too, so its uncached name checks come from the same budget.
+  await spendNameChecks(req.userId!, uncachedNameChecks(body.items.flatMap((i) => ("accountNumber" in i ? [i] : []))));
   const { requests, errors } = await checkPayoutRows(req.business!, body.items, { cached: true });
   res.json(
     await previewTransfers({
@@ -659,12 +698,12 @@ type BatchSummaryRow = BatchFields & {
   branch: Types.ObjectId;
   createdBy: Types.ObjectId;
   rows: { _id: { status: string; level: number | null; of: number | null }; n: number }[];
-  mine?: { _id: { level: number; of: number }; n: number }[];
+  mine?: { _id: { level: number; of: number }; n: number; kobo: number }[];
 };
 
 /**
  * Batches, newest first, each with its totals, row counts by status, how many rows wait for the signed-in
- * member, and the levels its waiting rows are at. `?branch=&approval=&awaiting=me&skip=&take=`
+ * member (and their total), and the levels its waiting rows are at. `?branch=&approval=&awaiting=me&skip=&take=`
  */
 export const listBatches: RequestHandler = async (req, res) => {
   const f = batchFilters.parse(req.query);
@@ -714,7 +753,7 @@ export const listBatches: RequestHandler = async (req, res) => {
                     from: transfers,
                     localField: "_id",
                     foreignField: "batch",
-                    pipeline: [{ $match: mine }, { $group: { _id: waitingLevel, n: { $sum: 1 } } }],
+                    pipeline: [{ $match: mine }, { $group: { _id: waitingLevel, n: { $sum: 1 }, kobo: { $sum: "$amountKobo" } } }],
                     as: "mine",
                   },
                 },
@@ -743,6 +782,8 @@ export const listBatches: RequestHandler = async (req, res) => {
       ),
       statusCounts,
       awaitingMe: (b.mine ?? []).reduce((sum, m) => sum + m.n, 0),
+      // Their total before fees, as on the batch: send both back as `expect` when deciding.
+      awaitingMeKobo: (b.mine ?? []).reduce((sum, m) => sum + m.kobo, 0),
       // Where the waiting rows are, lowest level first: enough for "Level 1 of 2 · 3 waiting for you".
       levels: b.rows
         .filter((g) => g._id.level !== null)
@@ -758,17 +799,25 @@ export const getBatch: RequestHandler<IdParams> = async (req, res) => {
   res.json(await serializeBatch(req, batch, transfers));
 };
 
+const batchDecision = note.extend({
+  // What the member was shown: the batch's `awaitingMe` and `awaitingMeKobo`. When it's sent and the rows they can
+  // decide now differ, nothing is decided (409 BATCH_CHANGED with the count and total now).
+  expect: z.object({ count: z.number().int().min(0), amountKobo: z.number().int().min(0) }).strict().optional(),
+});
+
 /**
  * Approves or rejects the rows waiting for the signed-in member and leaves the rest. Answers with the batch plus
  * `decided` (rows this request approved a level of, or rejected) and `skipped` (rows that were waiting but
- * weren't decided here: other levels or approvers, or decided by someone else at the same moment).
+ * weren't decided here: other levels or approvers, or decided by someone else at the same moment). With
+ * `expect: { count, amountKobo }`, only if the rows waiting for the member are still exactly those
+ * (decideBatchTransfers); without it, whatever waits for them now, as before.
  */
 const decideBatch =
   (decision: "approve" | "reject"): RequestHandler<IdParams> =>
   async (req, res) => {
-    const { note: text } = note.parse(req.body ?? {});
+    const { note: text, expect } = batchDecision.parse(req.body ?? {});
     const { batch, transfers } = await findBatch(req, req.params.id);
-    const { decided, skipped } = await decideBatchTransfers({ transfers, membership: req.membership!, userId: req.userId!, decision, note: text });
+    const { decided, skipped } = await decideBatchTransfers({ transfers, membership: req.membership!, userId: req.userId!, decision, note: text, expect });
     const batchNow = await serializeBatch(req, batch, await TransferModel.find({ batch: batch._id }).sort({ _id: 1 }));
     res.json({ ...batchNow, decided, skipped });
   };

@@ -4,7 +4,7 @@ import { env } from "../config/env";
 import { STAFF_MANAGER_ROLES, STAFF_ROLE_DETAILS, isStaffRole, type StaffRole } from "../config/staffPermissions";
 import { MembershipModel } from "../models/Membership";
 import { StaffModel, type StaffDocument } from "../models/Staff";
-import type { StaffInviteDocument } from "../models/StaffInvite";
+import { StaffInviteModel, type StaffInviteDocument } from "../models/StaffInvite";
 import { UserModel } from "../models/User";
 import { HttpError } from "../utils/HttpError";
 
@@ -25,8 +25,15 @@ export function parseStaffRole(value: unknown): StaffRole {
 
 const lastSuperAdmin = () => new HttpError(409, "There must always be at least one active super admin", "LAST_SUPER_ADMIN");
 
-const managesStaff = (role: string, status: string) =>
+/** Active, in a role with staff.manage. Only such a staff member's invites can be accepted. */
+export const managesStaff = (role: string, status: string) =>
   status === "active" && (STAFF_MANAGER_ROLES as string[]).includes(role);
+
+/** Cancels the open invites someone sent, when they stop managing staff. Returns how many. */
+export async function revokeInvitesFrom(staffId: Types.ObjectId | string) {
+  const { modifiedCount } = await StaffInviteModel.updateMany({ invitedBy: staffId, status: "pending" }, { status: "revoked", revokedAt: new Date() });
+  return modifiedCount;
+}
 
 /**
  * Refuses a change that would leave nobody active who can manage staff (a super admin today).
@@ -63,6 +70,9 @@ export async function changeStaffAccess(staff: StaffDocument, next: { role?: Sta
       throw lastSuperAdmin();
     }
   }
+  // An invite is only as good as the person who sent it: once they can't manage staff, theirs are cancelled (and
+  // acceptInvite checks the inviter too, for any left open). The count is for the caller's audit entry.
+  updated.$locals.invitesRevoked = managesStaff(after.role, after.status) ? 0 : await revokeInvitesFrom(staff._id);
   return updated;
 }
 

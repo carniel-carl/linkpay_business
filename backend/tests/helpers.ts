@@ -5,6 +5,7 @@ import { env } from "../src/config/env";
 import type { Request } from "express";
 import type { StaffRole } from "../src/config/staffPermissions";
 import { StaffModel } from "../src/models/Staff";
+import { flushPushes } from "../src/services/push";
 import { TransactionPinModel } from "../src/models/TransactionPin";
 import { startStaffSession } from "../src/services/staffAuth";
 import { startMockLiquifia, type MockLiquifia } from "./mockLiquifia";
@@ -16,6 +17,7 @@ export type TestEnv = {
   /**
    * Calls the API; `token` becomes a Bearer header. `pin` goes in X-Transaction-Pin: TEST_PIN unless given,
    * `null` sends none. Only routes that need the PIN read it, and only users given one by `withPin` have it.
+   * Sending money (MONEY_OUT_ROUTE) gets a new Idempotency-Key per call unless `headers` has one.
    */
   api: (
     method: string,
@@ -24,6 +26,9 @@ export type TestEnv = {
   ) => Promise<{ status: number; body: any }>;
   stop: () => Promise<void>;
 };
+
+/** POST /api/transfers, /api/transfers/bulk and /api/payout-lists/:id/run, which refuse a request without an Idempotency-Key. */
+const MONEY_OUT_ROUTE = /^\/api\/(transfers(\/bulk)?|payout-lists\/[^/?]+\/run)(\?.*)?$/;
 
 /** Starts an in-memory MongoDB, a mock Liquifia and the app on random ports. */
 /**
@@ -58,12 +63,16 @@ export async function startTestEnv(): Promise<TestEnv> {
   const { port } = server.address() as { port: number };
 
   const api: TestEnv["api"] = async (method, path, { token, body, headers, pin = TEST_PIN } = {}) => {
+    // The routes that send money need an Idempotency-Key, as the apps always send: a fresh one per call unless
+    // the test sets its own (an empty one sends none).
+    const keyed = method === "POST" && MONEY_OUT_ROUTE.test(path) && !Object.keys(headers ?? {}).some((h) => h.toLowerCase() === "idempotency-key");
     const res = await fetch(`http://127.0.0.1:${port}${path}`, {
       method,
       headers: {
         ...(token && { Authorization: `Bearer ${token}` }),
         ...(pin !== null && { "X-Transaction-Pin": pin }),
         ...(body !== undefined && { "Content-Type": "application/json" }),
+        ...(keyed && { "Idempotency-Key": `test-${crypto.randomUUID()}` }),
         ...headers,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -78,6 +87,8 @@ export async function startTestEnv(): Promise<TestEnv> {
     api,
     stop: async () => {
       server.close();
+      // Pushes run in the background (services/push.ts) and read the database: let them finish first.
+      await flushPushes();
       liquifia.stop();
       await mongoose.disconnect();
       await mongo.stop();

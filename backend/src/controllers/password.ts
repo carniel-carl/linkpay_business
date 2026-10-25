@@ -4,7 +4,7 @@ import { UserModel } from "../models/User";
 import { sendPasswordChangedEmail, sendPasswordResetEmail } from "../services/email";
 import { verifyOtp } from "../services/otp";
 import { assertPassword, passwordSchema, sendCodeIgnoringCooldown } from "../services/passwords";
-import { revokeAllSessions, revokeOtherSessions } from "../services/sessions";
+import { carrySessionOver, revokeAllSessions, revokeOtherSessions } from "../services/sessions";
 import { HttpError } from "../utils/HttpError";
 
 const email = z.email().trim().toLowerCase();
@@ -18,7 +18,10 @@ const notifyChanged = (to: string, reset: boolean) =>
 
 // ---- Reset (signed out, or an account with no password): an emailed code, then a new password ----
 
-/** Same answer whether or not the account exists. */
+/**
+ * Same answer whether or not the account exists, even when the email provider is slow or down: the email goes out
+ * without being waited for (services/passwords.ts).
+ */
 export const requestPasswordReset: RequestHandler = async (req, res) => {
   const body = z.object({ email }).parse(req.body);
 
@@ -31,7 +34,8 @@ export const requestPasswordReset: RequestHandler = async (req, res) => {
 /**
  * Sets the new password and ends every session and biometric sign-in key. The code proves the inbox, so an
  * unverified account is verified too (and its pending sign-up ends). Nobody is signed in by this: two-step
- * verification still applies at the next sign-in.
+ * verification still applies at the next sign-in. passwordChangedAt also ends a session that a sign-in with the
+ * old password opens just after this (services/sessions.ts).
  */
 export const resetPassword: RequestHandler = async (req, res) => {
   const body = z.object({ email, code, newPassword: passwordSchema }).parse(req.body);
@@ -40,7 +44,13 @@ export const resetPassword: RequestHandler = async (req, res) => {
 
   const user = await UserModel.findOneAndUpdate(
     { email: body.email },
-    { password: await Bun.password.hash(body.newPassword), hasPassword: true, emailVerified: true, $unset: { registration: 1 } },
+    {
+      password: await Bun.password.hash(body.newPassword),
+      hasPassword: true,
+      emailVerified: true,
+      passwordChangedAt: new Date(),
+      $unset: { registration: 1 },
+    },
   );
   if (!user) throw invalidCode();
   await revokeAllSessions(user._id);
@@ -55,7 +65,10 @@ export const changePassword: RequestHandler = async (req, res) => {
   const body = z.object({ currentPassword: z.string().min(1), newPassword: passwordSchema }).parse(req.body);
 
   const user = await assertPassword(req.userId, body.currentPassword);
-  user.set({ password: await Bun.password.hash(body.newPassword), hasPassword: true });
+  const changedAt = new Date();
+  const password = await Bun.password.hash(body.newPassword);
+  await carrySessionOver(req.sessionId, changedAt);
+  user.set({ password, hasPassword: true, passwordChangedAt: changedAt });
   await user.save();
   await revokeOtherSessions(user.id, req.sessionId);
   await notifyChanged(user.email, false);

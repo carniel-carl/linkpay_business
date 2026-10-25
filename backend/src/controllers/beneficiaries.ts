@@ -4,9 +4,9 @@ import { z } from "zod";
 import { BeneficiaryModel, type BeneficiaryDocument } from "../models/Beneficiary";
 import { PayoutListModel } from "../models/PayoutList";
 import { UserModel } from "../models/User";
-import { findBeneficiary, saveBeneficiary } from "../services/beneficiaries";
+import { beneficiaryLimit, findBeneficiary, roomForBeneficiaries, saveBeneficiary } from "../services/beneficiaries";
 import { LiquifiaError } from "../services/liquifia/client";
-import { nameCheckUnavailable, resolveBankRecipient } from "../services/transfers";
+import { nameCheckUnavailable, resolveBankRecipient, spendNameChecks, type ResolvedRecipient } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
 import { inPool } from "../utils/pool";
 import { visibleListsFilter } from "./payoutLists";
@@ -79,7 +79,11 @@ export const getBeneficiary: RequestHandler<IdParams> = async (req, res) => {
   res.json({ ...(await serialize([beneficiary]))[0], payoutLists: lists.map((l) => ({ _id: l.id, title: l.title })) });
 };
 
-/** Checks the account with the bank and saves it. 409 `BENEFICIARY_EXISTS` when it's already saved. */
+/**
+ * Checks the account with the bank and saves it. 409 `BENEFICIARY_EXISTS` when it's already saved, and
+ * `BENEFICIARY_LIMIT` at 2,000, both before the bank is asked. The name check comes from the member's budget
+ * (spendNameChecks: 429 RATE_LIMITED when it's used up).
+ */
 export const createBeneficiary: RequestHandler = async (req, res) => {
   const body = z.object({ accountNumber, bankUuid, nickname: nickname.optional() }).parse(req.body);
   const business = req.business!;
@@ -87,6 +91,8 @@ export const createBeneficiary: RequestHandler = async (req, res) => {
   if (existing) {
     throw new HttpError(409, "This account is already saved", "BENEFICIARY_EXISTS", { beneficiaryId: existing.id });
   }
+  if ((await roomForBeneficiaries(business)) <= 0) throw beneficiaryLimit();
+  await spendNameChecks(req.userId!, 1);
   const recipient = await resolveBankRecipient(business, body.accountNumber, body.bankUuid);
   const { beneficiary } = await saveBeneficiary(business, req.userId!, recipient, body.nickname);
   res.status(201).json((await serialize([beneficiary]))[0]);
@@ -101,36 +107,69 @@ type ImportRow = { row: number; beneficiary: BeneficiaryDocument; created: boole
  * Saves many at once (e.g. from a payroll spreadsheet). Unlike bulk transfers, good rows are saved even when
  * others fail: each row comes back with its beneficiary, whether it was new, or its error. A bank outage is a row
  * error too (NAME_CHECK_UNAVAILABLE, to check again later), so what was saved is always reported; after
- * OUTAGE_STREAK of them in a row the remaining rows aren't sent to the bank. Already saved rows need no name check.
+ * OUTAGE_STREAK of them in a row the remaining rows aren't sent to the bank.
+ *
+ * Before the bank is asked about anything: already saved rows are reported (no name check), each new account
+ * is checked once however many rows name it, new accounts past the room left under the 2,000 limit come back
+ * BENEFICIARY_LIMIT without a check, and the checks the rest need come from the member's name-check budget, all
+ * or nothing (429 RATE_LIMITED, nothing saved, when there isn't room).
  */
 export const importBeneficiaries: RequestHandler = async (req, res) => {
   const body = z
     .object({ items: z.array(z.object({ accountNumber, bankUuid, nickname: nickname.optional() })).min(1).max(MAX_IMPORT) })
     .parse(req.body);
   const business = req.business!;
+  const keyOf = (a: { accountNumber: string; bankUuid: string }) => `${a.bankUuid}:${a.accountNumber}`;
+  const accounts = body.items.map(({ accountNumber, bankUuid }) => ({ accountNumber, bankUuid }));
+  const saved = new Map((await BeneficiaryModel.find({ business: business._id, $or: accounts })).map((b) => [keyOf(b), b]));
+  const fresh = [...new Set(body.items.map(keyOf).filter((key) => !saved.has(key)))];
+  const toCheck = new Set(fresh.slice(0, await roomForBeneficiaries(business)));
+  await spendNameChecks(req.userId!, toCheck.size);
+
   // Rows in a row whose name check found the service down. Any answer from the bank starts the count again.
   let unavailable = 0;
-  const results = await inPool(body.items, 5, async (item, row): Promise<ImportRow> => {
-    const existing = await BeneficiaryModel.findOne({ business: business._id, accountNumber: item.accountNumber, bankUuid: item.bankUuid });
-    if (existing) return { row, beneficiary: existing, created: false };
-    if (unavailable >= OUTAGE_STREAK) {
-      const err = nameCheckUnavailable();
-      return { row, error: err.message, code: err.code ?? null };
+  const checks = new Map<string, Promise<ResolvedRecipient | HttpError>>();
+  /** The bank's answer for an account, asked once per import; an HttpError for the row when it can't be saved. */
+  const nameCheck = (item: { accountNumber: string; bankUuid: string }) => {
+    const key = keyOf(item);
+    let check = checks.get(key);
+    if (!check) {
+      check = (async () => {
+        if (unavailable >= OUTAGE_STREAK) return nameCheckUnavailable();
+        try {
+          const recipient = await resolveBankRecipient(business, item.accountNumber, item.bankUuid);
+          unavailable = 0;
+          return recipient;
+        } catch (err) {
+          if (isOutage(err)) {
+            if (err instanceof LiquifiaError) console.error(`Beneficiary import: name check failed: ${err.status} ${err.code}: ${err.message}`);
+            if (++unavailable === OUTAGE_STREAK) console.error(`Beneficiary import: the bank's name check is down; not asking for the remaining rows`);
+            return nameCheckUnavailable();
+          }
+          if (!(err instanceof HttpError)) throw err;
+          if (err.code === "ACCOUNT_NOT_FOUND") unavailable = 0;
+          return err;
+        }
+      })();
+      checks.set(key, check);
     }
+    return check;
+  };
+
+  const results = await inPool(body.items, 5, async (item, row): Promise<ImportRow> => {
+    const key = keyOf(item);
+    const existing = saved.get(key);
+    if (existing) return { row, beneficiary: existing, created: false };
+    const refused = (err: HttpError): ImportRow => ({ row, error: err.message, code: err.code ?? null });
+    if (!toCheck.has(key)) return refused(beneficiaryLimit());
+    const recipient = await nameCheck(item);
+    if (recipient instanceof HttpError) return refused(recipient);
     try {
-      const recipient = await resolveBankRecipient(business, item.accountNumber, item.bankUuid);
-      unavailable = 0;
+      // A second row for the same account gets the one the first saved (`created: false`).
       return { row, ...(await saveBeneficiary(business, req.userId!, recipient, item.nickname)) };
     } catch (err) {
-      if (isOutage(err)) {
-        if (err instanceof LiquifiaError) console.error(`Beneficiary import: name check failed: ${err.status} ${err.code}: ${err.message}`);
-        if (++unavailable === OUTAGE_STREAK) console.error(`Beneficiary import: the bank's name check is down; not asking for the remaining rows`);
-        const outage = nameCheckUnavailable();
-        return { row, error: outage.message, code: outage.code ?? null };
-      }
       if (!(err instanceof HttpError)) throw err;
-      if (err.code === "ACCOUNT_NOT_FOUND") unavailable = 0;
-      return { row, error: err.message, code: err.code ?? null };
+      return refused(err);
     }
   });
   const serialized = await serialize(results.flatMap((r) => ("beneficiary" in r ? [r.beneficiary] : [])));

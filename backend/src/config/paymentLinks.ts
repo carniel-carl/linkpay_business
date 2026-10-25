@@ -39,12 +39,20 @@ export const CHECKOUT_RULES = {
   /** Kobo added to the price to make the amount unique: 1..99. */
   maxOffsetKobo: 99,
   /**
-   * The most of one account's amounts for a price (its 99) that one address (an IPv4 address or an IPv6 /56)
+   * The most of one account's amounts for a price (its 99) that one address (an IPv4 address or an IPv6 /48)
    * or one payer email can hold at a time with unpaid live checkouts, so nobody can take the whole pool.
-   * Paying a checkout frees its amount.
+   * Paying a checkout frees its amount. On a link with a payment limit the same caps also count across the
+   * whole link (every price), and are lowered to `maxPlacesShare` of the limit.
    */
   maxOpenPerIp: 10,
   maxOpenPerEmail: 3,
+  /** The most of a link's `maxPayments` places one address or email can hold at once (at least 1). */
+  maxPlacesShare: 0.1,
+  /**
+   * How IPv6 addresses are grouped into one "address" for the caps above. One home, office or small hosting
+   * customer usually gets a whole /48, so a /56 (256 per /48) would let one of them act as hundreds of payers.
+   */
+  ipv6Subnet: 48,
 } as const;
 
 // Embedding a link on the business's own website (contract: docs/briefs/payment-links.md §5).

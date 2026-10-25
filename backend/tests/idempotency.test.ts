@@ -13,6 +13,7 @@ import { todayInLagos } from "../src/services/pockets";
 import { addDays } from "../src/services/safelocks";
 import { signAccessToken } from "../src/services/tokens";
 import { encrypt } from "../src/utils/crypto";
+import { requestHash } from "../src/utils/idempotency";
 import { signStaffToken, startTestEnv, withPin, type TestEnv } from "./helpers";
 
 let t: TestEnv;
@@ -182,6 +183,114 @@ describe("transfers", () => {
     expect(again.body.batch._id).toBe(first.body.batch._id);
     expect(await TransferBatchModel.countDocuments({ business: business._id })).toBe(1);
     expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
+  });
+});
+
+describe("saving beneficiaries isn't part of the request", () => {
+  const saveTo = (accountNumber: string, saveBeneficiary?: boolean) => ({ recipient: bank(accountNumber), ...(saveBeneficiary !== undefined && { saveBeneficiary }) });
+
+  test("sent with save on, the response lost, retried with save off (or on again): it replays", async () => {
+    const { token, business, headOfficeId } = await setup();
+    const body = { branch: headOfficeId, amountKobo: 1_000_00 };
+    const first = await send(token, "save-toggle-1234", { ...body, ...saveTo("0789123456", true) });
+    expect(first.status).toBe(201);
+    expect(first.body.recipient.beneficiary).toBeTruthy();
+    for (const save of [false, undefined, true]) {
+      const again = await send(token, "save-toggle-1234", { ...body, ...saveTo("0789123456", save) });
+      expect(again.status).toBe(200);
+      expect(again.body._id).toBe(first.body._id);
+    }
+    // The other way round: sent with save off to an account that's saved, retried with save on.
+    expect((await t.api("POST", "/api/beneficiaries", { token, body: { accountNumber: "0891234567", bankUuid: "BANK-GTB" } })).status).toBe(201);
+    const plain = await send(token, "save-toggle-5678", { ...body, ...saveTo("0891234567") });
+    expect(plain.body.recipient.beneficiary).toBeNull();
+    expect((await send(token, "save-toggle-5678", { ...body, ...saveTo("0891234567", true) })).body._id).toBe(plain.body._id);
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
+  });
+
+  test("a retry that arrives while the first is still being sent, with save toggled, replays it", async () => {
+    const { token, business, headOfficeId } = await setup();
+    // Single: the first saves the account; the retry, sent before the first answered, doesn't.
+    slowFirstBalanceCall();
+    const body = { branch: headOfficeId, amountKobo: 1_000_00 };
+    const [a, b] = await Promise.all([
+      send(token, "save-race-1234", { ...body, ...saveTo("0912345678", true) }),
+      Bun.sleep(100).then(() => send(token, "save-race-1234", { ...body, ...saveTo("0912345678", false) })),
+    ]);
+    expect(sorted(a.status, b.status)).toEqual([200, 201]);
+    expect(a.body._id).toBe(b.body._id);
+    for (const spy of spies.splice(0)) spy.mockRestore();
+
+    // Bulk, the other way round: the first doesn't save, the retry does.
+    slowFirstBalanceCall();
+    const items = [
+      { accountNumber: "0923456781", bankUuid: "BANK-GTB", amountKobo: 1_000_00 },
+      { accountNumber: "0934567812", bankUuid: "BANK-GTB", amountKobo: 2_000_00 },
+    ];
+    const bulkSend = (saveBeneficiaries: boolean) =>
+      t.api("POST", "/api/transfers/bulk", { token, headers: withKey("save-race-bulk-1234"), body: { branch: headOfficeId, items, saveBeneficiaries } });
+    const [c, d] = await Promise.all([bulkSend(false), Bun.sleep(100).then(() => bulkSend(true))]);
+    expect(sorted(c.status, d.status)).toEqual([200, 201]);
+    expect(c.body.batch._id).toBe(d.body.batch._id);
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(3);
+  });
+
+  test("a row is its account: a retry naming the saved beneficiary replays one sent to the account typed in", async () => {
+    const { token, headOfficeId } = await setup();
+    const saved = (await t.api("POST", "/api/beneficiaries", { token, body: { accountNumber: "0945678123", bankUuid: "BANK-GTB" } })).body;
+    const body = { branch: headOfficeId, amountKobo: 1_000_00 };
+    const first = await send(token, "as-account-1234", { ...body, recipient: bank("0945678123") });
+    expect(first.status).toBe(201);
+    const again = await send(token, "as-account-1234", { ...body, recipient: { type: "beneficiary", beneficiary: saved._id } });
+    expect(again.status).toBe(200);
+    expect(again.body._id).toBe(first.body._id);
+    // Another account is another payment.
+    const other = (await t.api("POST", "/api/beneficiaries", { token, body: { accountNumber: "0956781234", bankUuid: "BANK-GTB" } })).body;
+    expect((await send(token, "as-account-1234", { ...body, recipient: { type: "beneficiary", beneficiary: other._id } })).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+  });
+
+  test("a transfer whose hash has the shape from before (with the beneficiary id) still replays", async () => {
+    const { token, headOfficeId } = await setup();
+    const body = { branch: headOfficeId, amountKobo: 1_000_00, ...saveTo("0967812345", true) };
+    const first = await send(token, "old-shape-1234", body);
+    const sentRow = await TransferModel.findById(first.body._id);
+    const legacy = requestHash({
+      branch: headOfficeId,
+      payoutList: null,
+      rows: [{ accountNumber: "0967812345", bankUuid: "BANK-GTB", amountKobo: 1_000_00, narration: null, beneficiary: String(sentRow!.recipient!.beneficiary) }],
+    });
+    await TransferModel.updateOne({ _id: first.body._id }, { requestHash: legacy });
+    expect(await send(token, "old-shape-1234", body)).toMatchObject({ status: 200, body: { _id: first.body._id } });
+    expect((await send(token, "old-shape-1234", { ...body, amountKobo: 1_000_01 })).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    // A hash that's neither shape is a different request.
+    await TransferModel.updateOne({ _id: first.body._id }, { requestHash: "0".repeat(64) });
+    expect((await send(token, "old-shape-1234", body)).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+  });
+});
+
+describe("a key is required to send money", () => {
+  test("a transfer, a bulk transfer or a payout list run without an Idempotency-Key is refused, and nothing is sent", async () => {
+    const { token, business, headOfficeId } = await setup();
+    const beneficiary = (await t.api("POST", "/api/beneficiaries", { token, body: { accountNumber: "0678912345", bankUuid: "BANK-GTB" } })).body;
+    const list = (await t.api("POST", "/api/payout-lists", { token, body: { title: "Rent", branch: headOfficeId, items: [{ beneficiary: beneficiary._id, amountKobo: 1_000_00 }] } })).body;
+    const requests = [
+      ["/api/transfers", { branch: headOfficeId, amountKobo: 1_000_00, recipient: bank() }],
+      ["/api/transfers/bulk", { branch: headOfficeId, items: [{ accountNumber: "0123456789", bankUuid: "BANK-GTB", amountKobo: 1_000_00 }] }],
+      [`/api/payout-lists/${list._id}/run`, {}],
+    ] as const;
+    const payouts = t.liquifia.payouts.length;
+    for (const [path, body] of requests) {
+      for (const key of ["", "   "]) {
+        const res = await t.api("POST", path, { token, headers: withKey(key), body });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+      }
+      expect((await t.api("POST", path, { token, headers: withKey("bad key!"), body })).status).toBe(400);
+    }
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(0);
+    expect(t.liquifia.payouts.length).toBe(payouts);
+    // With one, as the apps send it.
+    for (const [i, [path, body]] of requests.entries()) expect((await t.api("POST", path, { token, headers: withKey(`required-key-${i}`), body })).status).toBe(201);
   });
 });
 

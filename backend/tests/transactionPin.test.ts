@@ -10,6 +10,7 @@ import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
 import { accountsRouter } from "../src/routes/accounts";
 import { adminRouter } from "../src/routes/admin";
+import { appRouter } from "../src/routes/app";
 import { authRouter } from "../src/routes/auth";
 import { beneficiariesRouter } from "../src/routes/beneficiaries";
 import { branchesRouter } from "../src/routes/branches";
@@ -111,8 +112,11 @@ beforeAll(async () => {
   ctx = { businessId: business.id, headOfficeId, owner, finance, beneficiaryId: beneficiary.body._id, member };
 });
 afterAll(() => t.stop());
-beforeEach(() => {
+beforeEach(async () => {
   outbox.length = 0;
+  // Each test starts a fresh day of wrong PINs: the owner here gets one on every covered route. The daily cap
+  // has its own tests (transactionPinDailyCap.test.ts).
+  await TransactionPinModel.updateMany({}, { $set: { recentFailures: [] } });
 });
 
 const toBank = (accountNumber = "0123456789") => ({ type: "bank", accountNumber, bankUuid: "BANK-GTB" });
@@ -312,6 +316,7 @@ const COVERED: Covered[] = [
 // Every router app.ts mounts, by prefix.
 const MOUNTED: [string, { stack: any[] }][] = [
   ["/api/webhooks", webhooksRouter],
+  ["/api/app", appRouter],
   ["/api/auth", authRouter],
   ["/api/auth/password", passwordRouter],
   ["/api/business", businessRouter],
@@ -493,7 +498,7 @@ describe("setting, changing and resetting the PIN", () => {
 
   test("setting the first PIN needs the password, and refuses easy PINs", async () => {
     const u = await newUser("Setter");
-    expect(await statusOf(u.token)).toEqual({ isSet: false, locked: false, lockedUntil: null, attemptsLeft: null, changedAt: null });
+    expect(await statusOf(u.token)).toEqual({ isSet: false, locked: false, lockedUntil: null, attemptsLeft: null, changedAt: null, resetRequired: false });
 
     expect((await pinApi("POST", "", u.token, { pin: "5162" })).status).toBe(400);
     const wrongPassword = await pinApi("POST", "", u.token, { pin: "5162", password: "not it" });
@@ -592,9 +597,10 @@ describe("setting, changing and resetting the PIN", () => {
     expect((await call("POST", "/api/transaction-pin", { body: { pin: "5162", password: PASSWORD } })).status).toBe(401);
   });
 
-  test("weak PINs: repeats and straight runs only", () => {
+  test("weak PINs: repeats, straight runs, years and the most common PINs", () => {
     expect(["0000", "1234", "4321", "0123", "9876", "5555"].every(isWeakPin)).toBe(true);
-    expect(["2580", "1357", "7890", "1212", "7391"].some(isWeakPin)).toBe(false);
+    expect(["1950", "1987", "2000", "2030", "1212", "1004", "2580", "6969", "7890"].every(isWeakPin)).toBe(true);
+    expect(["1949", "2031", "1357", "7391", "4826", "0814"].some(isWeakPin)).toBe(false);
   });
 });
 

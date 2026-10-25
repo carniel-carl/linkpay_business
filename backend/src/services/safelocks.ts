@@ -4,7 +4,7 @@ import {
   SAFELOCK_MIN_AMOUNT_KOBO,
   SAFELOCK_MIN_DAYS,
 } from "../config/safelock";
-import type { Types } from "mongoose";
+import { Types } from "mongoose";
 import { BranchModel } from "../models/Branch";
 import { BusinessModel, type BusinessDocument } from "../models/Business";
 import type { MembershipDocument } from "../models/Membership";
@@ -13,6 +13,7 @@ import { HttpError } from "../utils/HttpError";
 import { assertSameRequest, isDuplicateClientKey, requestHash } from "../utils/idempotency";
 import { safelockReleased } from "./notificationEvents";
 import { branchAccount, todayInLagos } from "./pockets";
+import { canAccessBranch } from "./team";
 import { availableBalance, withAccountLock } from "./transfers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -37,6 +38,11 @@ export function unlockWindow(today = todayInLagos()) {
 /**
  * Locks `amountKobo` of a branch's available balance until `unlockOn`. Runs under the account's lock, so a
  * transfer or pocket can't spend the same money at the same moment. Can't be undone.
+ *
+ * A retry with the Idempotency-Key is answered first, before the amount and date are checked: the window
+ * moves at midnight (Lagos), so a retry of yesterday's earliest date would be refused with
+ * INVALID_UNLOCK_DATE, and the client, picking a new date under a new key, would lock the money twice. The
+ * same key with other details is refused (422 IDEMPOTENCY_KEY_REUSED) just as early.
  */
 export async function createSafelock(opts: {
   business: BusinessDocument;
@@ -49,6 +55,26 @@ export async function createSafelock(opts: {
   clientKey?: string;
 }) {
   const { business, userId, amountKobo, unlockOn } = opts;
+  // What this request asks for, so the same Idempotency-Key with different details is refused. The branch as
+  // its id prints (what the hash has always held), so it can be worked out before the branch is looked up.
+  const hash = opts.clientKey
+    ? requestHash({ branch: String(new Types.ObjectId(opts.branchId)), title: opts.title, amountKobo, unlockOn })
+    : undefined;
+
+  /** The Safelock first created with this Idempotency-Key, if it was used before. */
+  const replay = async () => {
+    if (!opts.clientKey) return null;
+    const first = await SafelockModel.findOne({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
+    if (!first) return null;
+    assertSameRequest(first.requestHash, hash);
+    // As for a new lock: only on the member's branches.
+    if (!canAccessBranch(opts.membership, first.branch)) throw new HttpError(404, "Branch not found");
+    return { safelock: first, replayed: true };
+  };
+
+  const earlier = await replay();
+  if (earlier) return earlier;
+
   if (amountKobo < SAFELOCK_MIN_AMOUNT_KOBO) {
     throw new HttpError(400, `The smallest Safelock is ₦${(SAFELOCK_MIN_AMOUNT_KOBO / 100).toLocaleString("en-NG")}`, "SAFELOCK_TOO_SMALL", {
       minAmountKobo: SAFELOCK_MIN_AMOUNT_KOBO,
@@ -62,17 +88,6 @@ export async function createSafelock(opts: {
     });
   }
   const { branch, account } = await branchAccount(business, opts.membership, opts.branchId);
-  // What this request asks for, so the same Idempotency-Key with different details is refused.
-  const hash = opts.clientKey ? requestHash({ branch: String(branch._id), title: opts.title, amountKobo, unlockOn }) : undefined;
-
-  /** The Safelock first created with this Idempotency-Key, if it was used before. */
-  const replay = async () => {
-    if (!opts.clientKey) return null;
-    const first = await SafelockModel.findOne({ business: business._id, createdBy: userId, clientKey: opts.clientKey });
-    if (!first) return null;
-    assertSameRequest(first.requestHash, hash);
-    return { safelock: first, replayed: true };
-  };
 
   return withAccountLock(account._id, async (lock) => {
     const replayed = await replay();

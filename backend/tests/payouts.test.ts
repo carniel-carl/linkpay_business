@@ -1,4 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import type { Types } from "mongoose";
+import { BeneficiaryModel } from "../src/models/Beneficiary";
 import { BusinessModel } from "../src/models/Business";
 import { MembershipModel } from "../src/models/Membership";
 import { PayoutListModel } from "../src/models/PayoutList";
@@ -257,6 +259,89 @@ describe("beneficiaries", () => {
     const viewer = await member("viewer");
     expect((await t.api("GET", "/api/beneficiaries", { token: viewer.token })).body.total).toBe(1);
     expect((await save("2222222222", undefined, viewer.token)).status).toBe(403);
+  });
+});
+
+describe("a beneficiary's payment history", () => {
+  /** One transfer to an account typed in, not picked from the beneficiaries. */
+  const send = async (token: string, branch: string, accountNumber: string, bankUuid = "BANK-GTB") => {
+    const res = await t.api("POST", "/api/transfers", { token, body: { branch, amountKobo: 1_000_00, recipient: { type: "bank", accountNumber, bankUuid } } });
+    expect(res.status).toBe(201);
+    return res.body._id as string;
+  };
+  const pay = async (token: string, branch: string, beneficiary: string) => {
+    const res = await t.api("POST", "/api/transfers", { token, body: { branch, amountKobo: 1_000_00, recipient: { type: "beneficiary", beneficiary } } });
+    expect(res.status).toBe(201);
+    return res.body._id as string;
+  };
+  const history = (token: string, query: string) => t.api("GET", `/api/transfers?${query}`, { token });
+  const ids = (res: { body: { items: { _id: string }[] } }) => res.body.items.map((i) => i._id);
+
+  test("includes payments to the account from before it was saved and typed in by hand, without rewriting them", async () => {
+    const { owner, headOfficeId, kanoId, kanoVa, member, save } = await setup();
+    t.liquifia.balances.set(kanoVa.providerAccountId, 100_000_00);
+    const early = await send(owner.token, headOfficeId, "1111111111");
+    const fromKano = await send(owner.token, kanoId, "1111111111");
+    const bulk = await t.api("POST", "/api/transfers/bulk", {
+      token: owner.token,
+      body: {
+        branch: headOfficeId,
+        items: [
+          { accountNumber: "1111111111", bankUuid: "BANK-GTB", amountKobo: 2_000_00 },
+          { accountNumber: "2222222222", bankUuid: "BANK-GTB", amountKobo: 2_000_00 },
+        ],
+      },
+    });
+    expect(bulk.status).toBe(201);
+    const bulkRow = bulk.body.batch.items.find((i: any) => i.recipient.accountNumber === "1111111111")._id as string;
+    // Not this account: another one, and the same number at another bank.
+    await send(owner.token, headOfficeId, "2222222222");
+    await send(owner.token, headOfficeId, "1111111111", "BANK-ACCESS");
+
+    const amaka = (await save("1111111111")).body;
+    const paid = await pay(owner.token, headOfficeId, amaka._id);
+    const typed = await send(owner.token, headOfficeId, "1111111111");
+
+    const all = await history(owner.token, `beneficiary=${amaka._id}`);
+    expect(all.body.total).toBe(5);
+    expect(ids(all)).toEqual([typed, paid, bulkRow, fromKano, early]);
+    // Past transfers keep their recipient as sent: only the one paid as a beneficiary names it.
+    expect(all.body.items.map((i: any) => i.recipient.beneficiary)).toEqual([null, amaka._id, null, null, null]);
+
+    // With the other filters, paging and totals.
+    expect(await history(owner.token, `beneficiary=${amaka._id}&take=2&skip=2`)).toMatchObject({ body: { total: 5, items: [{ _id: bulkRow }, { _id: fromKano }] } });
+    expect(ids(await history(owner.token, `beneficiary=${amaka._id}&batch=none`))).toEqual([typed, paid, fromKano, early]);
+    expect(ids(await history(owner.token, `beneficiary=${amaka._id}&branch=${kanoId}`))).toEqual([fromKano]);
+    expect((await history(owner.token, `beneficiary=${amaka._id}&q=amaka`)).body.total).toBe(5);
+
+    // A member limited to the head office sees only its payments.
+    const viewer = await member("viewer", [headOfficeId]);
+    expect(ids(await history(viewer.token, `beneficiary=${amaka._id}`))).toEqual([typed, paid, bulkRow, early]);
+    expect((await history(viewer.token, `beneficiary=${amaka._id}&branch=${kanoId}`)).status).toBe(404);
+  });
+
+  test("never shows another business's payments; a deleted beneficiary keeps the payments made to it", async () => {
+    const a = await setup();
+    const b = await setup();
+    const fromA = await send(a.owner.token, a.headOfficeId, "1111111111");
+    const fromB = await send(b.owner.token, b.headOfficeId, "1111111111");
+    const savedA = (await a.save("1111111111")).body;
+    const savedB = (await b.save("1111111111")).body;
+    const paidByB = await pay(b.owner.token, b.headOfficeId, savedB._id);
+
+    expect(ids(await history(a.owner.token, `beneficiary=${savedA._id}`))).toEqual([fromA]);
+    expect(ids(await history(b.owner.token, `beneficiary=${savedB._id}`))).toEqual([paidByB, fromB]);
+    // Another business's beneficiary matches nothing here.
+    expect((await history(a.owner.token, `beneficiary=${savedB._id}`)).body).toMatchObject({ items: [], total: 0 });
+
+    // Deleted: the payments made to it as a beneficiary still show under its id; the account's others don't.
+    const paidA = await pay(a.owner.token, a.headOfficeId, savedA._id);
+    expect((await t.api("DELETE", `/api/beneficiaries/${savedA._id}`, { token: a.owner.token })).status).toBe(204);
+    expect(ids(await history(a.owner.token, `beneficiary=${savedA._id}`))).toEqual([paidA]);
+    // Saved again, it has the account's whole history.
+    const again = (await a.save("1111111111")).body;
+    expect(ids(await history(a.owner.token, `beneficiary=${again._id}`))).toEqual([paidA, fromA]);
+    expect((await history(a.owner.token, "beneficiary=nope")).status).toBe(400);
   });
 });
 
@@ -567,5 +652,140 @@ describe("payout lists", () => {
     const kanoFinance = await member("finance", [kanoId]);
     expect((await t.api("GET", "/api/payout-lists", { token: kanoFinance.token })).body.items).toHaveLength(0);
     expect((await t.api("POST", `/api/payout-lists/${list._id}/run`, { token: kanoFinance.token })).status).toBe(404);
+  });
+});
+
+describe("retries after a beneficiary changes", () => {
+  const withKey = (key: string) => ({ "Idempotency-Key": key });
+  const remove = async (token: string, id: string) => expect((await t.api("DELETE", `/api/beneficiaries/${id}`, { token })).status).toBe(204);
+  const savedFor = async (business: { _id: Types.ObjectId }, accountNumber: string) => (await BeneficiaryModel.findOne({ business: business._id, accountNumber }))!;
+
+  test("a single transfer replays after the beneficiary it paid, or saved, is deleted or saved again", async () => {
+    const { owner, business, headOfficeId, save } = await setup();
+    const amaka = (await save("1111111111")).body;
+    const send = (key: string, body: object) => t.api("POST", "/api/transfers", { token: owner.token, headers: withKey(key), body });
+    const toAmaka = { branch: headOfficeId, amountKobo: 5_000_00, recipient: { type: "beneficiary", beneficiary: amaka._id } };
+    const first = await send("ben-deleted-1", toAmaka);
+    expect(first.status).toBe(201);
+    await remove(owner.token, amaka._id);
+    const again = await send("ben-deleted-1", toAmaka);
+    expect(again.status).toBe(200);
+    expect(again.body._id).toBe(first.body._id);
+    // Other details under the key are still refused, and a new key can't pay a deleted beneficiary.
+    expect((await send("ben-deleted-1", { ...toAmaka, amountKobo: 5_000_01 })).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await send("ben-deleted-1", { ...toAmaka, recipient: { type: "beneficiary", beneficiary: "6a0000000000000000000000" } })).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await send("ben-deleted-2", toAmaka)).body.code).toBe("BENEFICIARY_NOT_FOUND");
+
+    // Saved while sending, then deleted, then saved again as a new beneficiary.
+    const withSave = { branch: headOfficeId, amountKobo: 6_000_00, saveBeneficiary: true, recipient: { type: "bank", accountNumber: "2222222222", bankUuid: "BANK-GTB" } };
+    const saving = await send("ben-saved-1", withSave);
+    expect(saving.status).toBe(201);
+    expect(saving.body.recipient.beneficiary).toBeTruthy();
+    await remove(owner.token, saving.body.recipient.beneficiary);
+    expect(await send("ben-saved-1", withSave)).toMatchObject({ status: 200, body: { _id: saving.body._id } });
+    expect((await save("2222222222")).status).toBe(201);
+    expect(await send("ben-saved-1", withSave)).toMatchObject({ status: 200, body: { _id: saving.body._id } });
+    // The same payment without asking to save is the same request too.
+    expect(await send("ben-saved-1", { ...withSave, saveBeneficiary: undefined })).toMatchObject({ status: 200, body: { _id: saving.body._id } });
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
+  });
+
+  test("a bulk transfer replays after its beneficiaries are deleted, without asking the bank", async () => {
+    const { owner, business, headOfficeId, save } = await setup();
+    const amaka = (await save("1111111111")).body;
+    const body = {
+      branch: headOfficeId,
+      saveBeneficiaries: true,
+      items: [
+        { beneficiary: amaka._id, amountKobo: 10_000_00, narration: "Salary" },
+        { accountNumber: "2222222222", bankUuid: "BANK-GTB", amountKobo: 12_000_00 },
+        { accountNumber: "3333333333", bankUuid: "BANK-GTB", amountKobo: 13_000_00 },
+      ],
+    };
+    const send = (b: object = body) => t.api("POST", "/api/transfers/bulk", { token: owner.token, headers: withKey("bulk-ben-deleted-1"), body: b });
+    const first = await send();
+    expect(first.status).toBe(201);
+    expect(first.body.batch.items.every((i: any) => i.recipient.beneficiary)).toBe(true);
+    for (const accountNumber of ["1111111111", "2222222222", "3333333333"]) await remove(owner.token, (await savedFor(business, accountNumber)).id);
+
+    const before = enquiries();
+    const again = await send();
+    expect(again.status).toBe(200);
+    expect(again.body.batch._id).toBe(first.body.batch._id);
+    expect(again.body.batch.items.map((i: any) => i._id)).toEqual(first.body.batch.items.map((i: any) => i._id));
+    expect(enquiries()).toBe(before);
+    // Saved again since, or not saved this time: still the same request.
+    await save("2222222222");
+    expect((await send({ ...body, saveBeneficiaries: undefined })).status).toBe(200);
+    // A changed row is still refused.
+    const changed = await send({ ...body, items: [body.items[0], body.items[1], { ...body.items[2], amountKobo: 13_000_01 }] });
+    expect(changed.body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(3);
+  });
+
+  test("a payout list run replays after its beneficiaries and the list are deleted", async () => {
+    const ctx = await setup();
+    const { owner, business, headOfficeId, save } = ctx;
+    const amaka = (await save("1111111111")).body;
+    const tunde = (await save("2222222222")).body;
+    const list = (
+      await t.api("POST", "/api/payout-lists", {
+        token: owner.token,
+        body: { title: "Drivers", branch: headOfficeId, items: [{ beneficiary: amaka._id, amountKobo: 20_000_00 }, { beneficiary: tunde._id, amountKobo: 30_000_00 }] },
+      })
+    ).body;
+    const items = [
+      { beneficiary: amaka._id, amountKobo: 25_000_00, narration: "October" },
+      { beneficiary: tunde._id, amountKobo: 30_000_00, narration: "October" },
+    ];
+    const run = (b: object = { items }) => t.api("POST", `/api/payout-lists/${list._id}/run`, { token: owner.token, headers: withKey("run-ben-deleted-1"), body: b });
+    const first = await run();
+    expect(first.status).toBe(201);
+
+    // Amaka is taken off the list and deleted.
+    await t.api("PATCH", `/api/payout-lists/${list._id}`, { token: owner.token, body: { items: [{ beneficiary: tunde._id, amountKobo: 30_000_00 }] } });
+    await remove(owner.token, amaka._id);
+    expect(await run()).toMatchObject({ status: 200, body: { batch: { _id: first.body.batch._id } } });
+    // Then the list and Tunde.
+    expect((await t.api("DELETE", `/api/payout-lists/${list._id}`, { token: owner.token })).status).toBe(204);
+    await remove(owner.token, tunde._id);
+    expect(await run()).toMatchObject({ status: 200, body: { batch: { _id: first.body.batch._id } } });
+    expect((await run({ items: [items[0], { ...items[1], amountKobo: 30_000_01 }] })).body.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
+  });
+
+  test("a run that saves its rows isn't turned into an error when a beneficiary is deleted after the money moved", async () => {
+    const { owner, business, headOfficeId, save } = await setup();
+    const amaka = (await save("1111111111")).body;
+    const tunde = (await save("2222222222")).body;
+    const list = (
+      await t.api("POST", "/api/payout-lists", {
+        token: owner.token,
+        body: { title: "Drivers", branch: headOfficeId, items: [{ beneficiary: amaka._id, amountKobo: 20_000_00 }, { beneficiary: tunde._id, amountKobo: 30_000_00 }] },
+      })
+    ).body;
+    // Tunde is deleted while the run is being sent (after the transfers are created, before the list is updated).
+    const original = BeneficiaryModel.updateMany.bind(BeneficiaryModel);
+    const spy = spyOn(BeneficiaryModel, "updateMany").mockImplementation((async (...args: Parameters<typeof original>) => {
+      await BeneficiaryModel.deleteOne({ _id: tunde._id });
+      return original(...args);
+    }) as any);
+    let res;
+    try {
+      res = await t.api("POST", `/api/payout-lists/${list._id}/run`, {
+        token: owner.token,
+        body: { items: [{ beneficiary: amaka._id, amountKobo: 21_000_00 }, { beneficiary: tunde._id, amountKobo: 31_000_00 }], saveItems: true },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(res.status).toBe(201);
+    expect(res.body.batch).toMatchObject({ count: 2, amountKobo: 52_000_00, payoutList: list._id });
+    // The run is noted on the list, which keeps its rows (one of them is gone now).
+    const after = (await PayoutListModel.findById(list._id))!;
+    expect(String(after.lastBatch)).toBe(res.body.batch._id);
+    expect(after.lastRunAt).toBeTruthy();
+    expect(after.items.map((i) => i.amountKobo)).toEqual([20_000_00, 30_000_00]);
+    expect(await TransferModel.countDocuments({ business: business._id })).toBe(2);
   });
 });

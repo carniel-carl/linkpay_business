@@ -150,9 +150,15 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
       `    onSuccess: (checkout) => {`,
       `      // Anyone can hand your page a checkout, so don't fulfil from here. Send checkout.token to your server`,
       `      // and GET ${env.apiPublicUrl}/api/public/pay/${link.slug}/checkouts/<token> there (it's a 404 for a`,
-      `      // checkout from any other link). Fulfil only if status is "paid", mode is "live" (test payments move`,
-      `      // no money), currency is "NGN", priceKobo is your order total in kobo (paidKobo is at least that) and`,
-      `      // clientReference is your order id. Then mark the order paid, so the same checkout can't be used twice.`,
+      `      // checkout from any other link). Fulfil only if all of these are true:`,
+      `      //   - status is "paid"`,
+      `      //   - mode is "live" (test payments move no money)`,
+      `      //   - currency is "NGN"`,
+      `      //   - priceKobo is your order total in kobo`,
+      `      //   - paidKobo is at least your order total in kobo ("paid" alone doesn't promise that)`,
+      `      //   - clientReference is your order id`,
+      `      //   - overLimit is not true, if you have limited stock (it came after the link's payment limit)`,
+      `      // Then mark the order paid, so the same checkout can't be used twice.`,
       `    },`,
       `    onClose: () => {},`,
       `  });`,
@@ -164,6 +170,13 @@ export function embedSnippets(link: Pick<PaymentLinkDocument, "slug" | "title" |
 /** The status clients see: a pending checkout past its time shows as "expired" (a late transfer still counts). */
 export const checkoutStatus = (checkout: Pick<CheckoutDocument, "status" | "expiresAt">, now = new Date()) =>
   checkout.status === "pending" && checkout.expiresAt <= now ? ("expired" as const) : checkout.status;
+
+/**
+ * Whether the payer may still be shown what to send: pending, and its amount still held. After the hold the
+ * same amount can go to someone else's checkout, so a payer on an old tab must never see it again.
+ */
+export const checkoutPayable = (checkout: Pick<CheckoutDocument, "status" | "holdUntil">, now = new Date()) =>
+  checkout.status === "pending" && checkout.holdUntil > now;
 
 /**
  * The account a test checkout shows instead of the branch's real one: plainly not a bank account, so nobody
@@ -302,43 +315,66 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
     }
   }
 
+  const tooMany = () =>
+    new HttpError(429, "You've started several payments that are still waiting. Pay one of them, or try again later.", "TOO_MANY_OPEN_CHECKOUTS");
+
   // A payment limit counts the payers still within their time to pay, so the last places can't be sold twice.
+  // One address or email can hold only a small share of them, counted across the whole link (every price), so
+  // nobody can keep a limited link "sold out" by holding places they never pay for.
+  const holdingPlaces: Record<string, unknown> = { link: link._id, mode: { $ne: "test" }, status: "pending", expiresAt: { $gt: now } };
   const placesTaken = async (upTo?: Types.ObjectId) =>
-    link.paymentsCount +
-    (await CheckoutModel.countDocuments({
-      link: link._id,
-      mode: { $ne: "test" },
-      status: "pending",
-      expiresAt: { $gt: now },
-      ...(upTo && { _id: { $lte: upTo } }),
-    }));
+    link.paymentsCount + (await CheckoutModel.countDocuments({ ...holdingPlaces, ...(upTo && { _id: { $lte: upTo } }) }));
   const placesBusy = () =>
     new HttpError(503, "The last places are being paid for right now. Please try again in a few minutes.", "CHECKOUT_BUSY", { reason: "places_held" });
-  if (link.maxPayments && (await placesTaken()) >= link.maxPayments) throw placesBusy();
+  const placeShare = link.maxPayments ? Math.max(1, Math.floor(link.maxPayments * CHECKOUT_RULES.maxPlacesShare)) : 0;
+  const tooManyPlaces = async (upTo?: Types.ObjectId) => {
+    const mine = (key: Record<string, unknown>) => CheckoutModel.countDocuments({ ...holdingPlaces, ...key, ...(upTo && { _id: { $lte: upTo } }) });
+    const [byIp, byEmail] = await Promise.all([context.clientIp ? mine({ clientIp: context.clientIp }) : 0, mine({ "payer.email": email })]);
+    // Counting this one when it's already saved (`upTo`), so the limit is "at most", not "one more than".
+    const over = upTo ? 0 : 1;
+    return byIp + over > Math.min(CHECKOUT_RULES.maxOpenPerIp, placeShare) || byEmail + over > Math.min(CHECKOUT_RULES.maxOpenPerEmail, placeShare);
+  };
+  if (link.maxPayments) {
+    if (await tooManyPlaces()) throw tooMany();
+    if ((await placesTaken()) >= link.maxPayments) throw placesBusy();
+  }
 
   await releaseHolds(now);
-  const reserved = await CheckoutModel.find({
-    virtualAccount: account._id,
-    amountReserved: true,
-    amountKobo: { $gt: priceKobo, $lte: priceKobo + CHECKOUT_RULES.maxOffsetKobo },
-  }).select("amountKobo clientIp payer.email");
+  const priceRange = { $gt: priceKobo, $lte: priceKobo + CHECKOUT_RULES.maxOffsetKobo };
+  const [reserved, recent] = await Promise.all([
+    CheckoutModel.find({ virtualAccount: account._id, amountReserved: true, amountKobo: priceRange }).select("amountKobo clientIp payer.email"),
+    // Amounts whose hold has ended but whose checkout is still open within the reference window: its payer may
+    // still send that amount from an old tab, so (see `findCheckoutFor`) the amount can't be matched on its own.
+    CheckoutModel.find({
+      virtualAccount: account._id,
+      amountKobo: priceRange,
+      mode: { $ne: "test" },
+      status: "pending",
+      amountReserved: { $ne: true },
+      createdAt: { $gte: new Date(now.getTime() - CHECKOUT_RULES.referenceMatchDays * 24 * 60 * MINUTE) },
+    }).select("amountKobo createdAt"),
+  ]);
   // No one address or email can hold more than a slice of the amounts for this price.
   const heldByIp = context.clientIp ? reserved.filter((c) => c.clientIp === context.clientIp).length : 0;
   const heldByEmail = reserved.filter((c) => c.payer?.email === email).length;
-  if (heldByIp >= CHECKOUT_RULES.maxOpenPerIp || heldByEmail >= CHECKOUT_RULES.maxOpenPerEmail) {
-    throw new HttpError(
-      429,
-      "You've started several payments that are still waiting. Pay one of them, or try again later.",
-      "TOO_MANY_OPEN_CHECKOUTS",
-    );
-  }
+  if (heldByIp >= CHECKOUT_RULES.maxOpenPerIp || heldByEmail >= CHECKOUT_RULES.maxOpenPerEmail) throw tooMany();
   const taken = new Set(reserved.map((c) => c.amountKobo - priceKobo));
-  const free = Array.from({ length: CHECKOUT_RULES.maxOffsetKobo }, (_, i) => i + 1).filter((o) => !taken.has(o));
-  // Random order, so the amounts don't hint at how many people are paying.
-  for (let i = free.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1);
-    [free[i], free[j]] = [free[j]!, free[i]!];
+  // When each amount was last handed to a checkout that's still open: those are used only once the rest run out.
+  const lastOpen = new Map<number, number>();
+  for (const c of recent) {
+    const offset = c.amountKobo - priceKobo;
+    lastOpen.set(offset, Math.max(lastOpen.get(offset) ?? 0, c.get("createdAt").getTime()));
   }
+  const offsets = Array.from({ length: CHECKOUT_RULES.maxOffsetKobo }, (_, i) => i + 1).filter((o) => !taken.has(o));
+  const fresh = offsets.filter((o) => !lastOpen.has(o));
+  // Random order, so the amounts don't hint at how many people are paying.
+  for (let i = fresh.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [fresh[i], fresh[j]] = [fresh[j]!, fresh[i]!];
+  }
+  // Then the ones whose open checkout is oldest, as they leave the reference window first.
+  const reused = offsets.filter((o) => lastOpen.has(o)).sort((a, b) => lastOpen.get(a)! - lastOpen.get(b)!);
+  const free = [...fresh, ...reused];
 
   for (const offset of free.slice(0, 5)) {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -352,10 +388,14 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
           amountKobo: priceKobo + offset,
           amountReserved: true,
         });
-        // Two payers who started at the same moment for the last place: the later one steps back.
-        if (link.maxPayments && (await placesTaken(checkout._id)) > link.maxPayments) {
-          await CheckoutModel.deleteOne({ _id: checkout._id });
-          throw placesBusy();
+        // Two payers who started at the same moment for the last place, or one address or email starting
+        // several at once past its share: the later one steps back.
+        if (link.maxPayments) {
+          const refused = (await tooManyPlaces(checkout._id)) ? tooMany() : (await placesTaken(checkout._id)) > link.maxPayments ? placesBusy() : null;
+          if (refused) {
+            await CheckoutModel.deleteOne({ _id: checkout._id });
+            throw refused;
+          }
         }
         return { checkout, reused: false };
       } catch (err) {
@@ -378,15 +418,16 @@ export async function startCheckout(link: PaymentLinkDocument, payer: PayerInput
 type Payment = { _id?: Types.ObjectId; amountKobo: number; occurredAt: Date };
 
 /**
- * Marks the checkout as paid by `tx`, updates the link's totals (live payments only), and tells the team and
- * (unless `receipt` is false) the payer. Returns null when the checkout was no longer pending.
+ * Marks the checkout as paid by `tx`, updates the link's totals (live payments only), and tells the team
+ * (unless `notify` is false) and the payer (unless `receipt` is false). `paidKobo` is always what arrived, so
+ * on a donation link a "paid" checkout can hold less than its price. Returns null when it was no longer pending.
  */
 async function settleCheckout(
   checkoutId: Types.ObjectId,
   tx: Payment,
   matchedBy: "amount" | "reference" | "manual" | "simulated",
   userId?: string,
-  { receipt = true }: { receipt?: boolean } = {},
+  { receipt = true, notify = true }: { receipt?: boolean; notify?: boolean } = {},
 ) {
   const current = await CheckoutModel.findById(checkoutId).select("priceKobo link");
   if (!current) return null;
@@ -429,7 +470,7 @@ async function settleCheckout(
   }
   const business = await BusinessModel.findById(checkout.business);
   if (link && business) {
-    await paymentLinkPaid(business, link, checkout);
+    if (notify) await paymentLinkPaid(business, link, checkout);
     if (checkout.status === "paid" && receipt) {
       try {
         await sendPaymentLinkReceiptEmail(checkout.payer!.email, {
@@ -479,18 +520,25 @@ async function findCheckoutFor(tx: TransactionDocument) {
     }).select("_id");
     if (byReference) return { id: byReference._id, by: "reference" as const };
   }
-  // The exact unique amount, sent while it was held for that checkout.
+  // The exact unique amount, sent while it was held for that checkout, and for no other open checkout. Once a
+  // hold ends the amount can go to a new checkout, but the old one's payer may still send it from an old tab
+  // (no reference) and would pay the new payer's order. So while an older checkout at that amount is open within
+  // the reference window, the amount alone matches nothing: the transfer needs its reference, or a team member
+  // links it. (New checkouts get such an amount only once every other one is taken; see `startCheckout`.)
   const byAmount = await CheckoutModel.find({
     virtualAccount: tx.virtualAccount,
     amountKobo: tx.amountKobo,
     mode: { $ne: "test" },
     status: "pending",
-    createdAt: { $lte: new Date(occurred + CHECKOUT_RULES.clockSlackMinutes * MINUTE) },
-    holdUntil: { $gte: tx.occurredAt },
+    createdAt: {
+      $gte: new Date(occurred - CHECKOUT_RULES.referenceMatchDays * 24 * 60 * MINUTE),
+      $lte: new Date(occurred + CHECKOUT_RULES.clockSlackMinutes * MINUTE),
+    },
   })
-    .select("_id")
+    .select("_id holdUntil")
     .limit(2);
-  return byAmount.length === 1 ? { id: byAmount[0]!._id, by: "amount" as const } : null;
+  const [only] = byAmount;
+  return byAmount.length === 1 && only!.holdUntil >= tx.occurredAt ? { id: only!._id, by: "amount" as const } : null;
 }
 
 /**
@@ -526,11 +574,23 @@ export async function matchCheckoutPayments() {
   return { checked: pending.length, matched };
 }
 
-/** A team member links an incoming transfer the matcher missed (e.g. a round amount with no reference). */
+/**
+ * A team member links an incoming transfer the matcher missed (e.g. a round amount with no reference). Only a
+ * transfer into the checkout's own account (its branch's): one into another branch's account is "not found",
+ * so a member limited to some branches can't move, or learn about, another branch's money.
+ */
 export async function linkTransactionToCheckout(checkout: CheckoutDocument, transactionId: string, userId: string) {
   if (checkout.mode === "test") throw new HttpError(409, "A test checkout can't be paid with a real payment", "CHECKOUT_IS_TEST");
   if (checkout.status !== "pending") throw new HttpError(409, "This checkout has already been paid", "CHECKOUT_NOT_PENDING");
-  const tx = await TransactionModel.findOne({ _id: transactionId, business: checkout.business, direction: "credit", status: "success" });
+  const tx =
+    checkout.virtualAccount &&
+    (await TransactionModel.findOne({
+      _id: transactionId,
+      business: checkout.business,
+      virtualAccount: checkout.virtualAccount,
+      direction: "credit",
+      status: "success",
+    }));
   if (!tx) throw new HttpError(404, "Payment not found", "TRANSACTION_NOT_FOUND");
   const claimed = await TransactionModel.findOneAndUpdate(
     { _id: tx._id, checkout: { $exists: false }, invoice: { $exists: false } },
@@ -550,15 +610,23 @@ export async function linkTransactionToCheckout(checkout: CheckoutDocument, tran
  * price (`underpaid`, as if the payer sent too little and named the reference). Same notification as a live
  * payment, marked as a test. A pending checkout past its time can still be paid, like a late transfer.
  *
- * The payer's (test) receipt goes only when a team member simulates it (`userId`). From the public page anyone
- * can start a test checkout with any email and pay it, so that would send our email to whoever they chose.
+ * Only while the link is in test mode, and never for a test checkout cleared when the link went live.
+ *
+ * The payer's (test) receipt and the team's notification go only when a team member simulates it (`userId`).
+ * From the public page anyone can start a test checkout with any name and email and pay it, so that would send
+ * our email to whoever they chose and push whatever they wrote to every phone on the team.
  */
 export async function simulateCheckoutPayment(checkout: CheckoutDocument, outcome: "paid" | "underpaid", userId?: string) {
   if (checkout.mode !== "test") throw new HttpError(409, "Only test checkouts can be paid with a simulated payment", "CHECKOUT_IS_LIVE");
+  const link = await PaymentLinkModel.findById(checkout.link).select("mode");
+  if (checkout.testClearedAt || link?.mode !== "test") {
+    throw new HttpError(409, "This test payment was cleared when the link went live. Start a new one.", "CHECKOUT_CLEARED");
+  }
   const notPending = new HttpError(409, "This checkout has already been paid", "CHECKOUT_NOT_PENDING");
   if (checkout.status !== "pending") throw notPending;
   const amountKobo = outcome === "paid" ? checkout.amountKobo : Math.floor(checkout.priceKobo / 2);
-  const settled = await settleCheckout(checkout._id, { amountKobo, occurredAt: new Date() }, "simulated", userId, { receipt: !!userId });
+  const byTeam = !!userId;
+  const settled = await settleCheckout(checkout._id, { amountKobo, occurredAt: new Date() }, "simulated", userId, { receipt: byTeam, notify: byTeam });
   if (!settled) throw notPending;
   return settled;
 }

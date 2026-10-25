@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import express from "express";
@@ -106,10 +107,11 @@ describe("OTP attempts", () => {
 // ---------------------------------------------------------------------------------------------------------
 
 const BACKEND = join(import.meta.dir, "..");
+// Fresh secrets each run: a value committed here would be one anybody could sign tokens with.
 const BOOT_ENV = {
   NODE_ENV: "development",
-  JWT_SECRET: "jwt-secret-for-boot-tests",
-  STAFF_JWT_SECRET: "staff-secret-for-boot-tests-0123456789",
+  JWT_SECRET: randomBytes(32).toString("hex"),
+  STAFF_JWT_SECRET: randomBytes(32).toString("hex"),
   ENCRYPTION_KEY: "0".repeat(64),
   LIQUIFIA_SECRET_KEY: "sk_test_boot",
 };
@@ -129,8 +131,8 @@ async function boot(env: Record<string, string | undefined>, args = LOAD_ENV) {
 }
 
 describe("boot guards", () => {
-  test("STAFF_JWT_SECRET is required outside tests, even with NODE_ENV unset", async () => {
-    for (const NODE_ENV of ["development", undefined]) {
+  test("STAFF_JWT_SECRET is required outside tests", async () => {
+    for (const NODE_ENV of ["development", "production"]) {
       const res = await boot({ NODE_ENV, STAFF_JWT_SECRET: undefined });
       expect(res.code).not.toBe(0);
       expect(res.output).toContain("Missing required env var: STAFF_JWT_SECRET");
