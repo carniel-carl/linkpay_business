@@ -1,6 +1,6 @@
 # LinkPay Business: production deploy runbook
 
-One ordered checklist for the **first production deploy** of everything in audit batches 1–9 (`fix/audit-batch-9` and later). It replaces the "Before deploying" lists scattered through the session log in [IMPLEMENTATION.md](IMPLEMENTATION.md) §8 (batches 3–7). Work through it top to bottom; tick each box.
+One ordered checklist for the **first production deploy** of everything in audit batches 1–10 (`fix/audit-batch-10` and later). It replaces the "Before deploying" lists scattered through the session log in [IMPLEMENTATION.md](IMPLEMENTATION.md) §8 (batches 3–7). Work through it top to bottom; tick each box.
 
 `bun run preflight` (`backend/scripts/preflight.ts`) checks most of it **without writing anything**: environment, email provider, the database's data and indexes, and optionally the Liquifia key. Run it before and after the deploy. It prints PASS / WARN / FAIL per check and exits 1 on any FAIL.
 
@@ -114,7 +114,7 @@ Run the scripts from the **new** release's `backend/`, with the production envir
 4. [ ] **`migrate:kyb`** removes duplicate KYB documents, so the unique `{ business, type, person }` index can build. Run `bun run migrate:kyb` (dry run) whenever you like. Run `bun run migrate:kyb --apply` in the deploy window, after the old backend is stopped and **before the new backend starts**: two uploads at once on the old code can still make a duplicate. It deletes the extra documents and their files through `src/services/storage.ts`. It loads the storage wiring (`src/services/providers.ts`), so with `STORAGE_PROVIDER=s3` it deletes from the bucket.
 5. [ ] **Preflight again.** No FAIL is left.
 
-The dry runs are read-only: the scripts connect with Mongoose's autoIndex and autoCreate off, so they build no index and create no collection. Only `--apply` runs `syncIndexes` (`migrate:staff` on `staff`, `migrate:kyb` on `kybdocuments`). `migrate:branches` has no dry run (§5 step 8). Preflight never writes.
+The dry runs are read-only: the scripts connect with Mongoose's autoIndex and autoCreate off, so they build no index and create no collection. Only `--apply` runs `syncIndexes` (`migrate:staff` on `staff`, `migrate:kyb` on `kybdocuments`). `migrate:branches` has no dry run (§5 step 9). Preflight never writes.
 
 ---
 
@@ -158,7 +158,8 @@ The dry runs are read-only: the scripts connect with Mongoose's autoIndex and au
    - Web and admin `CLIENT_IP_HEADER isn't set`.
    - `transfer.stuck` in the admin bell: payouts in an unknown state, or not settled after a day.
 7. [ ] **Liquifia webhook**, once the secret arrives: set `LIQUIFIA_WEBHOOK_SECRET`, restart, and give Liquifia `https://<API host>/api/webhooks/liquifia`. Confirm the signature scheme first (§5 of IMPLEMENTATION.md, open question 1).
-8. [ ] Optionally, `bun run migrate:branches`. It's a safety net: the API also creates head offices lazily. It writes, with no dry run.
+8. [ ] **Balance snapshots.** The morning after the deploy, check that every active account has one for today: `db.balancesnapshots.countDocuments({ day: "<today YYYY-MM-DD>" })` against the count of active virtual accounts. The job makes one Liquifia balance call per account per day, retries a failing account every minute for the first 15 minutes and then hourly, and is off when `LIQUIFIA_SYNC_INTERVAL_MS=0`. The collection's unique `{ virtualAccount, day }` index builds at startup like the rest.
+9. [ ] Optionally, `bun run migrate:branches`. It's a safety net: the API also creates head offices lazily. It writes, with no dry run.
 
 ---
 
@@ -168,7 +169,7 @@ The dry runs are read-only: the scripts connect with Mongoose's autoIndex and au
 - **Transaction PIN.** The first time someone sends, approves, moves savings or changes a security setting, they choose a 4-digit PIN (their password, then the PIN twice), and the action carries on. Anyone without a password (some email-code sign-ups, and anyone whose sign-up password the H1 fix removed) gets `PASSWORD_NOT_SET` and must use "Forgot password" first. Easy PINs (1234, 1111, 2580, years) are refused. Five wrong PINs in a row lock it for 30 minutes; 15 wrong in a day lock it until it's reset, and the user is emailed.
 - **Mobile: update the app.** Old versions can't send or approve money.
 - **Two-step sign-in recovery codes.** Anyone using an authenticator app gets 10 one-time recovery codes the next time they turn it on, or from Security › Get new codes. Tell existing authenticator users to make theirs: until they do, a lost phone is still a support case.
-- **Statements.** Transactions › Download statement (web) and an account's Statement (mobile): PDF or CSV for up to 366 days, without opening or closing balances.
+- **Statements.** Transactions › Download statement (web) and an account's Statement (mobile): PDF or CSV for up to 366 days. Opening and closing balances appear from the deploy day on: the backend records each account's balance, as Liquifia reports it, just after midnight each day.
 - **Suspended or closed businesses** now see a banner and read-only screens, or a "closed" page, instead of raw errors.
 - Bulk transfers have a review step, and batch approval decides only the rows waiting for you. The approve button names the count and total ("Approve 3 · ₦45,000"), and if the batch changes before the PIN is entered, nothing is approved and the screen refreshes.
 - Automatic invoice reminders stop 30 days after the due date, so an invoice already further overdue gets no more when the new backend starts.
@@ -207,9 +208,9 @@ Only with the product owner's go-ahead. It's the first real money out (IMPLEMENT
 
 ## 9. Known gaps
 
+- **API responses are `no-store`** (batch 10). iOS no longer keeps them in its on-disk cache. Responses already cached by a development build stay there until iOS evicts them, which doesn't matter before launch.
 - **One instance only** until the per-process pieces listed in the batch 5 session log become shared. Batch 9 adds one: statement PDFs render at most two at a time, queued in the process.
-- **Email during a Resend outage.** Each email tries 4 times with backoff; an awaited send (inviting someone, sending an invoice) can take about 45 seconds before it fails. Sign-in code emails go out in the background.
-- **Staff sessions don't carry the password stamp** that business sessions do (`docs/briefs/two-factor-recovery.md`): a staff session that signs in within milliseconds of a password change can outlive it.
-- **Statements have no opening or closing balances** (`docs/briefs/statements.md`): nothing stores a past balance.
+- **Email during a Resend outage.** Each email gets 20 seconds in all, across up to 4 tries with backoff. An awaited send (inviting someone, sending an invoice) fails within about 20 seconds. The limit applies to background sends too, such as sign-in codes, so in an outage where every try times out they get 2 tries.
+- **Statement balances start at the deploy day** (`docs/briefs/statements.md`). Earlier periods show none, and say from when balances are recorded.
 - **The webhook secret and signature scheme** are still to come from Liquifia, and so are its answers on payouts and inbound transfers.
 - The batch 4 list asked to check a `Notification.branch` index. No such index exists, and none is needed (ops re-audit), so it isn't in §5.

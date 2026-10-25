@@ -99,7 +99,11 @@ It's 0 whenever the method isn't `totp`.
 - `/login/2fa` and `/login/2fa/resend` refuse a challenge whose stamp doesn't match the account's current one: 401 `INVALID_TOKEN` (business) or `INVALID_STAFF_TOKEN` (staff). That covers a reset or change after the challenge was issued, and one that landed while the first step was running.
 - **Staff** gained `passwordChangedAt`. `POST /api/admin/auth/password` sets it. It's never in any JSON.
 - **At deploy,** challenges issued before it have no stamp and count as 0. They still work for accounts whose password never changed. Everyone else gets `INVALID_TOKEN` and signs in again. Challenges last 10 minutes.
-- **Not done:** staff sessions don't carry a stamp, as business sessions do. A staff password change already ends the other staff sessions. The one gap is a staff second step that is already past its checks while the change lands, a window of a few milliseconds.
+- **Staff sessions carry the stamp too** (batch 10).
+  - `StaffSession.passwordChangedAt` is taken from the staff record the second step loaded.
+  - A session older than the staff member's current `passwordChangedAt` gets 401 `STAFF_SESSION_ENDED`, and its notification stream ends. The check uses the same read as the role check, so it costs nothing extra.
+  - The session that changed the password is re-stamped and carries on.
+  - Sessions from before this have no stamp and work until the next password change. The one exception is an environment that already ran batch 9: a staff member who changed their password there signs in once more.
 
 ### b. A biometric sign-in can't race a reset into a live session
 
