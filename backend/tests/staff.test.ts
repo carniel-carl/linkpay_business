@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { Request } from "express";
+import { decodeJwt } from "jose";
 import { Secret, TOTP } from "otpauth";
 import { migrateStaff } from "../scripts/migrate-staff";
 import { BiometricKeyModel } from "../src/models/BiometricKey";
@@ -9,6 +11,7 @@ import { StaffModel } from "../src/models/Staff";
 import { StaffSessionModel } from "../src/models/StaffSession";
 import { UserModel } from "../src/models/User";
 import { setEmailProvider, type EmailMessage } from "../src/services/email";
+import { isStaffSessionLive, startStaffSession } from "../src/services/staffAuth";
 import { signAccessToken } from "../src/services/tokens";
 import { startTestEnv, type TestEnv } from "./helpers";
 
@@ -268,6 +271,98 @@ describe("staff sessions", () => {
     expect((await me(other)).body.code).toBe("STAFF_SESSION_ENDED");
     expect((await login(email)).status).toBe(401);
     expect((await login(email, "a-new-password")).status).toBe(200);
+  });
+});
+
+// Each session carries the password stamp (passwordChangedAt) its sign-in loaded. A change ends every other session
+// already; the stamp also ends one that a sign-in already past its checks opens a moment after the change.
+describe("staff sessions carry the password stamp", () => {
+  const req = { ip: "127.0.0.1", get: () => "bun-test" } as unknown as Request;
+  const sid = (token: string) => decodeJwt(token).sid as string;
+  const changePassword = (token: string, currentPassword: string, newPassword: string) =>
+    t.api("POST", "/api/admin/auth/password", { token, body: { currentPassword, newPassword } });
+
+  test("a session started before a change is refused after it, even if nothing revoked it", async () => {
+    const email = await makeStaff();
+    const laptop = await signIn(email);
+    const other = await signIn(email);
+    const staffId = (await StaffModel.findOne({ email }))!.id as string;
+
+    expect((await changePassword(laptop, PASSWORD, "a-new-password")).status).toBe(204);
+    // Undo the sign-out: the stamp alone ends it, for requests and for the notification stream.
+    await StaffSessionModel.updateOne({ _id: sid(other) }, { $unset: { revokedAt: 1 } });
+    const res = await me(other);
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("STAFF_SESSION_ENDED");
+    expect(await isStaffSessionLive(sid(other), staffId)).toBe(false);
+  });
+
+  test("a sign-in racing the change can't outlive it: its session carries the stamp the sign-in loaded", async () => {
+    const email = await makeStaff();
+    const laptop = await signIn(email);
+
+    // The second step has loaded the staff member and passed its checks, the change lands (ending every other
+    // session), and only then does the sign-in open its session, which nothing revoked.
+    const loaded = (await StaffModel.findOne({ email }))!;
+    expect((await changePassword(laptop, PASSWORD, "a-new-password")).status).toBe(204);
+    const late = (await startStaffSession(req, loaded)).accessToken;
+    const lateSession = (await StaffSessionModel.findById(sid(late)))!;
+    expect(lateSession.revokedAt).toBeUndefined();
+    expect(lateSession.passwordChangedAt).toBeUndefined();
+    expect((await me(late)).body.code).toBe("STAFF_SESSION_ENDED");
+    expect(await isStaffSessionLive(sid(late), loaded.id)).toBe(false);
+
+    // The same once the password has changed before: the stale stamp is the earlier change.
+    const reloaded = (await StaffModel.findOne({ email }))!;
+    expect(reloaded.passwordChangedAt).toBeDate();
+    expect((await changePassword(laptop, "a-new-password", "another-password")).status).toBe(204);
+    const later = (await startStaffSession(req, reloaded)).accessToken;
+    expect((await StaffSessionModel.findById(sid(later)))!.passwordChangedAt).toEqual(reloaded.passwordChangedAt!);
+    expect((await me(later)).body.code).toBe("STAFF_SESSION_ENDED");
+
+    // A sign-in that loads the current password works.
+    const current = (await startStaffSession(req, (await StaffModel.findOne({ email }))!)).accessToken;
+    expect((await me(current)).status).toBe(200);
+    expect((await me(laptop)).status).toBe(200);
+  });
+
+  test("the session that changed the password moves on to it, and keeps working through later changes", async () => {
+    const email = await makeStaff();
+    const laptop = await signIn(email);
+
+    expect((await changePassword(laptop, PASSWORD, "a-new-password")).status).toBe(204);
+    const first = (await StaffModel.findOne({ email }))!.passwordChangedAt!;
+    expect((await StaffSessionModel.findById(sid(laptop)))!.passwordChangedAt).toEqual(first);
+    expect((await me(laptop)).status).toBe(200);
+
+    expect((await changePassword(laptop, "a-new-password", "another-password")).status).toBe(204);
+    const staff = (await StaffModel.findOne({ email }))!;
+    expect(staff.passwordChangedAt!.getTime()).toBeGreaterThan(first.getTime());
+    expect((await StaffSessionModel.findById(sid(laptop)))!.passwordChangedAt).toEqual(staff.passwordChangedAt!);
+    expect((await me(laptop)).status).toBe(200);
+    expect(await isStaffSessionLive(sid(laptop), staff.id)).toBe(true);
+  });
+
+  test("a session without a stamp (from before stamps) works until the password next changes", async () => {
+    const email = await makeStaff();
+    const legacy = await signIn(email);
+    const changer = await signIn(email);
+    const staffId = (await StaffModel.findOne({ email }))!.id as string;
+    for (const token of [legacy, changer]) {
+      await StaffSessionModel.updateOne({ _id: sid(token) }, { $unset: { passwordChangedAt: 1 } });
+      expect((await StaffSessionModel.findById(sid(token)))!.passwordChangedAt).toBeUndefined();
+      expect((await me(token)).status).toBe(200);
+      expect(await isStaffSessionLive(sid(token), staffId)).toBe(true);
+    }
+
+    expect((await changePassword(changer, PASSWORD, "a-new-password")).status).toBe(204);
+    // The one that made the change gets the new stamp and carries on.
+    expect((await StaffSessionModel.findById(sid(changer)))!.passwordChangedAt).toBeDate();
+    expect((await me(changer)).status).toBe(200);
+    // The other is signed out, and even un-revoked its missing stamp counts as older than the change.
+    expect((await me(legacy)).body.code).toBe("STAFF_SESSION_ENDED");
+    await StaffSessionModel.updateOne({ _id: sid(legacy) }, { $unset: { revokedAt: 1 } });
+    expect((await me(legacy)).body.code).toBe("STAFF_SESSION_ENDED");
   });
 });
 

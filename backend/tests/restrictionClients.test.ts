@@ -87,4 +87,30 @@ describe("a member of a restricted business", () => {
     const after = await t.api("GET", "/api/memberships", { token: member.token });
     expect(after.body.every((m: { business: { restriction: string } }) => m.business.restriction === "active")).toBe(true);
   });
+
+  test("can still leave it, and check a payout's status while it's suspended", async () => {
+    const owner = await user("Leaveowner");
+    const member = await user("Leaver");
+    const other = await user("Stayer");
+    const suspended = await approvedBusiness(owner.user._id, "Paused Co Ltd");
+    const closed = await approvedBusiness((await user("Goneowner")).user._id, "Gone Co Ltd");
+    await MembershipModel.create({ business: suspended._id, user: member.user._id, role: "finance" });
+    await MembershipModel.create({ business: closed._id, user: other.user._id, role: "finance" });
+    await admin("POST", `/businesses/${suspended.id}/suspend`, { reason: "other", note: "Checking" });
+    await admin("POST", `/businesses/${closed.id}/ban`, { reason: "fraud_report", note: "Confirmed" });
+    const as = (token: string, businessId: string) => ({ token, headers: { "X-Business-Id": businessId } });
+
+    // "Check status now" reaches the transfer lookup while suspended (no such transfer here), not the restriction.
+    const missing = "64b7f0c2a1b2c3d4e5f60718";
+    expect((await t.api("POST", `/api/transfers/${missing}/refresh`, as(member.token, suspended.id))).status).toBe(404);
+    expect((await t.api("POST", `/api/transfers/${missing}/refresh`, as(other.token, closed.id))).body.code).toBe("BUSINESS_BANNED");
+    // Other writes are still refused.
+    expect((await t.api("POST", `/api/transfers/${missing}/cancel`, as(member.token, suspended.id))).body.code).toBe("BUSINESS_SUSPENDED");
+
+    // Members can leave either; the owner still can't.
+    expect((await t.api("POST", "/api/team/leave", as(member.token, suspended.id))).status).toBe(204);
+    expect((await t.api("POST", "/api/team/leave", as(other.token, closed.id))).status).toBe(204);
+    expect(await MembershipModel.exists({ user: { $in: [member.user._id, other.user._id] } })).toBeNull();
+    expect((await t.api("POST", "/api/team/leave", as(owner.token, suspended.id))).body.code).toBe("OWNER_CANNOT_LEAVE");
+  });
 });

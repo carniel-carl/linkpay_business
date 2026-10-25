@@ -33,6 +33,7 @@ await mongoose.connection.syncIndexes();
 const { app } = await import("../src/app");
 const { startTransactionSync } = await import("../src/services/transactions");
 const { startTransferProcessor } = await import("../src/services/transfers");
+const { startBalanceSnapshots } = await import("../src/services/balanceSnapshots");
 const { startInvoiceReminders } = await import("../src/services/invoices");
 const { startRiskChecks } = await import("../src/services/risk");
 const { startSafelockReleases } = await import("../src/services/safelocks");
@@ -41,6 +42,7 @@ const { settleStaleMovements } = await import("../src/services/pockets");
 // Faster than production so settled payouts and the money they move show up within seconds.
 const stopSync = startTransactionSync(10_000);
 const stopTransfers = startTransferProcessor(5_000);
+const stopBalanceSnapshots = startBalanceSnapshots(60_000);
 const stopReminders = startInvoiceReminders(60_000);
 const stopRiskChecks = startRiskChecks(60_000);
 const stopSafelockReleases = startSafelockReleases(60_000);
@@ -59,6 +61,7 @@ const server = app.listen(Number(process.env.PORT), async () => {
 async function shutdown() {
   stopSync();
   stopTransfers();
+  stopBalanceSnapshots();
   stopReminders();
   stopRiskChecks();
   stopSafelockReleases();

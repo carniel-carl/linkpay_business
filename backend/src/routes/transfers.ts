@@ -24,12 +24,10 @@ import {
 } from "../controllers/transfers";
 import { requireAuth } from "../middleware/auth";
 import { limiter } from "../middleware/rateLimits";
-import { requireApprovedBusiness, requirePermission } from "../middleware/roles";
+import { businessGate, requireApprovedBusiness, requirePermission } from "../middleware/roles";
 import { requireTransactionPin } from "../middleware/transactionPin";
 
 export const transfersRouter = Router();
-
-transfersRouter.use(requireAuth, requireApprovedBusiness);
 
 const view = requirePermission("accounts.view");
 const create = requirePermission("transfers.create");
@@ -42,6 +40,12 @@ const pin = requireTransactionPin;
 // accounts they (and resolve-account) ask the bank about also come from the member's name-check budget, shared
 // with saving beneficiaries (spendNameChecks in services/transfers.ts: 600 per 15 minutes).
 const reviewLimit = (name: string) => limiter(name, { limit: 60, keyGenerator: (req) => `user:${req.userId}` });
+
+// "Check status now" only asks the bank how a payout already sent is doing, as the payout follow-up does every
+// minute, so it works while the business is suspended. Registered before the gate below.
+transfersRouter.post("/:id/refresh", requireAuth, businessGate({ allowWhileSuspended: true }), view, refreshTransferStatus);
+
+transfersRouter.use(requireAuth, requireApprovedBusiness);
 
 transfersRouter.get("/banks", create, getBanks);
 transfersRouter.post("/resolve-account", create, resolveAccount);
@@ -65,4 +69,3 @@ transfersRouter.get("/:id", view, getTransfer);
 transfersRouter.post("/:id/approve", approve, pin, approveTransfer);
 transfersRouter.post("/:id/reject", approve, rejectTransfer);
 transfersRouter.post("/:id/cancel", create, cancelTransfer);
-transfersRouter.post("/:id/refresh", view, refreshTransferStatus);

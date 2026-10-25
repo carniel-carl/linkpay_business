@@ -9,6 +9,7 @@ import { audit } from "../services/audit";
 import { hashStaffInviteToken, managesStaff, staffInviteStatus, staffRoleLabel } from "../services/staff";
 import { isStaffRole } from "../config/staffPermissions";
 import {
+  carryStaffSessionOver,
   noRoleError,
   revokeStaffSession,
   revokeStaffSessions,
@@ -323,13 +324,19 @@ export const enableEmailTwoFactor: RequestHandler = async (req, res) => {
   res.json(serializeStaff(staff));
 };
 
-/** Changes the password and signs out every other session. A sign-in half done (its challenge) can't be finished. */
+/**
+ * Changes the password and signs out every other session; this one carries on under the new password. A sign-in half
+ * done (its challenge) can't be finished, and one already past its checks opens a session that is refused at once
+ * (its password stamp is older).
+ */
 export const changePassword: RequestHandler = async (req, res) => {
   const body = z.object({ currentPassword: z.string().min(1), newPassword: staffPassword }).parse(req.body);
 
   const staff = await checkPassword(req.staffId, body.currentPassword);
+  const changedAt = new Date();
   staff.password = await Bun.password.hash(body.newPassword);
-  staff.passwordChangedAt = new Date();
+  staff.passwordChangedAt = changedAt;
+  await carryStaffSessionOver(req.staffSessionId, changedAt);
   await staff.save();
   await revokeStaffSessions(staff._id, { except: req.staffSessionId });
   res.status(204).end();

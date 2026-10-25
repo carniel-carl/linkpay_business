@@ -1,6 +1,5 @@
 import type { RequestHandler } from "express";
 import { isStaffRole, staffPermissionsOf, type StaffPermission, type StaffRole } from "../config/staffPermissions";
-import { StaffModel } from "../models/Staff";
 import { noRoleError, touchStaffSession, verifyStaffAccessToken } from "../services/staffAuth";
 import { HttpError } from "../utils/HttpError";
 
@@ -17,15 +16,14 @@ declare global {
 
 /**
  * Guards the admin console API. Accepts only staff tokens (never a business user's). Reads the status
- * and role on every request, so a disable or role change applies to the very next call.
+ * and role on every request, so a disable or role change applies to the very next call. The same read
+ * brings the password stamp, which ends a session that signed in before the latest password change.
  */
 export const requireStaff: RequestHandler = async (req, _res, next) => {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required", "UNAUTHENTICATED");
   const { staffId, sessionId } = await verifyStaffAccessToken(header.slice(7));
-  await touchStaffSession(sessionId, staffId);
-  const staff = await StaffModel.findById(staffId).select("status role");
-  if (!staff) throw new HttpError(401, "Your staff session has ended. Sign in again.", "STAFF_SESSION_ENDED");
+  const staff = await touchStaffSession(sessionId, staffId);
   if (staff.status !== "active") throw new HttpError(403, "This staff account is disabled", "STAFF_DISABLED");
   if (!isStaffRole(staff.role)) throw noRoleError();
   req.staffId = staffId;

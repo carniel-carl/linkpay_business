@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { Types } from "mongoose";
 import { ROLE_PERMISSIONS } from "../src/config/permissions";
 import { rateLimitSettings } from "../src/middleware/rateLimits";
+import { BalanceSnapshotModel } from "../src/models/BalanceSnapshot";
 import { BranchModel } from "../src/models/Branch";
 import { BusinessModel } from "../src/models/Business";
 import { MembershipModel } from "../src/models/Membership";
@@ -9,12 +10,14 @@ import { TransactionModel } from "../src/models/Transaction";
 import { TransferModel } from "../src/models/Transfer";
 import { UserModel } from "../src/models/User";
 import { VirtualAccountModel } from "../src/models/VirtualAccount";
-import { setEmailProvider } from "../src/services/email";
+import { formatDay, setEmailProvider } from "../src/services/email";
 import {
   buildStatement,
   csvCell,
   csvNaira,
+  STATEMENT_CSV_BALANCE_HEADER,
   STATEMENT_CSV_HEADER,
+  STATEMENT_CSV_PREAMBLE_ROWS,
   STATEMENT_LIMITS,
   statementFileName,
   statementPeriod,
@@ -36,6 +39,7 @@ beforeAll(async () => {
 afterAll(() => t.stop());
 beforeEach(async () => {
   t.liquifia.inboundTransfers.length = 0;
+  t.liquifia.failBalancesFor.clear();
   await resetSyncState();
 });
 
@@ -170,6 +174,14 @@ function parseCsv(text: string) {
   return rows;
 }
 
+/** The CSV's transaction table: from its header row on, under the balances block (checked to be where it belongs). */
+function csvTable(text: string) {
+  const rows = parseCsv(text.slice(1));
+  expect(rows[0]!.slice(0, STATEMENT_CSV_BALANCE_HEADER.length)).toEqual(STATEMENT_CSV_BALANCE_HEADER);
+  expect(rows[STATEMENT_CSV_PREAMBLE_ROWS - 1]).toEqual(STATEMENT_CSV_HEADER.map(() => ""));
+  return rows.slice(STATEMENT_CSV_PREAMBLE_ROWS);
+}
+
 const month = () => ({ from: addDays(today, -30), to: today });
 
 describe("CSV", () => {
@@ -199,7 +211,7 @@ describe("CSV", () => {
     );
     expect(res.headers.get("cache-control")).toBe("private, no-store");
 
-    const rows = parseCsv(res.text.slice(1));
+    const rows = csvTable(res.text);
     expect(rows[0]).toEqual(STATEMENT_CSV_HEADER);
     expect(rows).toHaveLength(3);
     const at = (row: string[], column: string) => row[STATEMENT_CSV_HEADER.indexOf(column)];
@@ -232,9 +244,9 @@ describe("CSV", () => {
     const res = await download(ctx.token, { branch: ctx.head.id, ...month(), format: "csv" });
     expect(Array.from(res.bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
     expect(res.text.charCodeAt(0)).toBe(0xfeff);
-    // Exactly one BOM, then the header.
-    expect(res.text.slice(1).startsWith("Date,")).toBe(true);
-    const [, row] = parseCsv(res.text.slice(1));
+    // Exactly one BOM, then the balances block's header.
+    expect(res.text.slice(1).startsWith("Balances,")).toBe(true);
+    const [, row] = csvTable(res.text);
     expect(row).toContain("Transfer from Adébáyọ̀ Ògúnlèyè");
     expect(row).toContain("₦5k for àkàrà");
   });
@@ -253,10 +265,10 @@ describe("CSV", () => {
     // Raw quoting: the field with a comma and quotes is wrapped, its quotes doubled.
     expect(body).toContain('"Okafor, ""Chidi"" & Sons"');
     expect(body).toContain('"line one\r\nline two"');
-    const rows = parseCsv(body);
+    // Every row, the balances block's too, has the header's column count, so nothing spilled into extra cells.
+    for (const row of parseCsv(body)) expect(row).toHaveLength(STATEMENT_CSV_HEADER.length);
+    const rows = csvTable(res.text);
     expect(rows).toHaveLength(5);
-    // Every row has the header's column count, so nothing spilled into extra cells.
-    for (const row of rows) expect(row).toHaveLength(STATEMENT_CSV_HEADER.length);
     const at = (row: string[], column: string) => row[STATEMENT_CSV_HEADER.indexOf(column)];
     expect(at(rows[1]!, "Counterparty")).toBe('Okafor, "Chidi" & Sons');
     expect(at(rows[1]!, "Narration")).toBe("line one\r\nline two");
@@ -295,11 +307,12 @@ describe("CSV", () => {
     expect(csvNaira(1_000_000_000_01)).toBe("1000000000.01");
   });
 
-  test("an empty period is the header row alone", async () => {
+  test("an empty period is the balances block and the table's header row alone", async () => {
     const ctx = await setup();
     const res = await download(ctx.token, { branch: ctx.kano.id, ...month(), format: "csv" });
     expect(res.status).toBe(200);
-    expect(parseCsv(res.text.slice(1))).toEqual([STATEMENT_CSV_HEADER]);
+    expect(csvTable(res.text)).toEqual([STATEMENT_CSV_HEADER]);
+    expect(parseCsv(res.text.slice(1))).toHaveLength(STATEMENT_CSV_PREAMBLE_ROWS + 1);
   });
 });
 
@@ -616,5 +629,237 @@ describe("file names", () => {
     expect(statementFileName("Ọjà Ọba / Lekki #2", period, "pdf")).toBe("linkpay-statement-oja-oba-lekki-2-2026-10-01-2026-10-25.pdf");
     expect(statementFileName('"; rm -rf', period, "pdf")).toBe("linkpay-statement-rm-rf-2026-10-01-2026-10-25.pdf");
     expect(statementFileName("₦₦₦", period, "csv")).toBe("linkpay-statement-branch-2026-10-01-2026-10-25.csv");
+  });
+});
+
+describe("balances", () => {
+  /** A start-of-day snapshot, as the balance-snapshot job writes it (the job itself: balanceSnapshots.test.ts). */
+  const snap = (ctx: Ctx, where: "head" | "kano", day: string, balanceKobo: number, time = "00:02") =>
+    BalanceSnapshotModel.create({
+      business: ctx.business._id,
+      branch: (where === "head" ? ctx.head : ctx.kano)._id,
+      virtualAccount: (where === "head" ? ctx.headVa : ctx.kanoVa)._id,
+      day,
+      balanceKobo,
+      takenAt: lagos(day, time),
+    });
+  const build = (ctx: Ctx, from: string, to: string, opts: { where?: "head" | "kano"; now?: Date } = {}) =>
+    buildStatement({
+      business: ctx.business,
+      branch: opts.where === "kano" ? ctx.kano : ctx.head,
+      account: opts.where === "kano" ? ctx.kanoVa : ctx.headVa,
+      period: statementPeriod(from, to),
+      format: "csv",
+      now: opts.now,
+    });
+  /** The CSV's balances block, keyed by its first column: [amount, reported at, note]. */
+  const csvBlock = (text: string) =>
+    new Map(
+      parseCsv(text.slice(1))
+        .slice(1, STATEMENT_CSV_PREAMBLE_ROWS - 1)
+        .map((row) => [row[0]!, row.slice(1, 4)]),
+    );
+  const from = addDays(today, -10);
+  const to = addDays(today, -5);
+
+  test("opening and closing balances from snapshots taken within 15 minutes of midnight, labelled with when; a match says so", async () => {
+    const ctx = await setup();
+    await snap(ctx, "head", from, 1_000_00, "00:02");
+    // The day after `to` opens with the closing balance: 15 minutes after midnight still counts.
+    await snap(ctx, "head", addDays(to, 1), 1_280_00, "00:15");
+    await record(ctx, "head", { amountKobo: 500_00, feeKobo: 0, occurredAt: lagos(from, "09:00") });
+    await record(ctx, "head", { direction: "debit", amountKobo: 200_00, feeKobo: 20_00, occurredAt: lagos(to, "18:00") });
+    // Not completed, and the bank moved nothing: not listed, not in the change.
+    await record(ctx, "head", { status: "failed", direction: "debit", amountKobo: 999_00, occurredAt: lagos(to, "10:00") });
+
+    const { balances } = await build(ctx, from, to);
+    expect(balances.opening).toMatchObject({
+      status: "reported",
+      amountKobo: 1_000_00,
+      source: "snapshot",
+      label: `Start of ${formatDay(from)}, reported by the bank at 00:02 WAT`,
+    });
+    expect(balances.closing).toMatchObject({
+      status: "reported",
+      amountKobo: 1_280_00,
+      source: "snapshot",
+      label: `End of ${formatDay(to)}, reported by the bank at 00:15 WAT on ${formatDay(addDays(to, 1))}`,
+    });
+    // Credits net of their fee, debits with theirs.
+    expect(balances.reconciliation).toEqual({
+      status: "matches",
+      changeKobo: 280_00,
+      listedKobo: 500_00 - 220_00,
+      differenceKobo: 0,
+      message: "The listed transactions account for the change in balance.",
+    });
+    expect(balances.recordedFrom).toBe(from);
+
+    const csv = await download(ctx.token, { branch: ctx.head.id, from, to, format: "csv" });
+    const block = csvBlock(csv.text);
+    expect(block.get("Opening balance")).toEqual(["1000.00", `${from} 00:02`, `Start of ${formatDay(from)}, reported by the bank at 00:02 WAT`]);
+    expect(block.get("Closing balance")![0]).toBe("1280.00");
+    expect(block.get("Closing balance")![1]).toBe(`${addDays(to, 1)} 00:15`);
+    expect(block.get("Change in balance")).toEqual(["280.00", "", "Closing balance less opening balance."]);
+    expect(block.get("Difference")).toEqual(["0.00", "", "The listed transactions account for the change in balance."]);
+    // The PDF carries them in its summary.
+    const pdf = await download(ctx.token, { branch: ctx.head.id, from, to, format: "pdf" });
+    expect(pdf.status).toBe(200);
+    expect((new TextDecoder("latin1").decode(pdf.bytes).match(/\/Type \/Page\b/g) ?? []).length).toBe(1);
+  });
+
+  test("a snapshot more than 15 minutes after midnight, or none, is left out with the reason, and nothing is reconciled", async () => {
+    const ctx = await setup();
+    // Exactly 15 minutes counts; a second more doesn't.
+    await snap(ctx, "head", from, 1_000_00, "00:15");
+    await BalanceSnapshotModel.updateOne({ virtualAccount: ctx.headVa._id, day: from }, { takenAt: new Date(lagos(from, "00:15").getTime() + 1_000) });
+    await record(ctx, "head", { amountKobo: 500_00, occurredAt: lagos(from, "09:00") });
+
+    // Late opening; no snapshot at all for the day after `to`.
+    let { balances } = await build(ctx, from, to);
+    expect(balances.opening).toEqual({ status: "unavailable", reason: `Recorded at 00:15 WAT, too late to count as the start of ${formatDay(from)}.` });
+    expect(balances.closing).toEqual({ status: "unavailable", reason: `Not recorded at the end of ${formatDay(to)}.` });
+    expect(balances.reconciliation).toEqual({ status: "not_checked", reason: "Needs both an opening and a closing balance." });
+
+    // A late closing snapshot says so too.
+    await snap(ctx, "head", addDays(to, 1), 2_000_00, "03:12");
+    ({ balances } = await build(ctx, from, to));
+    expect(balances.closing).toEqual({
+      status: "unavailable",
+      reason: `Recorded at 03:12 WAT on ${formatDay(addDays(to, 1))}, too late to count as the end of ${formatDay(to)}.`,
+    });
+
+    // Before the first recorded day there are none.
+    ({ balances } = await build(ctx, addDays(from, -6), addDays(from, -3)));
+    expect(balances.opening).toEqual({ status: "unavailable", reason: `Balances are recorded from ${formatDay(from)}.` });
+    expect(balances.closing).toEqual({ status: "unavailable", reason: `Balances are recorded from ${formatDay(from)}.` });
+
+    // The day after `to` is today, a few minutes after midnight: not in yet.
+    ({ balances } = await build(ctx, from, addDays(today, -1), { now: lagos(today, "00:05") }));
+    expect(balances.closing).toEqual({
+      status: "unavailable",
+      reason: `The end of ${formatDay(addDays(today, -1))} is recorded just after midnight. Try again in a few minutes.`,
+    });
+
+    // An account with none recorded yet.
+    ({ balances } = await build(ctx, from, to, { where: "kano" }));
+    expect(balances.opening).toEqual({ status: "unavailable", reason: "No balance has been recorded for this account yet." });
+    expect(balances.recordedFrom).toBeNull();
+
+    // The CSV and PDF still come, with the reasons.
+    const csv = await download(ctx.token, { branch: ctx.head.id, from, to, format: "csv" });
+    const block = csvBlock(csv.text);
+    expect(block.get("Opening balance")).toEqual(["", "", `Not available. Recorded at 00:15 WAT, too late to count as the start of ${formatDay(from)}.`]);
+    expect(block.get("Change in balance")).toEqual(["", "", "Not available. Needs both an opening and a closing balance."]);
+    expect(block.get("Difference")).toEqual(["", "", "Not checked. Needs both an opening and a closing balance."]);
+    expect((await download(ctx.token, { branch: ctx.head.id, from, to, format: "pdf" })).status).toBe(200);
+  });
+
+  test("a period ending today closes on the live balance, read now; if the bank can't be reached, it's left out", async () => {
+    const ctx = await setup();
+    await snap(ctx, "head", today, 700_00, "00:01");
+    await record(ctx, "head", { amountKobo: 77_00, occurredAt: lagos(today, "00:30") });
+    t.liquifia.balances.set(ctx.headVa.providerAccountId, 777_00);
+    const calls = () => t.liquifia.requests.filter((r) => r.path === `/virtual-accounts/${ctx.headVa.providerAccountId}/balance`).length;
+    const before = calls();
+
+    let { balances } = await build(ctx, today, today);
+    expect(calls()).toBe(before + 1);
+    expect(balances.opening).toMatchObject({ status: "reported", amountKobo: 700_00 });
+    expect(balances.closing).toMatchObject({ status: "reported", amountKobo: 777_00, source: "live" });
+    if (balances.closing.status !== "reported") throw new Error("unreachable");
+    expect(balances.closing.label).toMatch(new RegExp(`^Balance at \\d\\d:\\d\\d WAT today, ${formatDay(today)}, as the bank reported it$`));
+    expect(balances.reconciliation).toMatchObject({ status: "matches", changeKobo: 77_00, differenceKobo: 0 });
+
+    t.liquifia.failBalancesFor.add(ctx.headVa.providerAccountId);
+    ({ balances } = await build(ctx, today, today));
+    expect(balances.closing).toEqual({ status: "unavailable", reason: "The bank's balance couldn't be fetched just now. Download again to include it." });
+    expect(balances.reconciliation.status).toBe("not_checked");
+    // The download still works, without it.
+    const csv = await download(ctx.token, { branch: ctx.head.id, from: today, to: today, format: "csv" });
+    expect(csv.status).toBe(200);
+    expect(csvBlock(csv.text).get("Closing balance")).toEqual(["", "", "Not available. The bank's balance couldn't be fetched just now. Download again to include it."]);
+  });
+
+  test("a mismatch shows the difference plainly, and what can be seen of why; the balances are never adjusted", async () => {
+    const ctx = await setup();
+    // Nothing explains this one.
+    await snap(ctx, "head", from, 1_000_00);
+    await snap(ctx, "head", addDays(to, 1), 900_00);
+    await record(ctx, "head", { amountKobo: 500_00, occurredAt: lagos(from, "12:00") });
+    const { balances } = await build(ctx, from, to);
+    expect(balances.opening).toMatchObject({ amountKobo: 1_000_00 });
+    expect(balances.closing).toMatchObject({ amountKobo: 900_00 });
+    expect(balances.reconciliation).toEqual({
+      status: "differs",
+      changeKobo: -100_00,
+      listedKobo: 500_00,
+      differenceKobo: -600_00,
+      message:
+        "The balance changed by −₦100.00, and the listed transactions come to ₦500.00: a difference of −₦600.00. " +
+        "It may come from transactions still settling when a balance was reported or bank charges that aren't listed.",
+    });
+    const block = csvBlock((await download(ctx.token, { branch: ctx.head.id, from, to, format: "csv" })).text);
+    // Negative amounts stay numbers: the formula guard is for text.
+    expect(block.get("Change in balance")![0]).toBe("-100.00");
+    expect(block.get("Difference")).toEqual(["-600.00", "", balances.reconciliation.status === "differs" ? balances.reconciliation.message : ""]);
+    expect((await download(ctx.token, { branch: ctx.head.id, from, to, format: "pdf" })).status).toBe(200);
+  });
+
+  test("transactions between midnight and a late-ish snapshot, ones still settling, and unconfirmed incoming fees are named", async () => {
+    const ctx = await setup();
+    // A credit at 00:01 is listed, but the opening balance reported at 00:05 already has it; a debit at 00:02 on
+    // the day after `to` isn't listed, but the closing balance reported at 00:03 has taken it.
+    await snap(ctx, "head", from, 1_030_00, "00:05");
+    await record(ctx, "head", { amountKobo: 30_00, occurredAt: lagos(from, "00:01") });
+    await record(ctx, "head", { amountKobo: 100_00, occurredAt: lagos(from, "12:00") });
+    await record(ctx, "head", { direction: "debit", amountKobo: 10_00, feeKobo: 0, occurredAt: lagos(addDays(to, 1), "00:02") });
+    await snap(ctx, "head", addDays(to, 1), 1_120_00, "00:03");
+    let { balances } = await build(ctx, from, to);
+    expect(balances.reconciliation).toMatchObject({ status: "differs", changeKobo: 90_00, listedKobo: 130_00, differenceKobo: -40_00 });
+    if (balances.reconciliation.status !== "differs") throw new Error("unreachable");
+    expect(balances.reconciliation.message).toBe(
+      "The balance changed by ₦90.00, and the listed transactions come to ₦130.00: a difference of −₦40.00. " +
+        "2 transactions made between the period's start or end and the moment the bank reported a balance account for all of it.",
+    );
+
+    // Incoming fees that the bank didn't take, and a payout still settling.
+    const other = await setup();
+    await snap(other, "head", from, 0);
+    await record(other, "head", { amountKobo: 100_00, feeKobo: 50, occurredAt: lagos(from, "10:00") });
+    await record(other, "head", { direction: "debit", amountKobo: 20_00, feeKobo: 20_00, status: "pending", occurredAt: lagos(to, "23:00") });
+    await snap(other, "head", addDays(to, 1), 100_00);
+    ({ balances } = await build(other, from, to));
+    expect(balances.reconciliation).toMatchObject({ status: "differs", changeKobo: 100_00, listedKobo: 99_50, differenceKobo: 50 });
+    if (balances.reconciliation.status !== "differs") throw new Error("unreachable");
+    expect(balances.reconciliation.message).toBe(
+      "The balance changed by ₦100.00, and the listed transactions come to ₦99.50: a difference of ₦0.50. " +
+        "It equals the fees on incoming payments (₦0.50), which the bank may not have taken from the balance. " +
+        "1 transaction (₦40.00) was still settling, so it isn't listed; the bank may already have counted it.",
+    );
+  });
+
+  test("each branch's statement has its own account's balances, and a member limited to Kano sees only Kano's", async () => {
+    const ctx = await setup();
+    await snap(ctx, "head", from, 5_000_00);
+    await snap(ctx, "head", addDays(to, 1), 5_000_00);
+    await snap(ctx, "kano", from, 40_00);
+    await snap(ctx, "kano", addDays(to, 1), 60_00);
+    await record(ctx, "kano", { amountKobo: 20_00, occurredAt: lagos(from, "12:00") });
+
+    const kano = await build(ctx, from, to, { where: "kano" });
+    expect(kano.balances.opening).toMatchObject({ amountKobo: 40_00 });
+    expect(kano.balances.closing).toMatchObject({ amountKobo: 60_00 });
+    expect(kano.balances.reconciliation.status).toBe("matches");
+    const head = await build(ctx, from, to);
+    expect(head.balances.opening).toMatchObject({ amountKobo: 5_000_00 });
+
+    const member = await UserModel.create({ name: "Kano clerk", email: `stmt-kano-bal${seq}@test.ng`, password: "x", emailVerified: true });
+    await MembershipModel.create({ business: ctx.business._id, user: member._id, role: "viewer", branches: [ctx.kano._id] });
+    const token = await signAccessToken(member.id);
+    const csv = await download(token, { branch: ctx.kano.id, from, to, format: "csv" });
+    expect(csvBlock(csv.text).get("Opening balance")![0]).toBe("40.00");
+    expect(csv.text).not.toContain("5000.00");
+    expect((await download(token, { branch: ctx.head.id, from, to, format: "csv" })).status).toBe(404);
   });
 });

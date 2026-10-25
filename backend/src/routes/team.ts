@@ -11,15 +11,18 @@ import {
   updateMember,
 } from "../controllers/team";
 import { requireAuth } from "../middleware/auth";
-import { requireApprovedBusiness, requirePermission } from "../middleware/roles";
+import { businessGate, requireApprovedBusiness, requirePermission } from "../middleware/roles";
 import { requireTransactionPin } from "../middleware/transactionPin";
 
 export const teamRouter = Router();
 
+// Leaving ends only the member's own access and takes nothing from the business, so it works while the business is
+// suspended or closed: nobody is kept in a business they want out of. Registered before the gate below.
+teamRouter.post("/leave", requireAuth, businessGate({ allowWhileSuspended: true, allowWhileBanned: true }), leaveBusiness);
+
 teamRouter.use(requireAuth, requireApprovedBusiness);
 
 teamRouter.get("/roles", listRoles);
-teamRouter.post("/leave", leaveBusiness);
 
 const manage = requirePermission("team.manage");
 // Giving or changing access needs the transaction PIN: invites (a resend issues a fresh link), role and branch
