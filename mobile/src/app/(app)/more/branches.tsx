@@ -9,6 +9,7 @@ import { can, useOverview } from "@/lib/api/banking";
 import type { Branch } from "@/lib/api/types";
 import { formatAccountNumber } from "@/lib/format";
 import { usePullToRefresh } from "@/lib/query";
+import { suspendedHint, useWriteGuard } from "@/lib/restriction";
 import { useTheme } from "@/theme/theme";
 
 /** Every branch the member can see, with its account number. `branches.manage` adds and edits. */
@@ -29,7 +30,7 @@ export default function Branches() {
     >
       <FocusStatusBar />
       {manage && (
-        <Stack.Screen options={{ headerRight: () => <HeaderButton label="Add" icon={{ ios: "plus", android: "add" }} onPress={() => router.push("/more/branch")} /> }} />
+        <Stack.Screen options={{ headerRight: () => <HeaderButton write label="Add" icon={{ ios: "plus", android: "add" }} onPress={() => router.push("/more/branch")} /> }} />
       )}
       {!data ? (
         gate.state === "loading" ? (
@@ -59,12 +60,14 @@ function BranchCard({ branch, editable }: { branch: Branch; editable: boolean })
   const manager = branch.manager?.name;
   const contact = [branch.manager?.email, branch.manager?.phone].filter(Boolean).join(" · ");
   const failed = branch.liquifia.accountStatus === "failed";
+  // Tapping a card edits the branch, so while the business is suspended it explains instead.
+  const writes = useWriteGuard();
   return (
     <Pressable
       accessibilityRole={editable ? "button" : undefined}
-      accessibilityHint={editable ? "Edit this branch" : undefined}
+      accessibilityHint={editable ? (writes.suspended ? suspendedHint(writes.suspended) : "Edit this branch") : undefined}
       disabled={!editable}
-      onPress={() => router.push({ pathname: "/more/branch", params: { id: branch._id } })}
+      onPress={writes.guard(() => router.push({ pathname: "/more/branch", params: { id: branch._id } }))}
       style={{ boxShadow: shadows.surface }}
       className="gap-4 rounded-surface bg-card p-5 active:opacity-90"
     >

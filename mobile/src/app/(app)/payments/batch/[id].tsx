@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Alert, RefreshControl, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { moneyOut, TransferRow } from "@/components/transfers/transfer-row";
 import { Button } from "@/components/ui/button";
@@ -215,6 +216,8 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} />}
       >
         <FocusStatusBar />
+        {/* Opened from a notification while suspended: says so, and its actions explain instead of running. */}
+        {(n > 0 || cancellable.length > 0) && <SuspendedNotice />}
         <View className="gap-2 px-1">
           <Text className="text-[13px] text-muted-foreground">{b.title ? `Bulk transfer, ${b.title}` : "Bulk transfer"}</Text>
           {/* None of it left, or it came back: no minus sign, muted and struck through like the list's row. */}
@@ -258,10 +261,11 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
               </Text>
             )}
             <TextField label="Note (optional)" value={note} onChangeText={(v) => setNote(v.slice(0, 300))} hint="The person who prepared it sees this." maxLength={300} />
-            <Button loading={pin.busy} disabled={action.isPending} onPress={approve}>
+            <Button write loading={pin.busy} disabled={action.isPending} onPress={approve}>
               {`Approve ${n} · ${shownAmount}`}
             </Button>
             <Button
+              write
               variant="destructive"
               loading={action.isPending && action.variables?.action === "reject"}
               disabled={busy}
@@ -285,6 +289,7 @@ function Detail({ b, justSent, refetch }: { b: TransferBatch; justSent: boolean;
         )}
         {cancellable.length > 0 && (
           <Button
+            write
             variant="destructive"
             loading={action.isPending && action.variables?.action === "cancel"}
             disabled={busy}

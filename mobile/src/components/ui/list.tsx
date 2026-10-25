@@ -1,6 +1,7 @@
 import { Children, Fragment, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { cn } from "@/lib/cn";
+import { suspendedHint, useWriteGuard } from "@/lib/restriction";
 import { useTheme } from "@/theme/theme";
 import { Icon } from "./icon";
 
@@ -38,6 +39,7 @@ export function ListRow({
   destructive,
   selected,
   chevron = !!onPress,
+  write,
 }: {
   icon: RowIcon;
   title: string;
@@ -48,14 +50,19 @@ export function ListRow({
   /** One choice of several (a radio row): announced as selected. */
   selected?: boolean;
   chevron?: boolean;
+  /** The row changes the business (or opens a screen that does): while suspended, a tap explains instead (useWriteGuard). */
+  write?: boolean;
 }) {
   const { colors } = useTheme();
+  const writes = useWriteGuard();
+  const blocked = !!write && !!onPress && !!writes.suspended;
   return (
     <Pressable
       accessibilityRole={selected !== undefined ? "radio" : onPress ? "button" : undefined}
       accessibilityState={selected !== undefined ? { checked: selected } : undefined}
+      accessibilityHint={blocked ? suspendedHint(writes.suspended!) : undefined}
       disabled={!onPress}
-      onPress={onPress}
+      onPress={blocked ? () => void writes.allow() : onPress}
       className="min-h-14 flex-row items-center gap-3 px-4 py-3 active:bg-muted"
     >
       <View className={cn("h-9 w-9 items-center justify-center rounded-[11px]", destructive ? "bg-destructive-subtle" : "bg-brand-subtle")}>

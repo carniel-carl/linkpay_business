@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useState } from "react";
 import { ScrollView, Text, View } from "react-native";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
 import { DetailList, DetailRow } from "@/components/ui/detail-list";
@@ -113,6 +114,7 @@ export default function Review() {
     <>
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-6 px-4 pb-12 pt-4">
         <FocusStatusBar />
+        <SuspendedNotice />
         <View className="gap-1 px-1">
           <Text className="text-[13px] text-muted-foreground">{KIND_LABELS[recipient.kind]}</Text>
           <Display size={36}>{formatNaira(kobo)}</Display>
@@ -147,7 +149,7 @@ export default function Review() {
         <FormError message={error ?? (fee.isError ? friendlyMessage(fee.error) : undefined)} />
 
         <View className="gap-3">
-          <Button loading={pin.busy} disabled={!q} onPress={confirm} icon={{ ios: "paperplane.fill", android: "send" }}>
+          <Button write loading={pin.busy} disabled={!q} onPress={confirm} icon={{ ios: "paperplane.fill", android: "send" }}>
             {q?.needsApproval ? "Send for approval" : `Send ${formatNaira(kobo)}`}
           </Button>
           <Button variant="ghost" disabled={pin.busy} onPress={() => router.back()}>

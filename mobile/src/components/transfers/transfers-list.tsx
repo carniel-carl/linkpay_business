@@ -25,6 +25,7 @@ import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
 import { keyById, LIST_PERFORMANCE } from "@/lib/list";
 import { usePullToRefresh } from "@/lib/query";
+import { suspendedHint, useWriteGuard } from "@/lib/restriction";
 import { useSendDraft } from "@/lib/send-draft";
 import { useTheme } from "@/theme/theme";
 
@@ -62,6 +63,7 @@ export function TransfersList({
   const { colors } = useTheme();
   const approver = can(overview, "transfers.approve");
   const sender = can(overview, "transfers.create");
+  const writes = useWriteGuard();
   const tabs = TRANSFER_TABS.filter((t) => t.key !== "awaiting" || approver);
   const tab: TransferTab = wanted && tabs.some((t) => t.key === wanted) ? wanted : "all";
   const grouped = tab === "awaiting" && !q;
@@ -123,8 +125,8 @@ export function TransfersList({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Bulk transfer"
-              accessibilityHint="Pay many people from one account, for salaries or suppliers"
-              onPress={openBulk}
+              accessibilityHint={writes.suspended ? suspendedHint(writes.suspended) : "Pay many people from one account, for salaries or suppliers"}
+              onPress={writes.guard(openBulk)}
               className="mx-4 flex-row items-center gap-3 rounded-field bg-muted px-4 py-3 active:opacity-80"
             >
               <Icon ios="person.3" android="groups" size={18} color={colors["muted-foreground"]} />
@@ -206,6 +208,7 @@ export function TransfersList({
             </Text>
             {sender && tab === "all" && !q && (
               <Button
+                write
                 size="md"
                 icon={{ ios: "paperplane", android: "send" }}
                 onPress={() => {

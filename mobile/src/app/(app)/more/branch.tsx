@@ -5,6 +5,7 @@ import { Controller, useForm } from "react-hook-form";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import type { z } from "zod";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { StateField } from "@/components/ui/state-field";
@@ -100,6 +101,7 @@ function Form({ branch }: { branch?: Branch }) {
     >
       <FocusStatusBar />
       <Stack.Screen options={{ title: editing ? `Edit ${branch.name}` : "Add a branch" }} />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         {editing
           ? "Changes apply straight away. The account number stays the same."
@@ -138,7 +140,7 @@ function Form({ branch }: { branch?: Branch }) {
         {text("manager.phone", "Phone", { keyboardType: "phone-pad" })}
       </View>
 
-      <Button loading={isSubmitting} disabled={editing && !isDirty} onPress={() => void form.handleSubmit(onSubmit)()}>
+      <Button write loading={isSubmitting} disabled={editing && !isDirty} onPress={() => void form.handleSubmit(onSubmit)()}>
         {editing ? "Save changes" : "Add branch"}
       </Button>
     </KeyboardAwareScrollView>

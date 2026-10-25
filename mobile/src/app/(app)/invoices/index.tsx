@@ -60,7 +60,7 @@ export default function Invoices() {
       <Stack.Screen
         options={{
           headerRight: manager
-            ? () => <HeaderButton label="New" icon={{ ios: "plus", android: "add" }} onPress={create} />
+            ? () => <HeaderButton write label="New" icon={{ ios: "plus", android: "add" }} onPress={create} />
             : undefined,
           headerSearchBarOptions: {
             placeholder: "Customer, email or invoice number",
@@ -231,7 +231,7 @@ function FirstInvoice({ onCreate }: { onCreate?: () => void }) {
         lands.
       </Text>
       {onCreate && (
-        <Button size="md" icon={{ ios: "plus", android: "add" }} onPress={onCreate}>
+        <Button write size="md" icon={{ ios: "plus", android: "add" }} onPress={onCreate}>
           New invoice
         </Button>
       )}

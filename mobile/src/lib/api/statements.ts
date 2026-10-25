@@ -1,9 +1,10 @@
-import { Directory, File, Paths } from "expo-file-system";
+import { Directory, File } from "expo-file-system";
 import { Platform, Share } from "react-native";
 import { getAccessToken, invalidateAccessToken, refreshSession } from "@/lib/auth/session";
 import { currentBusinessId } from "@/lib/business-context";
 import { API_URL } from "@/lib/config";
 import { APP_HEADERS } from "@/lib/device";
+import { downloadFile } from "@/lib/downloads";
 import { ApiError } from "./errors";
 import type { StatementFormat } from "./types";
 
@@ -64,9 +65,7 @@ async function download(q: StatementRequest) {
  */
 export async function openStatement(q: StatementRequest): Promise<StatementOutcome> {
   const { bytes, name } = await download(q);
-  const file = new File(Paths.cache, name);
-  if (file.exists) file.delete();
-  file.create();
+  const file = downloadFile(name);
   await file.write(bytes);
   try {
     await File.preview(file);

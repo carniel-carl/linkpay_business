@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { FocusStatusBar } from "@/components/ui/status-bar";
@@ -63,6 +64,7 @@ export default function SendInvoice() {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         {inv.customer.name} gets an email with a link to pay {formatNaira(inv.balanceKobo)} by {formatDay(inv.dueDate)},
         and the PDF attached. Replies come to your business email.
@@ -88,7 +90,7 @@ export default function SendInvoice() {
         hint="Shown above the invoice details."
         style={{ minHeight: 110, paddingTop: 14, textAlignVertical: "top" }}
       />
-      <Button loading={change.isPending} icon={{ ios: "paperplane", android: "send" }} onPress={send}>
+      <Button write loading={change.isPending} icon={{ ios: "paperplane", android: "send" }} onPress={send}>
         Send invoice
       </Button>
     </KeyboardAwareScrollView>

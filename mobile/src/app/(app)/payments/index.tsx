@@ -87,6 +87,7 @@ export default function Payments() {
           headerRight: sender
             ? () => (
                 <HeaderButton
+                  write
                   label="Send"
                   icon={{ ios: "paperplane", android: "send" }}
                   onPress={() => {

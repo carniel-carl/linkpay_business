@@ -91,6 +91,7 @@ function Detail({ s, justCreated, refetch }: { s: Safelock; justCreated: boolean
             s.canRename && !renaming
               ? () => (
                   <HeaderButton
+                    write
                     label="Rename"
                     icon={{ ios: "pencil", android: "edit" }}
                     onPress={() => {
@@ -163,7 +164,7 @@ function Detail({ s, justCreated, refetch }: { s: Safelock; justCreated: boolean
             <Button variant="ghost" size="md" className="flex-1" disabled={rename.isPending} onPress={() => setRenaming(false)}>
               Cancel
             </Button>
-            <Button size="md" className="flex-1" loading={rename.isPending} onPress={save}>
+            <Button write size="md" className="flex-1" loading={rename.isPending} onPress={save}>
               Save name
             </Button>
           </View>

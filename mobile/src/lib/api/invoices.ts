@@ -1,10 +1,11 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { File, Paths } from "expo-file-system";
+import { File } from "expo-file-system";
 import { Platform, Share } from "react-native";
 import { getAccessToken, invalidateAccessToken, refreshSession } from "@/lib/auth/session";
 import { currentBusinessId, useBusinessContext } from "@/lib/business-context";
 import { API_URL } from "@/lib/config";
 import { APP_HEADERS } from "@/lib/device";
+import { downloadFile } from "@/lib/downloads";
 import type { InvoiceTab } from "@/lib/invoices";
 import { api } from "./client";
 import { idSegment } from "./paths";
@@ -197,9 +198,7 @@ export async function openInvoicePdf(invoice: Pick<Invoice, "_id" | "number" | "
     throw new ApiError(res.status, body?.error ?? "We couldn't open the PDF.", body?.code);
   }
 
-  const file = new File(Paths.cache, `${kind === "receipt" ? "Receipt" : "Invoice"} ${invoice.number}.pdf`);
-  if (file.exists) file.delete();
-  file.create();
+  const file = downloadFile(`${kind === "receipt" ? "Receipt" : "Invoice"} ${invoice.number}.pdf`);
   await file.write(new Uint8Array(await res.arrayBuffer()));
   try {
     await File.preview(file);

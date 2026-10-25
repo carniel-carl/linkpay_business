@@ -63,8 +63,25 @@ export function useTeamChanged() {
 /** Revoking needs no PIN: it only takes away access nobody has used yet. */
 export const useRevokeInvite = () => useTeamMutation((id: string) => api(`/api/team/invites/${idSegment(id)}`, { method: "DELETE" }));
 
-/** Leaves the business in view. The caller switches back to the default business. */
-export const leaveBusiness = () => api("/api/team/leave", { method: "POST" });
+/** Leaves the business in view, or `businessId`. Works while it's suspended or closed; the owner can't leave. */
+export const leaveBusiness = (businessId?: string) => api("/api/team/leave", { method: "POST", businessId });
+
+/**
+ * Leaves a business (Team, and the closed screen) and switches to the user's default one. Throws if the API refuses,
+ * with nothing changed here. The caller goes to Home, which shows the next business, or setup if there's none.
+ */
+export function useLeaveBusiness() {
+  const qc = useQueryClient();
+  return async (businessId?: string) => {
+    await leaveBusiness(businessId);
+    // Forget what was loaded for it. With no business picked its key is "default", the one the next business loads
+    // under, and a refused refetch (it was their only business) would keep it on screen.
+    const left = useBusinessContext.getState().businessId ?? "default";
+    useBusinessContext.getState().setBusinessId(undefined);
+    await qc.resetQueries({ queryKey: [left] });
+    await qc.invalidateQueries();
+  };
+}
 
 // ---- Branches (branches.manage) ----
 

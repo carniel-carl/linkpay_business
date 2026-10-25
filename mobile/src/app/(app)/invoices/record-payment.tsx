@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { Button } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
 import { FormError } from "@/components/ui/form-error";
@@ -121,6 +122,7 @@ function Form({ inv }: { inv: Invoice }) {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         {formatNaira(inv.balanceKobo)} is still due on {inv.number}.
       </Text>
@@ -189,7 +191,7 @@ function Form({ inv }: { inv: Invoice }) {
       )}
 
       {(mode === "manual" || !!suggestions.data?.length) && (
-        <Button loading={change.isPending} onPress={submit}>
+        <Button write loading={change.isPending} onPress={submit}>
           {mode === "match" ? "Link payment" : "Record payment"}
         </Button>
       )}

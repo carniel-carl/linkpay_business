@@ -253,7 +253,7 @@ function HowItWorks({ rule, manager }: { rule: ApprovalRule; manager: boolean })
           <Text className="text-[13px] leading-[18px] text-muted-foreground">
             {tiers.length ? "Edit the levels and approvers on the web." : "Set up levels on the web to name who approves, in order."}
           </Text>
-          <Button variant="outline" size="md" onPress={() => router.push("/payments/approval-rule")}>
+          <Button write variant="outline" size="md" onPress={() => router.push("/payments/approval-rule")}>
             Change rule
           </Button>
         </View>

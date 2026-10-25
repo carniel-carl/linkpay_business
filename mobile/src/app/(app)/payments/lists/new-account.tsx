@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import { Icon } from "@/components/ui/icon";
@@ -111,6 +112,7 @@ export default function NewListAccount() {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         We check the account with its bank, save it as a beneficiary for your whole team and add it to this list.
       </Text>
@@ -186,7 +188,7 @@ export default function NewListAccount() {
         </Text>
       )}
 
-      <Button loading={saving || resolve.isFetching} disabled={full || ownBranch} onPress={() => void save()} icon={{ ios: "person.badge.plus", android: "person_add" }}>
+      <Button write loading={saving || resolve.isFetching} disabled={full || ownBranch} onPress={() => void save()} icon={{ ios: "person.badge.plus", android: "person_add" }}>
         Save and add
       </Button>
     </KeyboardAwareScrollView>

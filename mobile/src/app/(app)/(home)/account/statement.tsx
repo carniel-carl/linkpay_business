@@ -20,7 +20,7 @@ import { periodError, presetRange, rangeLabel, STATEMENT_PERIOD_LABELS, STATEMEN
 
 const FORMAT_HINTS: Record<StatementFormat, string> = {
   pdf: "A formatted statement to read, print or send to your accountant, up to 5,000 transactions. It opens in your phone's viewer, where you can share or save it.",
-  csv: "One row per transaction, for Excel, Google Sheets or accounting software, up to 20,000 transactions. It opens in a spreadsheet app, or you can share or save it.",
+  csv: "The balances, then one row per transaction, for Excel, Google Sheets or accounting software, up to 20,000 transactions. It opens in a spreadsheet app, or you can share or save it.",
 };
 
 /** A branch account's statement: pick the period and the format, then it opens like an invoice PDF does. */
@@ -153,8 +153,8 @@ function Form({ account }: { account: Account }) {
       </View>
 
       <Text className="px-1 text-[13px] leading-[18px] text-muted-foreground">
-        Every completed payment into and out of this account, with totals, in Lagos time. Statements don&apos;t show opening or
-        closing balances.
+        Every completed payment into and out of this account, with totals, in Lagos time. Opening and closing balances appear
+        where the bank reported them, from the first day they were recorded.
       </Text>
 
       <FormError message={error} />

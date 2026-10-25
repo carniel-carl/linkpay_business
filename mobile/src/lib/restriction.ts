@@ -1,8 +1,8 @@
 // Compliance restrictions on a business (docs/briefs/compliance.md §6). The business is told that it's restricted,
 // never why. Suspended: every read works and every change is refused (BUSINESS_SUSPENDED), so Home shows a banner and
-// drops the actions that can only fail. Banned, shown as "Closed": every business route is refused (BUSINESS_BANNED),
-// so the closed screen covers the tabs.
-import { useEffect } from "react";
+// every action that changes the business explains instead of running (useWriteGuard). Banned, shown as "Closed": every
+// business route is refused (BUSINESS_BANNED), so the closed screen covers the tabs.
+import { createContext, useContext, useEffect, useMemo } from "react";
 import { Alert, AppState, Linking } from "react-native";
 import { ApiError } from "@/lib/api/errors";
 import type { MembershipSummary, Overview, RestrictionStatus } from "@/lib/api/types";
@@ -22,6 +22,52 @@ export function emailSupport(subject: string) {
 
 export const restrictionOf = (overview: Pick<Overview, "business"> | undefined): RestrictionStatus =>
   overview?.business.restriction?.status ?? "active";
+
+/** Why a change can't be made, the same sentence as the web's disabled actions. */
+export const suspendedHint = (businessName: string) => `${businessName} is suspended, so you can't do this right now.`;
+
+/** What tapping a change says while the business is suspended, with a way to write to support. */
+export function alertSuspended(businessName: string) {
+  Alert.alert(suspendedHint(businessName), "You can still see your balances and payments.", [
+    { text: "OK", style: "cancel" },
+    { text: "Email support", onPress: () => emailSupport(`Suspended business: ${businessName}`) },
+  ]);
+}
+
+/**
+ * The suspended business's name, or null while changes are allowed. Set once by the (app) layout from the overview,
+ * so the shared Button and rows can read it without a query of their own (they're used on sign-in screens too).
+ */
+export const SuspendedContext = createContext<string | null>(null);
+
+/**
+ * For every action that changes the business (anything but a read on a business route, which the API refuses with
+ * BUSINESS_SUSPENDED). While the business is suspended the action stays visible, and tapping it explains instead of
+ * opening a screen that can only fail. The API's mapped error stays the safety net.
+ * - `suspended`: the business's name while suspended, else null.
+ * - `allow()`: true when the change can go ahead; otherwise shows the alert and returns false.
+ * - `guard(fn)`: `fn`, run only when `allow()` says so (for onPress handlers).
+ * The shared Button, TextButton, HeaderButton and ListRow take `write` and do this themselves.
+ */
+export function useWriteGuard() {
+  const suspended = useContext(SuspendedContext);
+  return useMemo(() => {
+    const allow = () => {
+      if (!suspended) return true;
+      alertSuspended(suspended);
+      return false;
+    };
+    return {
+      suspended,
+      allow,
+      guard:
+        <A extends unknown[]>(fn: (...args: A) => unknown) =>
+        (...args: A) => {
+          if (allow()) fn(...args);
+        },
+    };
+  }, [suspended]);
+}
 
 /** GET /api/memberships carries the status alone. */
 export const membershipRestriction = (m: MembershipSummary): RestrictionStatus => m.business.restriction ?? "active";

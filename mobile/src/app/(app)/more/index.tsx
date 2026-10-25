@@ -101,7 +101,9 @@ export default function More() {
             />
           )}
           {business.status === "approved" && can(overview.data, "invoices.manage") && (
+            // Its screen only edits the business's branding, so while suspended a tap explains instead of opening it.
             <ListRow
+              write
               icon={{ ios: "paintpalette", android: "palette" }}
               title="Invoice branding"
               detail="Logo, colour and invoice defaults"

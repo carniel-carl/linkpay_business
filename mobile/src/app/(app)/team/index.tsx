@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { router, Stack } from "expo-router";
 import { useState, type ReactNode } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
@@ -12,13 +11,13 @@ import { FocusStatusBar } from "@/components/ui/status-bar";
 import { Display } from "@/components/ui/typography";
 import { can } from "@/lib/api/banking";
 import { ApiError, friendlyMessage } from "@/lib/api/errors";
-import { leaveBusiness, resendInvite, useInvites, useMembers, useRevokeInvite, useRoles, useTeamChanged } from "@/lib/api/team";
+import { resendInvite, useInvites, useLeaveBusiness, useMembers, useRevokeInvite, useRoles, useTeamChanged } from "@/lib/api/team";
 import type { Invite, Membership, Overview, RoleInfo, TeamMember } from "@/lib/api/types";
-import { useBusinessContext } from "@/lib/business-context";
 import { cn } from "@/lib/cn";
 import { initials, timeAgo } from "@/lib/format";
 import { branchSummary, canManage, isOwner, roleLabel } from "@/lib/permissions";
 import { usePullToRefresh } from "@/lib/query";
+import { suspendedHint, useWriteGuard } from "@/lib/restriction";
 import { useTheme } from "@/theme/theme";
 
 /** Members, pending invites and leaving. Needs an approved business; managing needs `team.manage`. */
@@ -52,7 +51,7 @@ export default function Team() {
     >
       <FocusStatusBar />
       <Stack.Screen
-        options={{ headerRight: () => <HeaderButton label="Invite" icon={{ ios: "plus", android: "add" }} onPress={() => router.push("/team/invite")} /> }}
+        options={{ headerRight: () => <HeaderButton write label="Invite" icon={{ ios: "plus", android: "add" }} onPress={() => router.push("/team/invite")} /> }}
       />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         Each person signs in with their own account. Their role decides what they can see and do at {overview.business.name}.
@@ -117,14 +116,16 @@ function MemberRow({ member, actor, roles, divider }: { member: TeamMember; acto
   const { colors } = useTheme();
   const name = member.user?.name ?? "Former user";
   const manageable = canManage(actor, member);
+  // Their screen only changes access, so while the business is suspended a tap explains instead of opening it.
+  const writes = useWriteGuard();
   return (
     <View>
       {divider && <View className="ml-[68px] h-px bg-border" />}
       <Pressable
         accessibilityRole={manageable ? "button" : undefined}
-        accessibilityHint={manageable ? "Change their role or branches, or remove them" : undefined}
+        accessibilityHint={manageable ? (writes.suspended ? suspendedHint(writes.suspended) : "Change their role or branches, or remove them") : undefined}
         disabled={!manageable}
-        onPress={() => router.push(`/team/member/${member._id}`)}
+        onPress={writes.guard(() => router.push(`/team/member/${member._id}`))}
         className="flex-row items-center gap-3 px-4 py-3.5 active:bg-muted"
       >
         <View className="h-10 w-10 items-center justify-center rounded-[12px] bg-brand-subtle">
@@ -160,6 +161,7 @@ function InviteRow({ invite, manageable, roles, divider }: { invite: Invite; man
   const changed = useTeamChanged();
   const pin = useTransactionPin();
   const revoke = useRevokeInvite();
+  const writes = useWriteGuard();
   const busy = pin.busy || revoke.isPending;
 
   // A resend issues a fresh link, so it gives access like an invite and needs the transaction PIN. Revoking doesn't.
@@ -202,9 +204,9 @@ function InviteRow({ invite, manageable, roles, divider }: { invite: Invite; man
       {divider && <View className="ml-4 h-px bg-border" />}
       <Pressable
         accessibilityRole={manageable ? "button" : undefined}
-        accessibilityHint={manageable ? "Resend or revoke this invite" : undefined}
+        accessibilityHint={manageable ? (writes.suspended ? suspendedHint(writes.suspended) : "Resend or revoke this invite") : undefined}
         disabled={!manageable || busy}
-        onPress={actions}
+        onPress={writes.guard(actions)}
         className={cn("flex-row items-center gap-3 px-4 py-3.5 active:bg-muted", busy && "opacity-60")}
       >
         <View className="flex-1 gap-1">
@@ -263,8 +265,7 @@ function NotAManager({ overview, membership, roles }: { overview: Overview; memb
 
 /** For every member except the owner. Leaving switches back to the user's default business, if any. */
 function LeaveBusiness({ businessName }: { businessName: string }) {
-  const qc = useQueryClient();
-  const setBusinessId = useBusinessContext((s) => s.setBusinessId);
+  const leave = useLeaveBusiness();
   const [busy, setBusy] = useState(false);
 
   function confirm() {
@@ -279,9 +280,7 @@ function LeaveBusiness({ businessName }: { businessName: string }) {
           onPress: async () => {
             setBusy(true);
             try {
-              await leaveBusiness();
-              setBusinessId(undefined);
-              await qc.invalidateQueries();
+              await leave();
               router.navigate("/");
             } catch (err) {
               Alert.alert("You're still a member", friendlyMessage(err));
@@ -300,6 +299,7 @@ function LeaveBusiness({ businessName }: { businessName: string }) {
         <Text className="text-[15px] font-medium text-foreground">Leave {businessName}</Text>
         <Text className="text-[13px] leading-[18px] text-muted-foreground">You'll lose access straight away. Only an invite can bring you back.</Text>
       </View>
+      {/* Not a write gate: the API lets members leave a suspended or closed business (routes/team.ts). */}
       <Button variant="destructive" size="md" loading={busy} onPress={confirm} className="self-start">
         Leave business
       </Button>

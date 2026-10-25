@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { BulkRowView } from "@/components/transfers/bulk-row";
 import { Button, TextButton } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
@@ -110,6 +111,7 @@ export default function BulkTransfer() {
       contentContainerClassName="gap-6 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <Text className="px-1 text-[15px] leading-[22px] text-muted-foreground">
         Pay up to {MAX_BULK_ROWS} people from one account, for salaries or suppliers. We check every account with its bank before anything is sent.
       </Text>
@@ -189,7 +191,9 @@ export default function BulkTransfer() {
       )}
 
       <FormError message={show(errors.rows ?? errors.tooMany ?? errors.fix)} />
-      <Button onPress={next}>Continue</Button>
+      <Button write onPress={next}>
+        Continue
+      </Button>
     </KeyboardAwareScrollView>
   );
 }

@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, Text, View } from "react-native";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { BulkRowView } from "@/components/transfers/bulk-row";
 import { Button } from "@/components/ui/button";
@@ -282,6 +283,7 @@ export default function BulkReview() {
     <>
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-6 px-4 pb-12 pt-4">
         <FocusStatusBar />
+        <SuspendedNotice />
         <View className="gap-1 px-1">
           <Text className="text-[13px] text-muted-foreground">{title.trim() ? `Bulk transfer, ${title.trim()}` : "Bulk transfer"}</Text>
           <Display size={36}>{formatNaira(totalKobo)}</Display>
@@ -437,7 +439,7 @@ export default function BulkReview() {
         </View>
 
         <View className="gap-3">
-          <Button loading={pin.busy} disabled={!ready} onPress={send} icon={{ ios: "paperplane.fill", android: "send" }}>
+          <Button write loading={pin.busy} disabled={!ready} onPress={send} icon={{ ios: "paperplane.fill", android: "send" }}>
             {current?.approval.needed
               ? `Send ${rows.length} for approval`
               : `Send ${rows.length} ${rows.length === 1 ? "transfer" : "transfers"}`}

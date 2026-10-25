@@ -109,7 +109,7 @@ function Detail({ l, refetch }: { l: PayoutListWithItems; refetch: () => Promise
   return (
     <>
       <Stack.Screen
-        options={{ headerRight: canManage ? () => <HeaderButton label="Edit" icon={{ ios: "pencil", android: "edit" }} onPress={edit} /> : undefined }}
+        options={{ headerRight: canManage ? () => <HeaderButton write label="Edit" icon={{ ios: "pencil", android: "edit" }} onPress={edit} /> : undefined }}
       />
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
@@ -156,6 +156,7 @@ function Detail({ l, refetch }: { l: PayoutListWithItems; refetch: () => Promise
         {canManage ? (
           <View className="gap-3">
             <Button
+              write
               disabled={payable === 0 || deleting}
               icon={{ ios: "paperplane.fill", android: "send" }}
               onPress={() => router.push({ pathname: "/payments/lists/pay", params: { id: l._id } })}
@@ -195,10 +196,10 @@ function Detail({ l, refetch }: { l: PayoutListWithItems; refetch: () => Promise
 
         {canManage && (
           <View className="gap-3">
-            <Button variant="outline" onPress={edit} disabled={deleting}>
+            <Button write variant="outline" onPress={edit} disabled={deleting}>
               Edit list
             </Button>
-            <Button variant="destructive" loading={deleting} onPress={confirmDelete}>
+            <Button write variant="destructive" loading={deleting} onPress={confirmDelete}>
               Delete list
             </Button>
           </View>

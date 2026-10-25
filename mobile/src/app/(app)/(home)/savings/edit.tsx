@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Pressable, Switch, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { PocketTile } from "@/components/savings/pocket-parts";
 import { Button } from "@/components/ui/button";
 import { DateField } from "@/components/ui/date-field";
@@ -151,6 +152,7 @@ function Form({ pocket, branches, initialBranch }: { pocket?: Pocket; branches: 
       contentContainerClassName="gap-7 px-4 pb-12 pt-4"
     >
       <FocusStatusBar />
+      <SuspendedNotice />
       <View className="flex-row items-center gap-3 px-1">
         <PocketTile icon={icon} color={color} size={56} />
         <Text numberOfLines={2} className="flex-1 text-[17px] font-semibold text-foreground">
@@ -275,7 +277,7 @@ function Form({ pocket, branches, initialBranch }: { pocket?: Pocket; branches: 
         </Text>
       </View>
 
-      <Button loading={change.isPending} onPress={submit}>
+      <Button write loading={change.isPending} onPress={submit}>
         {editing ? "Save changes" : "Create pocket"}
       </Button>
     </KeyboardAwareScrollView>

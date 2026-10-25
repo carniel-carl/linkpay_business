@@ -149,6 +149,7 @@ function Detail({ l, refetch }: { l: PaymentLink; refetch: () => Promise<unknown
           headerRight: l.canManage
             ? () => (
                 <HeaderButton
+                  write
                   label="Edit"
                   onPress={() => router.push({ pathname: "/payment-links/edit", params: { id: l._id } })}
                 />
@@ -200,7 +201,7 @@ function Detail({ l, refetch }: { l: PaymentLink; refetch: () => Promise<unknown
               </Text>
             </View>
             {l.canManage && (
-              <Button size="md" icon={{ ios: "paperplane", android: "send" }} loading={change.isPending} onPress={() => confirmMode("live")}>
+              <Button write size="md" icon={{ ios: "paperplane", android: "send" }} loading={change.isPending} onPress={() => confirmMode("live")}>
                 Go live
               </Button>
             )}
@@ -367,18 +368,18 @@ function Detail({ l, refetch }: { l: PaymentLink; refetch: () => Promise<unknown
         {l.canManage && (
           <ListSection>
             {l.mode === "test" ? (
-              <ListRow icon={{ ios: "paperplane", android: "send" }} title="Go live" chevron={false} onPress={() => confirmMode("live")} />
+              <ListRow write icon={{ ios: "paperplane", android: "send" }} title="Go live" chevron={false} onPress={() => confirmMode("live")} />
             ) : (
-              <ListRow icon={{ ios: "flask", android: "science" }} title="Switch to test mode" chevron={false} onPress={() => confirmMode("test")} />
+              <ListRow write icon={{ ios: "flask", android: "science" }} title="Switch to test mode" chevron={false} onPress={() => confirmMode("test")} />
             )}
             {/* While LinkPay has it paused, only LinkPay can turn it back on. */}
             {l.takenDown ? null : active ? (
-              <ListRow icon={{ ios: "pause.circle", android: "pause_circle" }} title="Turn off" chevron={false} onPress={confirmOff} />
+              <ListRow write icon={{ ios: "pause.circle", android: "pause_circle" }} title="Turn off" chevron={false} onPress={confirmOff} />
             ) : (
-              <ListRow icon={{ ios: "play.circle", android: "play_circle" }} title="Turn on" chevron={false} onPress={() => setStatus("active")} />
+              <ListRow write icon={{ ios: "play.circle", android: "play_circle" }} title="Turn on" chevron={false} onPress={() => setStatus("active")} />
             )}
             {l.paymentsCount === 0 && (
-              <ListRow icon={{ ios: "trash", android: "delete" }} title="Delete link" destructive chevron={false} onPress={confirmDelete} />
+              <ListRow write icon={{ ios: "trash", android: "delete" }} title="Delete link" destructive chevron={false} onPress={confirmDelete} />
             )}
           </ListSection>
         )}

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { GateMessage, useBankingGate } from "@/components/home/gate";
+import { SuspendedNotice } from "@/components/home/suspended-banner";
 import { SafelockTile } from "@/components/savings/safelock-parts";
 import { useTransactionPin } from "@/components/security/transaction-pin-sheet";
 import { Button } from "@/components/ui/button";
@@ -170,6 +171,7 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
         <Stack.Screen options={{ title: "Check and lock" }} />
         <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-6 px-4 pb-12 pt-4">
           <FocusStatusBar />
+          <SuspendedNotice />
           <View className="gap-1 px-1">
             <Text className="text-[13px] text-muted-foreground">Lock {formatNaira(kobo!)}?</Text>
             <Display size={36}>{formatNaira(kobo!)}</Display>
@@ -196,7 +198,7 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
           <FormError message={error && !fieldError ? lockError(error) : undefined} />
 
           <View className="gap-3">
-            <Button loading={pin.busy} disabled={!agreed} onPress={confirm} icon={{ ios: "lock.fill", android: "lock" }}>
+            <Button write loading={pin.busy} disabled={!agreed} onPress={confirm} icon={{ ios: "lock.fill", android: "lock" }}>
               {`Lock ${formatNaira(kobo!)}`}
             </Button>
             <Button variant="ghost" disabled={pin.busy} onPress={() => setStep("details")}>
@@ -218,6 +220,7 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
     >
       <Stack.Screen options={{ title: "New Safelock" }} />
       <FocusStatusBar />
+      <SuspendedNotice />
       <View className="flex-row items-center gap-3 px-1">
         <SafelockTile size={56} />
         <Text numberOfLines={2} className="flex-1 text-[15px] leading-[21px] text-muted-foreground">
@@ -311,7 +314,9 @@ function Form({ limits, branches, initialBranch }: { limits: SafelockLimits; bra
         />
       </View>
 
-      <Button onPress={review}>Continue</Button>
+      <Button write onPress={review}>
+        Continue
+      </Button>
     </KeyboardAwareScrollView>
   );
 }
