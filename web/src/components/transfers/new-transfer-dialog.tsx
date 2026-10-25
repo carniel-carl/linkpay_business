@@ -52,6 +52,13 @@ const RECIPIENT_LABELS: Record<Recipient, string> = { bank: "Bank account", save
 const available = (a?: SourceAccount) => a?.balance?.availableKobo ?? a?.balance?.amountKobo
 
 /**
+ * The account a transfer starts from: the preselected branch's when it's one of `accounts`, else the first. A branch
+ * whose account isn't ready isn't in `accounts`, and the picker would show another account than the one sent from.
+ */
+export const startingSource = (accounts: SourceAccount[], branchId?: string) =>
+  accounts.find((a) => a.branch._id === branchId)?.branch._id ?? accounts[0]?.branch._id ?? ""
+
+/**
  * Send money to a bank account, a saved beneficiary or another branch: details, then a review with the fee before
  * anything moves. A saved beneficiary is paid under the name saved with it, so it needs no name check; a new bank
  * account can be saved as a beneficiary as it's paid.
@@ -62,7 +69,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, beneficiary: init
   const idempotency = useIdempotencyKey()
   const pin = useTransactionPin()
 
-  const [sourceId, setSourceId] = useState(defaultBranchId ?? accounts[0]?.branch._id ?? "")
+  const [sourceId, setSourceId] = useState(() => startingSource(accounts, defaultBranchId))
   const [to, setTo] = useState<Recipient>(initialBeneficiary ? "saved" : "bank")
   const [banks, setBanks] = useState<Bank[] | null>(null)
   const [bankUuid, setBankUuid] = useState("")
@@ -93,8 +100,8 @@ export function NewTransferDialog({ accounts, defaultBranchId, beneficiary: init
 
   function reset() {
     setStep("details")
-    idempotency.reset()
-    setSourceId(defaultBranchId ?? accounts[0]?.branch._id ?? "")
+    // Not the Idempotency-Key: the same transfer sent again after closing (one whose answer was lost) must keep it.
+    setSourceId(startingSource(accounts, defaultBranchId))
     setTo(initialBeneficiary ? "saved" : "bank")
     setBankUuid("")
     setAccountNumber("")
@@ -172,10 +179,19 @@ export function NewTransferDialog({ accounts, defaultBranchId, beneficiary: init
             : { type: "branch" as const, branch: targetBranch },
       saveBeneficiary: saving ? (true as const) : undefined,
     }
-    // Sending the same details again keeps the key, whatever went wrong (it may have gone through, or the
-    // PIN was wrong); changing anything that's sent gets a new one, choosing another beneficiary or ticking
-    // "Save to beneficiaries" included. The PIN isn't part of the details.
-    const idempotencyKey = idempotency.keyFor(request)
+    // The Idempotency-Key follows what the API compares a repeat with (its request hash): the account it's sent from,
+    // where the money goes, the amount and the narration. A saved beneficiary counts as its account number and bank,
+    // so paying the same account by its number instead can't get a new key. The same details keep the key whatever
+    // went wrong (a wrong PIN, a lost answer), even after the dialog was closed and they were filled in again.
+    // "Save to beneficiaries" and the PIN are left out: changing the tick can't pay twice (the API replays the first
+    // transfer, or refuses the key with IDEMPOTENCY_KEY_REUSED and moves nothing). The key is new after a success.
+    const paidTo =
+      to === "bank"
+        ? { accountNumber, bankUuid }
+        : to === "saved"
+          ? { accountNumber: beneficiary!.accountNumber, bankUuid: beneficiary!.bankUuid }
+          : { branch: targetBranch }
+    const idempotencyKey = idempotency.keyFor({ branch: sourceId, to: paidTo, amountKobo: request.amountKobo, narration: request.narration ?? null })
     const amount = formatNaira(request.amountKobo)
     const recipient = recipientLabel
     const result = await pin.confirm({
@@ -186,6 +202,8 @@ export function NewTransferDialog({ accounts, defaultBranchId, beneficiary: init
     setBusy(false)
     if (!result) return
     if (!result.ok) {
+      // The key was used for other details: say so, and let a deliberate retry be a new request.
+      if (result.code === "IDEMPOTENCY_KEY_REUSED") idempotency.reset()
       // Deleted since it was chosen: choose again (or send to the account by its number).
       if (result.code === "BENEFICIARY_NOT_FOUND" && to === "saved") {
         setBeneficiary(null)
@@ -194,6 +212,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, beneficiary: init
       }
       return setError(result.error)
     }
+    idempotency.reset()
     const t = result.data
     if (t.status === "pending_approval") {
       const levels = t.approval?.levels.length ?? 1

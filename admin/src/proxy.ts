@@ -90,7 +90,8 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except Next internals, static files, the file proxy (it answers 401 itself)
-  // and the sign-out handler.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/|auth/sign-out|.*\\.(?:svg|png|jpg|jpeg|webp|ico)$).*)"],
+  // Everything except Next internals, the icons in src/app (the only static files at the root), the file proxy (it
+  // answers 401 itself) and the sign-out handler. Named files only: a page whose address ends in ".png" is still a
+  // page, and gets its policy.
+  matcher: ["/((?!_next/static|_next/image|api/|auth/sign-out|(?:favicon\\.ico|icon\\.svg|apple-icon\\.png)$).*)"],
 }

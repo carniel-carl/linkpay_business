@@ -143,7 +143,10 @@ const POLL_MS = 5_000
 const SLOW_POLL_MS = 15_000
 /** The backend gives 30 minutes to pay (`payWithinMinutes`); the time bar drains over that. */
 const PAY_WINDOW_MS = 30 * 60_000
-/** The backend keeps matching a checkout's amount for 2 hours from the start (30 minutes to pay + 90). */
+/**
+ * The backend keeps matching a checkout's amount for 2 hours from the start (30 minutes to pay + 90). After
+ * that the amount can be someone else's, so the checkout shows as expired and the payer starts again.
+ */
 const WATCH_AFTER_EXPIRY_MS = 90 * 60_000
 
 export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, prefill: initialPrefill }: Props) {
@@ -316,6 +319,8 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
     <Unavailable data={data} />
   )
 
+  // Taken down by LinkPay: the backend sends only the title, so no price ("Any amount" would invite a payment).
+  const takenDown = data.unavailableReason === "taken_down"
   const summaryProps = {
     businessName: business.name,
     logoSrc,
@@ -325,6 +330,14 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
     minAmountKobo: link.minAmountKobo,
     images,
     titleId: "pay-title",
+    ...(takenDown && {
+      price: (
+        <p className="inline-flex w-fit items-center gap-2 rounded-full bg-[color-mix(in_oklch,var(--on-biz)_14%,transparent)] px-3.5 py-1.5 text-sm font-medium">
+          <CircleSlash className="size-4" aria-hidden />
+          No longer available
+        </p>
+      ),
+    }),
   }
   const reportDialog = feed && report && (
     <ReportDialog
@@ -344,7 +357,7 @@ export function PayClient({ data, logoSrc, initialCheckout, embed, frameId, pref
           <LinkSummary
             {...summaryProps}
             variant="compact"
-            price={feed && <FundraiserProgress progress={feed.progress} latest={feed.latest} variant="compact" />}
+            price={summaryProps.price ?? (feed && <FundraiserProgress progress={feed.progress} latest={feed.latest} variant="compact" />)}
             action={
               embed === "popup" && (
                 <button
@@ -927,10 +940,9 @@ function Unavailable({ data }: { data: PublicPaymentLink }) {
   const reason = data.unavailableReason
   const donation = data.link.kind === "donation"
   const what = donation ? "donations" : "payments"
+  if (reason === "taken_down") return <TakenDown donation={donation} />
   const text =
-    reason === "taken_down"
-      ? `This ${donation ? "fundraiser" : "link"} has been paused while LinkPay reviews it.`
-      : reason === "expired"
+    reason === "expired"
         ? `This ${donation ? "fundraiser" : "link"} has ended and isn't taking ${what} any more.`
         : reason === "sold_out"
           ? `This link has reached its limit and isn't taking more ${what}.`
@@ -946,7 +958,31 @@ function Unavailable({ data }: { data: PublicPaymentLink }) {
       <div className="grid gap-1.5">
         <h2 className="type-display text-2xl">Not taking {what}</h2>
         <p className="text-[15px] leading-relaxed text-muted-foreground">
-          {text} {reason === "taken_down" ? "" : `Contact ${data.business.name} if you need to pay them.`}
+          {text} Contact {data.business.name} if you need to pay them.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * LinkPay staff took the link down (often after reports of a scam). The backend sends only its title: no story,
+ * pictures, logo or donors. Say plainly that it's gone and not to pay for it elsewhere.
+ */
+function TakenDown({ donation }: { donation: boolean }) {
+  const what = donation ? "fundraiser" : "payment link"
+  return (
+    <div className="page-enter grid gap-5 px-6 py-8 sm:px-8 sm:py-10" role="status">
+      <span className="grid size-12 place-items-center rounded-[30%] bg-destructive-subtle text-destructive">
+        <CircleSlash className="size-6" aria-hidden />
+      </span>
+      <div className="grid gap-1.5">
+        <h2 className="type-display text-2xl">No longer available</h2>
+        <p className="text-[15px] leading-relaxed text-pretty text-muted-foreground">
+          LinkPay has taken this {what} down, so it isn&apos;t taking {donation ? "donations" : "payments"} and its details have been removed.
+        </p>
+        <p className="text-[15px] leading-relaxed text-pretty text-muted-foreground">
+          Don&apos;t send money for it, even if someone shares the account details with you another way.
         </p>
       </div>
     </div>
@@ -979,12 +1015,12 @@ function CheckoutPanel({
   const watchedUntil = Date.parse(c.expiresAt) + WATCH_AFTER_EXPIRY_MS
   const watching = waiting && now < watchedUntil
 
-  // Countdown.
+  // Countdown, until the hold ends (then the checkout shows as expired for good).
   useEffect(() => {
-    if (!waiting) return
+    if (!watching) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [waiting])
+  }, [watching])
 
   // Poll while we're still watching for the transfer; slower once the time is up, paused while hidden.
   const expired = now >= Date.parse(c.expiresAt)
@@ -1023,6 +1059,9 @@ function CheckoutPanel({
 
   if (c.status === "paid") return <Paid checkout={c} embed={embed} available={available} onAgain={onBack} />
   if (c.status === "underpaid") return <Underpaid checkout={c} />
+  // Past the 2-hour hold the amount can be handed to someone else's checkout, so its details come off the
+  // screen (the backend stops sending them too: `amountKobo` is null then).
+  if (!watching || c.amountKobo == null) return <CheckoutExpired checkout={c} onAgain={onBack} />
 
   const amountText = koboToInput(c.amountKobo)
   const extraKobo = c.amountKobo - c.priceKobo
@@ -1085,16 +1124,12 @@ function CheckoutPanel({
 
       <div className="grid gap-3 border-t px-6 py-5 sm:px-8 short:gap-2 short:py-4">
         <div className="flex items-center gap-3">
-          {watching ? (
-            <span className="relative flex size-2.5 shrink-0" aria-hidden>
-              <span className="absolute inset-0 animate-ping rounded-full bg-(--biz-strong) opacity-60" />
-              <span className="relative size-2.5 rounded-full bg-(--biz-strong)" />
-            </span>
-          ) : (
-            <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          )}
+          <span className="relative flex size-2.5 shrink-0" aria-hidden>
+            <span className="absolute inset-0 animate-ping rounded-full bg-(--biz-strong) opacity-60" />
+            <span className="relative size-2.5 rounded-full bg-(--biz-strong)" />
+          </span>
           <p role="status" aria-live="polite" className="text-[15px] font-medium">
-            {!expired ? "Waiting for your transfer" : watching ? "Your time to pay is up" : "We've stopped watching for this transfer"}
+            {!expired ? "Waiting for your transfer" : "Your time to pay is up"}
           </p>
           {!expired && (
             <p className="ml-auto type-display text-2xl leading-none figure">
@@ -1114,15 +1149,9 @@ function CheckoutPanel({
           </div>
         )}
         <p className="text-sm leading-relaxed text-pretty text-muted-foreground">
-          {!expired ? (
-            "Send it before the time runs out. This page updates by itself once it lands."
-          ) : watching ? (
-            "If you've already sent it, keep this page open. We'll still pick it up."
-          ) : (
-            <>
-              If you sent it, {c.business.name} can still match it. Give them the reference <span className="font-mono text-foreground">{c.reference}</span>.
-            </>
-          )}
+          {!expired
+            ? "Send it before the time runs out. This page updates by itself once it lands."
+            : "If you've already sent it, keep this page open. We'll still pick it up."}
         </p>
       </div>
 
@@ -1136,6 +1165,34 @@ function CheckoutPanel({
           Change my details
         </button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * A checkout nothing arrived for within the 2-hour hold. Its amount may now be another payer's, so neither
+ * the amount nor the account shows: the payer starts again. Someone who did send it keeps the reference.
+ */
+function CheckoutExpired({ checkout: c, onAgain }: { checkout: PublicCheckout; onAgain: () => void }) {
+  return (
+    <div className="page-enter grid gap-6 px-6 pt-6 pb-7 sm:px-8 sm:pt-8 sm:pb-8" role="status">
+      <span className="grid size-14 place-items-center rounded-[30%] bg-muted text-muted-foreground">
+        <Clock className="size-7" aria-hidden />
+      </span>
+      <div className="grid gap-2">
+        <h2 className="type-display text-[2rem]">This checkout has expired</h2>
+        <p className="text-[15px] leading-relaxed text-pretty text-muted-foreground">
+          Start again to get the details to pay. Don&apos;t send money using the amount you were shown before.
+        </p>
+        <p className="text-sm leading-relaxed text-pretty text-muted-foreground">
+          Already sent it? {c.business.name} can still match it: give them the reference{" "}
+          <span className="font-mono font-medium text-foreground">{c.reference}</span>.
+        </p>
+      </div>
+      <Button type="button" size="lg" onClick={onAgain} className={BIZ_BUTTON}>
+        <RotateCcw data-icon="inline-start" aria-hidden />
+        Start again
+      </Button>
     </div>
   )
 }
@@ -1157,7 +1214,13 @@ function SimulateTransfer({ checkout: c, onUpdate }: { checkout: PublicCheckout;
       })
       const json = await res.json().catch(() => null)
       if (res.ok && json) return onUpdate(json as PublicCheckout)
-      setError(json?.code === "CHECKOUT_NOT_PENDING" ? "This test payment has already been made." : (json?.error ?? "That didn't work. Try again."))
+      setError(
+        json?.code === "CHECKOUT_NOT_PENDING"
+          ? "This test payment has already been made."
+          : json?.code === "CHECKOUT_CLEARED"
+            ? "This link has gone live, so test payments are closed. Start again to pay for real."
+            : (json?.error ?? "That didn't work. Try again."),
+      )
     } catch {
       setError("We couldn't reach LinkPay. Check your connection and try again.")
     } finally {
@@ -1169,7 +1232,7 @@ function SimulateTransfer({ checkout: c, onUpdate }: { checkout: PublicCheckout;
     <div className="grid gap-3 border-t border-dashed px-6 py-5 sm:px-8 short:py-4">
       <p className="text-sm leading-relaxed text-pretty text-muted-foreground">
         {donation
-          ? "Don't send money to these details. Simulate the gift to see it land: it prints on the roll and counts in the total until the fundraiser goes live."
+          ? "Don't send money to these details. Simulate the gift to see it land: it prints on the roll as a test gift, without a name or message, and counts in the total until the fundraiser goes live."
           : "Don't send money to these details. Simulate the transfer to see what your customers see once theirs lands."}
       </p>
       {error && (
@@ -1273,7 +1336,7 @@ function Paid({
     [
       donation ? "You gave" : "Amount paid",
       <span key="a" className="figure">
-        {formatNaira(c.paidKobo ?? c.amountKobo)}
+        {formatNaira(c.paidKobo ?? c.amountKobo ?? c.priceKobo)}
       </span>,
     ],
   ]

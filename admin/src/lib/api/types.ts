@@ -346,6 +346,7 @@ export type AuditAction =
   | "staff.invited"
   | "staff.invite_resent"
   | "staff.invite_revoked"
+  | "staff.invite_accepted"
   | "staff.role_changed"
   | "staff.disabled"
   | "staff.enabled"

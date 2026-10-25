@@ -62,6 +62,7 @@ const MESSAGES: Record<string, string> = {
   INVITE_NOT_FOUND: "This invite link isn't valid. Ask for a new one.",
   INVITE_EXPIRED: "This invite has expired. Ask for a new one.",
   INVITE_CLOSED: "This invite has already been used or was cancelled.",
+  INVITER_CANT_INVITE: "The person who invited you can no longer add staff, so this invite no longer works. Ask a super admin for a new one.",
   FLAG_NOT_FOUND: "That flag no longer exists. Refresh the page.",
   FLAG_NOT_OPEN: "Someone has already resolved this flag. Refresh to see their note.",
   INVALID_EVIDENCE: "Some of the chosen payments or transfers don't belong to this business.",

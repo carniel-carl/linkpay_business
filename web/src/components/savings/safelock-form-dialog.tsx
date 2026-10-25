@@ -57,7 +57,8 @@ export function SafelockFormDialog({
   const [agreed, setAgreed] = useState(false)
   const [busy, setBusy] = useState(false)
   // One key per thing being locked: a double click, or a retry after any error (a dropped response, the
-  // partner being down), locks once. Changing the name, branch, amount or date gets a new key.
+  // partner being down), locks once, even after the dialog was closed and the same details filled in again. The
+  // name, branch, amount and date are what the API compares a repeat with, so changing one gets a new key.
   const idempotency = useIdempotencyKey()
   const pin = useTransactionPin()
 
@@ -103,6 +104,8 @@ export function SafelockFormDialog({
     setBusy(false)
     if (!result) return
     if (!result.ok) {
+      // The key was used for other details: let a deliberate retry be a new request.
+      if (result.code === "IDEMPOTENCY_KEY_REUSED") idempotency.reset()
       // Back to the form, with the problem next to the field it's about.
       const field =
         result.code === "SAFELOCK_TOO_SMALL" || result.code === "INSUFFICIENT_BALANCE"
@@ -115,6 +118,7 @@ export function SafelockFormDialog({
       setStep("details")
       return
     }
+    idempotency.reset()
     toast.success(`${formatNaira(result.data.amountKobo)} is locked until ${formatDay(result.data.unlockOn)}.`)
     setOpen(false)
   }
@@ -129,7 +133,7 @@ export function SafelockFormDialog({
           setStep("details")
           setErrors({})
           setError(undefined)
-          idempotency.reset()
+          // Not the Idempotency-Key: a lock whose answer was lost, filled in again, must keep it.
         }
       }}
     >

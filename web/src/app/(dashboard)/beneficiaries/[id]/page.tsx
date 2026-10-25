@@ -98,7 +98,7 @@ export default async function BeneficiaryPage({ params, searchParams }: PageProp
               <h2 id="payments-title" className="type-display text-xl">
                 Payments
               </h2>
-              <p className="text-sm text-muted-foreground">Transfers to {name} as a saved beneficiary, newest first. Open one to see it in Transfers.</p>
+              <p className="text-sm text-muted-foreground">Transfers to {name}&apos;s account, newest first, including any sent before it was saved. Open one to see it in Transfers.</p>
             </div>
             <History data={payments.data} page={page} beneficiaryId={beneficiary._id} />
           </section>

@@ -297,7 +297,7 @@ export function FundraiserProgress({
                 className="inline-flex items-center gap-1.5 rounded-full bg-(--on-biz) px-3 py-1 text-xs font-medium text-(--biz) shadow-[0_8px_20px_-10px_oklch(0.15_0.03_252/0.6)]"
               >
                 <Heart className="size-3 fill-current" aria-hidden />
-                {naira(latest.amountKobo)} from {latest.name ?? "someone anonymous"}
+                {latest.test && !latest.name ? `${naira(latest.amountKobo)} test gift` : `${naira(latest.amountKobo)} from ${latest.name ?? "someone anonymous"}`}
               </motion.span>
             )}
           </AnimatePresence>
@@ -348,7 +348,7 @@ export function Ticket({
   /** The ticket number, or "Your ticket". */
   label: string
   amountKobo: number | null
-  /** null: anonymous. */
+  /** null: anonymous, or a test gift simulated on the public page (shown without its name or words). */
   name: string | null
   message: string | null
   when: ReactNode
@@ -392,8 +392,8 @@ export function Ticket({
       )}
       <div className="flex items-baseline justify-between gap-3">
         <span className="flex min-w-0 items-center gap-1.5 text-[15px] font-medium">
-          {!name && <Heart className="size-3.5 shrink-0 fill-current" aria-hidden />}
-          <span className="truncate">{name ?? "Anonymous"}</span>
+          {!name && (test ? <FlaskConical className="size-3.5 shrink-0" aria-hidden /> : <Heart className="size-3.5 shrink-0 fill-current" aria-hidden />)}
+          <span className="truncate">{name ?? (test ? "Test gift" : "Anonymous")}</span>
         </span>
         <span className="shrink-0 text-xs opacity-80">{when}</span>
       </div>

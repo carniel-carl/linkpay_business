@@ -353,7 +353,7 @@ function BatchBanner({ batch, extra, onClear }: { batch: TransferBatch; extra?: 
       </div>
       {(batch.awaitingMe > 0 || cancellable > 0 || extra) && (
         <div className="flex flex-wrap gap-2">
-          <BatchDecisionButtons batchId={batch._id} awaitingMe={batch.awaitingMe} />
+          <BatchDecisionButtons batchId={batch._id} awaitingMe={batch.awaitingMe} awaitingMeKobo={batch.awaitingMeKobo} />
           {cancellable > 0 && (
             <Button variant="outline" disabled={cancelling} onClick={cancel}>
               {cancelling && <Spinner />}

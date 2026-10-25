@@ -41,12 +41,19 @@ type Props = {
   onClose: () => void
 }
 
+type IdempotencyKey = ReturnType<typeof useIdempotencyKey>
+
 /** One pocket: balance, target, rule, add and withdraw, edit, close and its history. */
 export function PocketSheet({ pocket, availableKobo, branches, onClose }: Props) {
+  // Here rather than in the form, so it outlives the sheet: adding the same amount again after closing it (a move
+  // whose answer was lost) keeps the key and moves the money once.
+  const idempotency = useIdempotencyKey()
   return (
     <Sheet open={!!pocket} onOpenChange={(open) => !open && onClose()}>
       <SheetContent className="gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md">
-        {pocket && <Details key={pocket._id} pocket={pocket} availableKobo={availableKobo} branches={branches} onClosed={onClose} />}
+        {pocket && (
+          <Details key={pocket._id} pocket={pocket} availableKobo={availableKobo} branches={branches} idempotency={idempotency} onClosed={onClose} />
+        )}
       </SheetContent>
     </Sheet>
   )
@@ -56,11 +63,13 @@ function Details({
   pocket: p,
   availableKobo,
   branches,
+  idempotency,
   onClosed,
 }: {
   pocket: Pocket
   availableKobo: number | null
   branches: PocketBranch[]
+  idempotency: IdempotencyKey
   onClosed: () => void
 }) {
   const [mode, setMode] = useState<"deposit" | "withdraw" | null>(null)
@@ -109,6 +118,7 @@ function Details({
           pocket={p}
           mode={mode}
           limitKobo={mode === "deposit" ? availableKobo : p.balanceKobo}
+          idempotency={idempotency}
           onDone={() => setMode(null)}
         />
       )}
@@ -176,17 +186,19 @@ function MoveForm({
   pocket,
   mode,
   limitKobo,
+  idempotency,
   onDone,
 }: {
   pocket: Pocket
   mode: "deposit" | "withdraw"
   /** The most that can move: the branch's available balance, or the pocket's balance. */
   limitKobo: number | null
+  /** The sheet's, so it outlives this form. */
+  idempotency: IdempotencyKey
   onDone: () => void
 }) {
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
-  const idempotency = useIdempotencyKey()
   const pin = useTransactionPin()
   const [fieldError, setFieldError] = useState<string>()
   const [error, setError] = useState<string>()
@@ -207,9 +219,9 @@ function MoveForm({
     setBusy(true)
     setError(undefined)
     const request = { amountKobo: kobo, note: note.trim() || undefined }
-    // A retry with the same amount and note keeps the key, whatever went wrong (a wrong PIN included); a
-    // corrected request gets a new one.
-    const idempotencyKey = idempotency.keyFor(request)
+    // A retry with the same amount and note keeps the key, whatever went wrong (a wrong PIN included); a corrected
+    // request gets a new one. The pocket, the direction, the amount and the note are what the API compares a repeat with.
+    const idempotencyKey = idempotency.keyFor({ pocket: pocket._id, mode, ...request })
     // Adding money doesn't take the PIN; withdrawing does.
     const result = deposit
       ? await movePocketMoney(pocket._id, "deposit", { ...request, idempotencyKey })
@@ -220,7 +232,11 @@ function MoveForm({
         })
     setBusy(false)
     if (!result) return
-    if (!result.ok) return setError(result.error)
+    if (!result.ok) {
+      // The key was used for other details: let a deliberate retry be a new request.
+      if (result.code === "IDEMPOTENCY_KEY_REUSED") idempotency.reset()
+      return setError(result.error)
+    }
     idempotency.reset()
     toast.success(
       deposit

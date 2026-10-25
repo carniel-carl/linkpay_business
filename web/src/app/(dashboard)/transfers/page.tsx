@@ -74,10 +74,12 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
     accounts?.state === "ready"
       ? accounts.accounts.filter((a): a is SourceAccount => typeof a.branch === "object" && !!a.branch)
       : []
+  // The sidebar's branch, if its account can send: one that isn't ready isn't among the sources.
+  const defaultBranchId = selected && sources.some((s) => s.branch._id === selected._id) ? selected._id : undefined
 
   const actions = canCreate && sources.length > 0 && (
     <>
-      <BulkTransferDialog accounts={sources} defaultBranchId={selected?._id}>
+      <BulkTransferDialog accounts={sources} defaultBranchId={defaultBranchId}>
         {/* Icons only on phones, like the approval rule's, so the header's buttons fit beside each other. `px-0!`
             beats the button's own padding beside an icon, so the icon sits in the middle. */}
         <Button variant="outline" className="max-sm:w-9 max-sm:px-0!">
@@ -85,7 +87,7 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
           <span className="max-sm:sr-only">Bulk transfer</span>
         </Button>
       </BulkTransferDialog>
-      <NewTransferDialog accounts={sources} defaultBranchId={selected?._id}>
+      <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId}>
         <Button>
           <Plus data-icon="inline-start" aria-hidden />
           New transfer
@@ -137,7 +139,7 @@ export default async function TransfersPage({ searchParams }: PageProps<"/transf
         newTransfer={
           canCreate &&
           sources.length > 0 && (
-            <NewTransferDialog accounts={sources} defaultBranchId={selected?._id}>
+            <NewTransferDialog accounts={sources} defaultBranchId={defaultBranchId}>
               <Button>
                 <Plus data-icon="inline-start" aria-hidden />
                 New transfer

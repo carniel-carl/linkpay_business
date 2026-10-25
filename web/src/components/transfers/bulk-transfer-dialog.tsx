@@ -42,7 +42,7 @@ import { formatNaira } from "@/lib/format"
 import { amountProblem, MAX_NARRATION, people as peopleCount } from "@/lib/payouts"
 import { BULK_CHECK_SLICE, parseNairaToKobo } from "@/lib/transfers"
 import { cn } from "@/lib/utils"
-import { ResolvedName, ReviewRow, type SourceAccount } from "./new-transfer-dialog"
+import { ResolvedName, ReviewRow, startingSource, type SourceAccount } from "./new-transfer-dialog"
 
 /** A saved beneficiary added to the transfer, with this payment's amount and narration as typed. */
 type SavedRow = { key: string; beneficiary: Beneficiary; amount: string; narration: string }
@@ -74,8 +74,8 @@ const toEntries = (saved: SavedRow[], rows: Row[]): Entry[] => [
 ]
 
 /**
- * The rows as they're paid, without the names: what a preview was worked out for, and what the Idempotency-Key
- * follows. A saved beneficiary is its id; an account is its number and bank.
+ * The rows as they're paid, without the names: what a preview was worked out for. A saved beneficiary is its id;
+ * an account is its number and bank.
  */
 const paidItems = (list: Entry[]) =>
   list.map((e) =>
@@ -86,6 +86,18 @@ const paidItems = (list: Entry[]) =>
 
 /** What a preview was worked out for: the account and the rows, but not the names (they can be checked again). */
 const previewKey = (branch: string, list: Entry[]) => JSON.stringify([branch, paidItems(list)])
+
+/**
+ * What the Idempotency-Key follows: what the API compares a repeat with (its request hash), which is where each
+ * row's money goes, how much, and the narration. A saved beneficiary counts as its account number and bank, so the
+ * same account added from the CSV instead can't get a new key. The name, "Save new accounts" and the checked
+ * account names are left out, as the API leaves them out of what it compares.
+ */
+const keyedItems = (list: Entry[]) =>
+  list.map((e) => {
+    const to = e.kind === "saved" ? e.saved.beneficiary : { accountNumber: e.row.accountNumber, bankUuid: e.row.bank!.uuid }
+    return { accountNumber: to.accountNumber, bankUuid: to.bankUuid, amountKobo: e.amountKobo!, narration: e.narration ?? null }
+  })
 
 /**
  * The rows as the API takes them. Each account carries the name the member is looking at, so the API can refuse
@@ -133,7 +145,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<"details" | "review">("details")
   const [banks, setBanks] = useState<Bank[] | null>(null)
-  const [sourceId, setSourceId] = useState(defaultBranchId ?? accounts[0]?.branch._id ?? "")
+  const [sourceId, setSourceId] = useState(() => startingSource(accounts, defaultBranchId))
   const [title, setTitle] = useState("")
   const [text, setText] = useState("")
   const [saved, setSaved] = useState<SavedRow[]>([])
@@ -221,7 +233,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setProgress(null)
     setServerErrors({})
     setError(undefined)
-    idempotency.reset()
+    // Not the Idempotency-Key: the same rows sent again after closing (a send whose answer was lost) must keep it.
   }
 
   async function onFile(file?: File) {
@@ -330,6 +342,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   }
 
   async function review() {
+    if (!source) return setError("Choose the account to send from.")
     const problems: Record<string, string> = {}
     for (const s of saved) {
       const problem = amountProblem(s.amount)
@@ -374,11 +387,11 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
       items: apiItems(entries, lookups),
       saveBeneficiaries: saveAccounts ? (true as const) : undefined,
     }
-    // The same rows sent again keep the key, whatever went wrong (a wrong PIN included); editing the rows, the
-    // account or "Save new accounts" gets a new one, and so does adding or removing a saved beneficiary. The names
-    // are left out, as the API leaves them out of what it compares a repeat with: sending again after checking a
-    // changed name replays a batch that already went instead of paying twice.
-    const idempotencyKey = idempotency.keyFor({ ...request, items: paidItems(entries) })
+    // The same account and rows sent again keep the key, whatever went wrong (a wrong PIN, a lost answer) and even
+    // after the dialog was closed and the rows added again; editing a row or the account gets a new one. Changing
+    // only the name, "Save new accounts" or a checked name can't pay twice: the API replays the batch that already
+    // went, or refuses the key (IDEMPOTENCY_KEY_REUSED) and moves nothing. The key is new after a success.
+    const idempotencyKey = idempotency.keyFor({ branch: sourceId, items: keyedItems(entries) })
     const count = `${entries.length} ${entries.length === 1 ? "transfer" : "transfers"}`
     const result = await pin.confirm({
       purpose: `send ${formatNaira(totalKobo)} to ${peopleCount(entries.length)}`,
@@ -388,6 +401,8 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setBusy(false)
     if (!result) return
     if (!result.ok) {
+      // The key was used for other details: say so, and let a deliberate retry be a new request.
+      if (result.code === "IDEMPOTENCY_KEY_REUSED") idempotency.reset()
       const renamedRows = result.rows?.filter((r) => r.code === "ACCOUNT_NAME_CHANGED" && entries[r.row]?.kind === "account") ?? []
       const others = result.rows?.filter((r) => !renamedRows.includes(r)) ?? []
       markRenamed(entries, lookups, renamedRows)
@@ -398,6 +413,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
       if (!renamedRows.length || others.length) setError(result.error)
       return
     }
+    idempotency.reset()
     const batch = result.data.batch
     const waiting = batch ? batch.statusCounts.pending_approval > 0 : result.data.items?.[0]?.status === "pending_approval"
     const kept = saveAccounts ? " New accounts are saved to your beneficiaries." : ""

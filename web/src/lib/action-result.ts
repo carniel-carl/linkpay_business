@@ -18,4 +18,6 @@ export type ActionResult<T = void> =
       attemptsLeft?: number
       /** TRANSACTION_PIN_LOCKED: when the PIN can be used again, ISO time. */
       lockedUntil?: string
+      /** BATCH_CHANGED: the rows waiting for the member in the bulk transfer now, and what they send in all. */
+      waitingNow?: { count: number; amountKobo: number }
     }

@@ -72,6 +72,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "staff.invited": "Staff invited",
   "staff.invite_resent": "Staff invite resent",
   "staff.invite_revoked": "Staff invite revoked",
+  "staff.invite_accepted": "Staff invite accepted",
   "staff.role_changed": "Staff role changed",
   "staff.disabled": "Staff turned off",
   "staff.enabled": "Staff turned on",
