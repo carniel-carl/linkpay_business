@@ -11,6 +11,7 @@ import { MembershipModel, type MembershipDocument } from "../models/Membership";
 import { UserModel } from "../models/User";
 import { sendTeamInviteEmail } from "../services/email";
 import { teamMemberRemoved, teamRoleChanged } from "../services/notificationEvents";
+import { startMemberHoldIfNeeded } from "../services/moneyOut";
 import { ensureOwnerMembership } from "../services/team";
 import { HttpError } from "../utils/HttpError";
 
@@ -137,6 +138,7 @@ export const updateMember: RequestHandler<IdParams> = async (req, res) => {
   assertCanManage(req.membership!, member, body.role);
 
   const role = body.role ?? member.role;
+  const previousRole = member.role;
   const roleChanged = role !== member.role;
   const branches =
     body.branches !== undefined || body.role !== undefined
@@ -144,7 +146,10 @@ export const updateMember: RequestHandler<IdParams> = async (req, res) => {
       : member.branches;
   member.set({ role, branches });
   await member.save();
-  if (roleChanged) await teamRoleChanged(req.business!, member.user, role);
+  if (roleChanged) {
+    await startMemberHoldIfNeeded(member, previousRole);
+    await teamRoleChanged(req.business!, member.user, role);
+  }
   res.json(await serializeMember(member, req.userId!));
 };
 

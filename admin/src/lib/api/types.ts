@@ -149,6 +149,7 @@ export type StaffPermission =
   | "compliance.view"
   | "compliance.manage"
   | "compliance.ban"
+  | "security.review"
   | "staff.manage"
 
 /** Two-step is mandatory for staff: only the method changes. */
@@ -225,6 +226,8 @@ export type AppNotification = {
     | "staff.role_changed"
     | "compliance.flag_raised"
     | "compliance.business_restricted"
+    | "security.review_requested"
+    | "security.reported"
     | (string & {})
   title: string
   body: string
@@ -243,7 +246,7 @@ export type NotificationPage = { items: AppNotification[]; nextBefore: string | 
 /** `banned` is shown to staff as "Closed". */
 export type ComplianceStatus = "active" | "suspended" | "banned"
 export type FlagSeverity = "low" | "medium" | "high"
-export type FlagCategory = "suspicious_transactions" | "fraud_report" | "identity_concern" | "sanctions" | "other"
+export type FlagCategory = "suspicious_transactions" | "fraud_report" | "identity_concern" | "sanctions" | "account_security" | "other"
 export type FlagOutcome = "cleared" | "actioned"
 export type StaffRef = { _id: string; name: string }
 
@@ -338,6 +341,11 @@ export type AuditAction =
   | "staff.disabled"
   | "staff.enabled"
   | "staff.signed_out"
+  | "security.request_approved"
+  | "security.request_rejected"
+  | "money_out.frozen"
+  | "money_out.unfrozen"
+  | "user.hold_cleared"
 
 /** One audit log entry. On a business's timeline `business` is its id; the audit log expands it. */
 export type AuditEntry<B = string | null> = {
@@ -474,4 +482,99 @@ export type BusinessMembers = {
     activeDevices: number
   }[]
   invites: { _id: string; email: string; role: string; roleLabel: string; expiresAt: string; createdAt: string }[]
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Money-out security reviews (security.review). Contract: docs/briefs/money-out-security.md §4.
+// ---------------------------------------------------------------------------------------------------------
+
+export type SecurityRequestKind = "settlement_account" | "settlement_only_off"
+export type SecurityRequestStatus = "pending" | "approved" | "completed" | "rejected" | "cancelled"
+export type SecurityRisk = "low" | "medium" | "high"
+
+export type SettlementNameCheck = {
+  result: "match" | "partial"
+  score: number
+  matchedTo: "business" | "person"
+  matchedName: string
+  note?: string
+}
+
+export type AdminSettlementAccount = {
+  _id: string
+  accountNumber: string
+  accountName: string
+  bankName: string | null
+  status: "pending" | "active" | "rejected" | "cancelled" | "removed"
+  nameCheck: SettlementNameCheck
+  createdAt: string
+  activatedAt: string | null
+  endedAt: string | null
+  lastWithdrawalAt: string | null
+}
+
+export type SecuritySignals = {
+  risk?: SecurityRisk
+  reasons?: string[]
+  nameCheck?: SettlementNameCheck
+  requester?: {
+    _id: string
+    name: string | null
+    email: string | null
+    role: string | null
+    memberSince?: string | null
+    twoFactor: "totp" | "email" | null
+    lastSignInAt?: string | null
+    lastSignInIp?: string | null
+  }
+  ip?: string | null
+  userAgent?: string | null
+  twoFactorChangedAt?: string | null
+  failedCodes7d?: number
+  newDevices7d?: number
+  settlementChanges30d?: number
+  activeSettlementAccounts?: number
+  firstEver?: boolean
+  paidBefore?: number
+  sharedWith?: { _id: string; name: string }[]
+}
+
+export type SecurityRequest = {
+  _id: string
+  kind: SecurityRequestKind
+  status: SecurityRequestStatus
+  business: { _id: string; name: string; type: string; frozen: boolean } | null
+  settlementAccount: AdminSettlementAccount | null
+  requestedBy: { _id: string; name: string; email: string } | null
+  ip: string | null
+  userAgent: string | null
+  availableAt: string
+  createdAt: string
+  completedAt: string | null
+  signals: SecuritySignals
+  review: { decision: "approved" | "rejected"; byName: string; at: string; note: string; callbackConfirmed: boolean } | null
+  cancellation: { by: "member" | "report" | "staff"; byName: string; at: string; reason?: string } | null
+}
+
+export type SecurityEvent = { _id: string; type: string; summary: string; actor: { type: string; name: string }; ip: string | null; createdAt: string }
+
+export type SecurityRequestDetail = SecurityRequest & {
+  /** Call back on these: they come from the business's verification, never from the requester. */
+  contacts: { businessEmail: string | null; businessPhone: string | null; people: { fullName: string; roles: string[]; phone: string | null; email: string | null }[] } | null
+  settlementAccounts: AdminSettlementAccount[]
+  events: SecurityEvent[]
+}
+
+export type SecuritySummary = { pending: number; coolingOff: number; frozen: number; reports30d: number }
+
+export type SecurityRequestList = { items: SecurityRequest[]; total: number; skip: number; take: number }
+
+export type BusinessSecurityView = {
+  moneyOut: {
+    frozen: { at: string; source: "member" | "report" | "staff"; byName: string | null; reason: string | null } | null
+    settlementOnly: { enabled: boolean; since: string | null }
+  }
+  settlementAccounts: AdminSettlementAccount[]
+  requests: SecurityRequest[]
+  events: SecurityEvent[]
 }

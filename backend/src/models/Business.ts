@@ -97,6 +97,25 @@ const businessSchema = new Schema(
       },
     },
 
+    // Money-out protection (services/moneyOut.ts). Settlement accounts live in SettlementAccount.
+    moneyOut: {
+      // Emergency stop: nothing leaves while set. Who froze it decides who can lift it (see canUnfreeze).
+      frozen: {
+        at: { type: Date },
+        source: { type: String, enum: ["member", "report", "staff", null] },
+        by: { type: Types.ObjectId }, // a User (member, report) or Staff
+        byName: { type: String },
+        reason: { type: String, trim: true },
+      },
+      // "Settlement accounts only": money can leave only to active settlement accounts and own branches.
+      // Turning it on is immediate; turning it off is a SecurityRequest (cooling-off and staff review).
+      settlementOnly: {
+        enabled: { type: Boolean, default: false },
+        since: { type: Date },
+        by: { type: Types.ObjectId, ref: "User" },
+      },
+    },
+
     // How the business's invoices and receipts look (see services/branding.ts). Set under Settings.
     branding: {
       // Normalised to a PNG on upload (any SVG is rasterised), so only a safe image is ever served.

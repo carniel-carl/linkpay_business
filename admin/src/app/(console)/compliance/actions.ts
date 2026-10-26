@@ -13,7 +13,7 @@ import { auditApiParams } from "@/lib/compliance"
 
 const id = z.string().regex(/^[0-9a-f]{24}$/i)
 const business = (businessId: string) => `/api/admin/businesses/${id.parse(businessId)}`
-const category = z.enum(["suspicious_transactions", "fraud_report", "identity_concern", "sanctions", "other"])
+const category = z.enum(["suspicious_transactions", "fraud_report", "identity_concern", "sanctions", "account_security", "other"])
 const note = z.string().trim().min(1).max(2000)
 
 /** Runs a write and refreshes every page (sidebar counts, lists and the business's tabs all change). */

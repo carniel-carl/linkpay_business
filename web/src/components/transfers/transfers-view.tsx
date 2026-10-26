@@ -6,6 +6,7 @@ import { createColumnHelper, useTable, type PaginationState, type Updater } from
 import { ArrowUpRight, RotateCw, SearchX, X } from "lucide-react"
 import { toast } from "sonner"
 import { actOnBatch } from "@/app/(dashboard)/transfers/actions"
+import { useStepUp } from "@/components/security/step-up-dialog"
 import { DataTable, dataTableFeatures, type DataTableFeatures } from "@/components/data-table/data-table"
 import { DataTablePagination } from "@/components/data-table/data-table-pagination"
 import { SearchBox } from "@/components/data-table/search-box"
@@ -299,6 +300,7 @@ export function TransfersView({ data, query, canApprove, awaitingCount, showBran
 /** A bulk transfer: totals, progress and approve or reject everything still waiting. */
 function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => void }) {
   const [busy, setBusy] = useState<"approve" | "reject" | "cancel" | null>(null)
+  const stepUp = useStepUp()
   const waiting = batch.statusCounts.pending_approval
   const approvable = batch.items.filter((i) => i.canApprove).length
   const cancellable = batch.items.filter((i) => i.canCancel).length
@@ -307,8 +309,12 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
 
   async function act(action: "approve" | "reject" | "cancel") {
     setBusy(action)
-    const result = await actOnBatch(batch._id, action)
+    const result =
+      action === "approve"
+        ? await stepUp.confirm("batch.approve", { id: batch._id }, (proof) => actOnBatch(batch._id, action, undefined, proof))
+        : await actOnBatch(batch._id, action)
     setBusy(null)
+    if (!result) return
     if (!result.ok) return toast.error(result.error)
     const stillWaiting = result.data.statusCounts.pending_approval
     toast.success(
@@ -322,6 +328,7 @@ function BatchBanner({ batch, onClear }: { batch: TransferBatch; onClear: () => 
 
   return (
     <section className="surface grid gap-4 p-5 sm:p-6">
+      {stepUp.dialog}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1">
           <p className="text-sm text-muted-foreground">Bulk transfer{batch.title ? `, ${batch.title}` : ""}</p>

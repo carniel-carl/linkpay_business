@@ -47,6 +47,8 @@ const transferSchema = new Schema(
       branch: { type: Types.ObjectId, ref: "Branch" },
       // The saved beneficiary it was paid to, if any.
       beneficiary: { type: Types.ObjectId, ref: "Beneficiary" },
+      // A withdrawal to one of the business's own settlement accounts.
+      settlementAccount: { type: Types.ObjectId, ref: "SettlementAccount" },
     },
     narration: { type: String, trim: true },
     // Ours, unique, sent to Liquifia as the payout reference (shown to support and on receipts).

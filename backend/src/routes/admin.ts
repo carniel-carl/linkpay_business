@@ -45,6 +45,17 @@ import {
   showDonation,
   takeDownPaymentLink,
 } from "../controllers/linkReports";
+import {
+  approveSecurityRequest,
+  clearUserHoldHandler,
+  freezeBusinessMoneyOut,
+  getBusinessSecurity,
+  getSecurityRequest,
+  getSecuritySummary,
+  listSecurityRequests,
+  rejectSecurityRequest,
+  unfreezeBusinessMoneyOut,
+} from "../controllers/adminSecurity";
 import { getUser, listUsers } from "../controllers/users";
 import { requireStaff, requireStaffPermission as can } from "../middleware/staff";
 import { staffNotificationsRouter } from "./notifications";
@@ -102,6 +113,16 @@ adminRouter.post("/payment-links/:id/take-down", can("compliance.manage"), takeD
 adminRouter.post("/payment-links/:id/restore", can("compliance.manage"), restorePaymentLink);
 adminRouter.post("/donations/:id/hide", can("compliance.manage"), hideDonation);
 adminRouter.post("/donations/:id/show", can("compliance.manage"), showDonation);
+// Money-out protection: settlement account reviews, freezes and holds.
+adminRouter.get("/security/summary", can("security.review"), getSecuritySummary);
+adminRouter.get("/security/requests", can("security.review"), listSecurityRequests);
+adminRouter.get("/security/requests/:id", can("security.review"), getSecurityRequest);
+adminRouter.post("/security/requests/:id/approve", can("security.review"), approveSecurityRequest);
+adminRouter.post("/security/requests/:id/reject", can("security.review"), rejectSecurityRequest);
+adminRouter.get("/businesses/:id/security", can("security.review"), getBusinessSecurity);
+adminRouter.post("/businesses/:id/money-out/freeze", can("security.review"), freezeBusinessMoneyOut);
+adminRouter.post("/businesses/:id/money-out/unfreeze", can("security.review"), unfreezeBusinessMoneyOut);
+adminRouter.post("/users/:id/security/clear-hold", can("security.review"), clearUserHoldHandler);
 adminRouter.get("/users", can("users.view"), listUsers);
 adminRouter.get("/users/:id", can("users.view"), getUser);
 adminRouter.use("/staff", staffRouter);

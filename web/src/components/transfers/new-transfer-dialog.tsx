@@ -5,6 +5,7 @@ import { Check, ChevronsUpDown, Send } from "lucide-react"
 import { toast } from "sonner"
 import { createTransfer, listBanks, quoteFee, resolveAccount } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
+import { useStepUp } from "@/components/security/step-up-dialog"
 import { NairaInput } from "@/components/common/naira-input"
 import { Button } from "@/components/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
@@ -61,6 +62,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
   const [quote, setQuote] = useState<FeeQuote | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const stepUp = useStepUp()
 
   const lookupKey = to === "bank" && bankUuid && /^\d{10}$/.test(accountNumber) ? `${bankUuid}:${accountNumber}` : null
   const current = lookup && lookup.key === lookupKey ? lookup : null
@@ -135,14 +137,20 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
   async function send() {
     setBusy(true)
     setError(undefined)
-    const result = await createTransfer({
+    const { idempotencyKey, ...body } = {
       branch: sourceId,
       amountKobo: amountKobo!,
       narration: narration.trim() || undefined,
-      recipient: to === "bank" ? { type: "bank", accountNumber, bankUuid } : { type: "branch", branch: targetBranch },
+      recipient: to === "bank" ? ({ type: "bank", accountNumber, bankUuid } as const) : ({ type: "branch", branch: targetBranch } as const),
       idempotencyKey: key,
-    })
+    }
+    // Between own branches money stays in the business, so no code is needed.
+    const result =
+      body.recipient.type === "branch"
+        ? await createTransfer({ ...body, idempotencyKey })
+        : await stepUp.confirm("transfer.create", body, (proof) => createTransfer({ ...body, idempotencyKey }, proof))
     setBusy(false)
+    if (!result) return
     if (!result.ok) {
       setError(result.error)
       // Anything that changes what's sent gets a new key; a plain retry keeps it.
@@ -368,6 +376,7 @@ export function NewTransferDialog({ accounts, defaultBranchId, children }: Props
           )}
         </DialogFooter>
       </DialogContent>
+      {stepUp.dialog}
     </Dialog>
   )
 }

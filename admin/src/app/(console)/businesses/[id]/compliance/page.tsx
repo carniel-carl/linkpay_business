@@ -8,7 +8,8 @@ import { AddNoteDialog, RaiseFlagDialog, RestrictionDialog } from "@/components/
 import { FlagSheet } from "@/components/compliance/flag-sheet"
 import { FlagsList } from "@/components/compliance/flags-list"
 import type { ComplianceRules, ComplianceState } from "@/lib/api/types"
-import { getAdminBusiness, getBusinessCompliance, getComplianceRules, getStaff } from "@/lib/data"
+import { MoneyOutPanel } from "@/components/security/money-out-panel"
+import { getAdminBusiness, getBusinessCompliance, getBusinessSecurity, getComplianceRules, getStaff } from "@/lib/data"
 import { formatDateTime, timeAgo } from "@/lib/format"
 import { requirePermission } from "@/lib/guard"
 import { can } from "@/lib/permissions"
@@ -26,6 +27,7 @@ export default async function BusinessCompliancePage({ params }: PageProps<"/bus
   const { id } = await params
   const [overview, staff, view, rules] = await Promise.all([getAdminBusiness(id), getStaff(), getBusinessCompliance(id), getComplianceRules()])
   if (!overview || !view) notFound()
+  const security = can(staff, "security.review") ? await getBusinessSecurity(id) : null
   const { business } = overview
   const canManage = can(staff, "compliance.manage")
   const name = business.name
@@ -62,7 +64,13 @@ export default async function BusinessCompliancePage({ params }: PageProps<"/bus
           />
         </div>
 
-        <div style={{ "--i": 1 } as React.CSSProperties} className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+        {security && (
+          <div style={{ "--i": 1 } as React.CSSProperties}>
+            <MoneyOutPanel businessId={id} view={security} />
+          </div>
+        )}
+
+        <div style={{ "--i": 2 } as React.CSSProperties} className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
           <AdminSection
             id="flags"
             title="Flags"

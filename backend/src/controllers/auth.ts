@@ -7,6 +7,7 @@ import {
   disableBiometricKey,
   signInWithBiometricKey,
 } from "../services/biometricKeys";
+import { startTwoFactorHold } from "../services/moneyOut";
 import { createOtp, verifyOtp } from "../services/otp";
 import {
   sendLoginCodeEmail,
@@ -222,8 +223,12 @@ export const enableTotp: RequestHandler = async (req, res) => {
     "twoFactor.method": "totp",
     "twoFactor.totpSecret": pending,
     "twoFactor.pendingTotpSecret": undefined,
+    // A new authenticator starts a fresh count of used codes.
+    "security.totpLastCounter": undefined,
   });
   await user.save();
+  // Someone with only a stolen password could otherwise add their own authenticator and pass every step-up.
+  await startTwoFactorHold(user, "set up an authenticator app for two-step verification", req);
   res.json({ message: "Authenticator app two-factor authentication enabled.", user });
 };
 
@@ -231,6 +236,7 @@ export const enableEmailTwoFactor: RequestHandler = async (req, res) => {
   const body = z.object({ password: z.string().min(1) }).parse(req.body);
 
   const user = await checkPassword(req.userId, body.password);
+  const changed = !(user.twoFactor?.enabled && user.twoFactor.method === "email");
   user.set({
     "twoFactor.enabled": true,
     "twoFactor.method": "email",
@@ -238,6 +244,7 @@ export const enableEmailTwoFactor: RequestHandler = async (req, res) => {
     "twoFactor.pendingTotpSecret": undefined,
   });
   await user.save();
+  if (changed) await startTwoFactorHold(user, "switched two-step verification to email codes", req);
   res.json({ message: "Email two-factor authentication enabled.", user });
 };
 
@@ -252,6 +259,7 @@ export const disableTwoFactor: RequestHandler = async (req, res) => {
     "twoFactor.pendingTotpSecret": undefined,
   });
   await user.save();
+  await startTwoFactorHold(user, "turned off two-step verification", req);
   res.json({ message: "Two-factor authentication disabled.", user });
 };
 

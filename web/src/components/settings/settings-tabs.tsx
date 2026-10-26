@@ -8,9 +8,11 @@ const TABS = [
   { key: "/settings/security", href: "/settings/security", label: "Security" },
 ]
 
+const MONEY_PROTECTION = { key: "/settings/money-protection", href: "/settings/money-protection", label: "Money protection" }
 const BRANDING = { key: "/settings/branding", href: "/settings/branding", label: "Invoice branding" }
 
-/** Invoice branding is the business's, so only members who manage invoices see it. */
-export function SettingsTabs({ showBranding = false }: { showBranding?: boolean }) {
-  return <NavTabs label="Settings sections" items={showBranding ? [...TABS, BRANDING] : TABS} current={usePathname()} />
+/** Money protection and invoice branding are the business's: shown once it's verified, branding to members who manage invoices. */
+export function SettingsTabs({ showBranding = false, showMoneyProtection = false }: { showBranding?: boolean; showMoneyProtection?: boolean }) {
+  const items = [...TABS, ...(showMoneyProtection ? [MONEY_PROTECTION] : []), ...(showBranding ? [BRANDING] : [])]
+  return <NavTabs label="Settings sections" items={items} current={usePathname()} />
 }

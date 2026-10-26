@@ -26,6 +26,14 @@ export const NOTIFICATION_TYPES = {
   "team.role_changed": { audience: "user", label: "Your role changed", push: true },
   "team.removed": { audience: "user", label: "You were removed from a team", push: true },
   "security.new_sign_in": { audience: "user", label: "New sign-in on a device", push: true },
+  "security.settlement_requested": { audience: "user", label: "A settlement account was added", push: true },
+  "security.settlement_active": { audience: "user", label: "A settlement account is ready to use", push: true },
+  "security.settlement_rejected": { audience: "user", label: "A settlement account wasn't approved", push: true },
+  "security.settlement_removed": { audience: "user", label: "A settlement account was removed", push: true },
+  "security.money_out_frozen": { audience: "user", label: "Money leaving the business was frozen", push: true },
+  "security.money_out_unfrozen": { audience: "user", label: "Money can leave the business again", push: true },
+  "security.protection_changed": { audience: "user", label: "Money-out protection changed", push: true },
+  "security.two_factor_changed": { audience: "user", label: "Your two-step verification changed", push: true },
   "business.suspended": { audience: "user", label: "Your business was suspended", push: true },
   "business.reinstated": { audience: "user", label: "Your business was reinstated", push: true },
   "business.banned": { audience: "user", label: "Your business was closed", push: true },
@@ -37,6 +45,8 @@ export const NOTIFICATION_TYPES = {
   "compliance.flag_raised": { audience: "staff", label: "A business was flagged", push: false },
   "compliance.business_restricted": { audience: "staff", label: "A business was suspended or closed", push: false },
   "compliance.link_reported": { audience: "staff", label: "Someone reported a payment link", push: false },
+  "security.review_requested": { audience: "staff", label: "A settlement change needs review", push: false },
+  "security.reported": { audience: "staff", label: "A business reported a change it didn't make", push: false },
 } as const satisfies Record<string, { audience: "user" | "staff"; label: string; push: boolean }>;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

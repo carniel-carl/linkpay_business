@@ -14,4 +14,8 @@ export type ActionResult<T = void> =
       retryAt?: string
       /** Bulk transfers (INVALID_ROWS): what's wrong with each row, by index. */
       rows?: { row: number; error: string; code?: string }[]
+      /** Holds and lockouts (SECURITY_HOLD, NEW_MEMBER_HOLD, STEP_UP_LOCKED): when they end, ISO time. */
+      until?: string | null
+      /** A wrong step-up code: how many tries are left on it. */
+      attemptsLeft?: number
     }

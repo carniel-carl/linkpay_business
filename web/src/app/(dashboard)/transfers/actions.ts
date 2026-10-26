@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { runAction } from "@/lib/action"
 import { api } from "@/lib/api/client"
-import type { Bank, FeeQuote, ResolvedAccount, Transfer, TransferBatch, TransferSettings } from "@/lib/api/types"
+import type { Bank, FeeQuote, ResolvedAccount, StepUpProof, Transfer, TransferBatch, TransferSettings } from "@/lib/api/types"
+import { stepUpHeaders } from "@/lib/step-up"
 
 const id = z.string().regex(/^[a-f\d]{24}$/i)
 const accountNumber = z.string().regex(/^\d{10}$/)
@@ -41,10 +42,11 @@ const createInput = z.object({
   idempotencyKey,
 })
 
-export async function createTransfer(input: z.input<typeof createInput>) {
+/** Needs a step-up (`transfer.create`, the body without the key) unless it's between own branches. */
+export async function createTransfer(input: z.input<typeof createInput>, stepUp?: StepUpProof) {
   const { idempotencyKey: key, ...body } = createInput.parse(input)
   const result = await runAction(() =>
-    api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": key } }),
+    api<Transfer>("/api/transfers", { method: "POST", json: body, headers: { "Idempotency-Key": key, ...stepUpHeaders(stepUp) } }),
   )
   if (result.ok) refresh()
   return result
@@ -57,13 +59,14 @@ const bulkInput = z.object({
   idempotencyKey,
 })
 
-export async function createBulkTransfer(input: z.input<typeof bulkInput>) {
+/** Needs a step-up (`transfer.bulk`, the body without the key). */
+export async function createBulkTransfer(input: z.input<typeof bulkInput>, stepUp?: StepUpProof) {
   const { idempotencyKey: key, ...body } = bulkInput.parse(input)
   const result = await runAction(() =>
     api<{ batch: TransferBatch | null; items?: Transfer[] }>("/api/transfers/bulk", {
       method: "POST",
       json: body,
-      headers: { "Idempotency-Key": key },
+      headers: { "Idempotency-Key": key, ...stepUpHeaders(stepUp) },
     }),
   )
   if (result.ok) refresh()
@@ -72,18 +75,22 @@ export async function createBulkTransfer(input: z.input<typeof bulkInput>) {
 
 const note = z.string().trim().max(300).optional()
 
-/** approve | reject | cancel | refresh on one transfer. */
-export async function actOnTransfer(transferId: string, action: "approve" | "reject" | "cancel" | "refresh", text?: string) {
+/** approve | reject | cancel | refresh on one transfer. Approving needs a step-up (`transfer.approve`, `{ id }`). */
+export async function actOnTransfer(transferId: string, action: "approve" | "reject" | "cancel" | "refresh", text?: string, stepUp?: StepUpProof) {
   const path = `/api/transfers/${encodeURIComponent(id.parse(transferId))}/${z.enum(["approve", "reject", "cancel", "refresh"]).parse(action)}`
-  const result = await runAction(() => api<Transfer>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
+  const result = await runAction(() =>
+    api<Transfer>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: stepUpHeaders(stepUp) }),
+  )
   if (result.ok) refresh()
   return result
 }
 
-/** approve | reject | cancel everything in a bulk transfer that's still waiting. */
-export async function actOnBatch(batchId: string, action: "approve" | "reject" | "cancel", text?: string) {
+/** approve | reject | cancel everything in a bulk transfer that's still waiting. Approving needs a step-up (`batch.approve`, `{ id }`). */
+export async function actOnBatch(batchId: string, action: "approve" | "reject" | "cancel", text?: string, stepUp?: StepUpProof) {
   const path = `/api/transfers/batches/${encodeURIComponent(id.parse(batchId))}/${z.enum(["approve", "reject", "cancel"]).parse(action)}`
-  const result = await runAction(() => api<TransferBatch>(path, { method: "POST", json: { note: note.parse(text) || undefined } }))
+  const result = await runAction(() =>
+    api<TransferBatch>(path, { method: "POST", json: { note: note.parse(text) || undefined }, headers: stepUpHeaders(stepUp) }),
+  )
   if (result.ok) refresh()
   return result
 }

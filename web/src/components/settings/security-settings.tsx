@@ -48,7 +48,8 @@ export function SecuritySettings({ enabled, method, email }: Props) {
           <div className="grid gap-1">
             <h2 className="text-sm font-medium">Two-step verification</h2>
             <p className="text-sm text-muted-foreground">
-              After your password, we ask for a code. Choose where that code comes from.
+              After your password, we ask for a code, and again before money leaves. Choose where that code comes from.
+              Changing it stops you sending money for 24 hours, in case it wasn&apos;t you.
             </p>
           </div>
           {enabled ? (

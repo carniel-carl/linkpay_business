@@ -7,6 +7,7 @@ import { MembershipModel } from "../models/Membership";
 import { UserModel, type UserDocument } from "../models/User";
 import { deviceSchema, signInResponse } from "../services/sessions";
 import { teamMemberJoined } from "../services/notificationEvents";
+import { startMemberHoldIfNeeded } from "../services/moneyOut";
 import { describeMembership } from "../services/team";
 import { HttpError } from "../utils/HttpError";
 import { branchSummaries, hashInviteToken } from "./team";
@@ -44,6 +45,8 @@ async function acceptFor(invite: InviteDocument, user: UserDocument) {
       return (await MembershipModel.findOne({ business: invite.business, user: user._id }))!;
     });
   }
+  // A new member who can move money waits 24 hours before they can.
+  if (joined) await startMemberHoldIfNeeded(membership, null);
   invite.set({ status: "accepted", acceptedBy: user._id, acceptedAt: new Date() });
   await invite.save();
 

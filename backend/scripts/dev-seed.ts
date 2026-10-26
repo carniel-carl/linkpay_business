@@ -18,11 +18,16 @@ import { newSlug, simulateCheckoutPayment, startCheckout } from "../src/services
 import { setLinkImages, uploadLinkImage } from "../src/services/paymentLinkImages";
 import sharp from "sharp";
 import { startOfLagosDay } from "../src/services/safelocks";
+import { startStepUp } from "../src/services/stepUp";
+import { resolveBusinessContext } from "../src/services/team";
 import { signAccessToken } from "../src/services/tokens";
 import { syncInboundTransfers } from "../src/services/transactions";
 import { raiseFlag, suspendBusiness } from "../src/services/compliance";
 import { audit } from "../src/services/audit";
 import { runRiskChecks } from "../src/services/risk";
+import { SecurityRequestModel } from "../src/models/SecurityRequest";
+import { SettlementAccountModel } from "../src/models/SettlementAccount";
+import { checkSettlementName } from "../src/services/nameMatch";
 import { encrypt } from "../src/utils/crypto";
 import { inboundTransfer, type MockLiquifia } from "../tests/mockLiquifia";
 
@@ -63,8 +68,9 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
     name: "Adaeze Fabrics Ltd",
     type: "limited_liability_company",
     email: "hello@adaezefabrics.test",
+    phone: "08035550142",
     address: { street: "12 Balogun Street", city: "Lagos", state: "Lagos" },
-    people: [{ fullName: "Adaeze Okafor", roles: ["director"], bvnEncrypted: encrypt("22345678901"), bvnLast4: "8901" }],
+    people: [{ fullName: "Adaeze Okafor", roles: ["director"], phone: "08035550199", email: DEMO_EMAIL, bvnEncrypted: encrypt("22345678901"), bvnLast4: "8901" }],
     status: "approved",
     submittedAt: new Date(),
     reviewedAt: new Date(),
@@ -128,8 +134,9 @@ export async function seedDemo(liquifia: MockLiquifia, apiUrl: string) {
   const payees = await seedBeneficiaries(business, owner.id, accounts, liquifia);
   const links = await seedPaymentLinks(business, owner.id, accounts, liquifia);
   const fundraiser = await seedDonations(business, owner.id, accounts, liquifia);
+  const settlement = await seedSettlement(business, owner.id, liquifia);
   const risky = await seedCompliance(liquifia, apiUrl);
-  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}, ${links}, ${fundraiser}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
+  console.log(`Seeded ${business.name}: ${accounts.length} branches, ${transfers.length} payments, ${invoices} invoices, ${pockets} savings pockets, ${safelocks} Safelocks, ${payees}, ${links}, ${fundraiser}, ${settlement}. Sign in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}; staff (admin/) as ${SEEDED_STAFF.map((s) => `${s.email} (${s.role})`).join(", ")}, all ${DEMO_PASSWORD}.`);
   console.log(`Compliance demo: ${risky}`);
 }
 
@@ -371,6 +378,65 @@ async function seedBeneficiaries(
 }
 
 /**
+ * Settlement accounts: one active (approved after a call back, past its cooling-off) to withdraw to, and one
+ * in the staff review queue (a director's personal account, a partial name match, added three hours ago).
+ * The owner has no two-step verification, so step-up codes are emailed (printed to this console).
+ */
+async function seedSettlement(business: BusinessDocument, ownerId: string, liquifia: MockLiquifia) {
+  const reviewer = await StaffModel.findOne({ email: "compliance@linkpay.test" });
+  const day = 86_400_000;
+  const make = async (accountNumber: string, accountName: string, bankUuid: string, bankName: string, ageMs: number, approved: boolean) => {
+    liquifia.bankAccounts.set(accountNumber, accountName);
+    const nameCheck = checkSettlementName(business, accountName)!;
+    const createdAt = new Date(Date.now() - ageMs);
+    const account = await SettlementAccountModel.create({
+      business: business._id,
+      accountNumber,
+      accountName,
+      bankUuid,
+      bankName,
+      nameCheck,
+      status: approved ? "active" : "pending",
+      addedBy: ownerId,
+      ...(approved && { activatedAt: new Date(createdAt.getTime() + day) }),
+    });
+    const request = await SecurityRequestModel.create({
+      business: business._id,
+      kind: "settlement_account",
+      settlementAccount: account._id,
+      status: approved ? "completed" : "pending",
+      requestedBy: ownerId,
+      ip: "102.89.34.17",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+      availableAt: new Date(createdAt.getTime() + day),
+      signals: {
+        risk: nameCheck.result === "match" ? "low" : "medium",
+        reasons: nameCheck.result === "match" ? ["Uses email codes, not an authenticator app"] : [nameCheck.note ?? "Name only partly matches", "Uses email codes, not an authenticator app"],
+        nameCheck,
+        requester: { _id: ownerId, name: "Adaeze Okafor", email: DEMO_EMAIL, role: "owner", twoFactor: null },
+        ip: "102.89.34.17",
+        firstEver: approved,
+        activeSettlementAccounts: approved ? 0 : 1,
+        sharedWith: [],
+        paidBefore: 0,
+      },
+      ...(approved && {
+        review: { decision: "approved", by: reviewer?._id, byName: reviewer?.name, at: new Date(createdAt.getTime() + 2 * 3_600_000), note: "Called Adaeze on the number from verification; she confirmed the account.", callbackConfirmed: true },
+        completedAt: new Date(createdAt.getTime() + day),
+      }),
+    });
+    account.set("request", request._id);
+    await account.save();
+    // Back-date them (Mongoose won't change createdAt).
+    await SettlementAccountModel.collection.updateOne({ _id: account._id }, { $set: { createdAt } });
+    await SecurityRequestModel.collection.updateOne({ _id: request._id }, { $set: { createdAt } });
+  };
+  await make("0581234567", "ADAEZE FABRICS LIMITED", "BANK-GTB", "Guaranty Trust Bank", 20 * day, true);
+  await make("0449876543", "OKAFOR ADAEZE", "BANK-ACCESS", "Access Bank", 3 * 3_600_000, false);
+  return "2 settlement accounts (one active, one waiting for review)";
+}
+
+/**
  * Two businesses for the compliance screens: one the automatic rules flag (a large payment passed straight
  * through), and one a reviewer flagged and suspended. Both owners sign in with DEMO_PASSWORD.
  */
@@ -411,11 +477,15 @@ async function seedCompliance(liquifia: MockLiquifia, apiUrl: string) {
   liquifia.balances.set(swift.account.providerAccountId, 8_600_000_00);
   await syncInboundTransfers();
   const swiftToken = await signAccessToken(swift.owner.id);
+  const swiftContext = await resolveBusinessContext(swift.owner.id, swift.business.id);
   for (const [accountNumber, amountKobo] of [["0123456789", 4_200_000_00], ["2222222222", 3_500_000_00]] as const) {
+    const body = { branch: String(swift.account.branch), amountKobo, narration: "Stock", recipient: { type: "bank", accountNumber, bankUuid: "BANK-GTB" } };
+    // Transfers need a step-up; the seed takes the emailed code straight from the service.
+    const { challenge, code } = await startStepUp({ ...swiftContext, userId: swift.owner.id }, "transfer.create", body);
     const res = await fetch(`${apiUrl}/api/transfers`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${swiftToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ branch: String(swift.account.branch), amountKobo, narration: "Stock", recipient: { type: "bank", accountNumber, bankUuid: "BANK-GTB" } }),
+      headers: { Authorization: `Bearer ${swiftToken}`, "Content-Type": "application/json", "X-Step-Up-Id": challenge.id, "X-Step-Up-Code": code! },
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Seeding a Swift Gadgets transfer failed: ${res.status} ${await res.text()}`);
   }

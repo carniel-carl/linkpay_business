@@ -33,6 +33,11 @@ import type {
   StaffInvite,
   StaffMember,
   StaffRoleInfo,
+  BusinessSecurityView,
+  SecurityRequestDetail,
+  SecurityRequestList,
+  SecurityRequestStatus,
+  SecuritySummary,
 } from "@/lib/api/types"
 
 // Server Components can't change cookies, so an ended session goes through the
@@ -186,3 +191,26 @@ export async function getAuditLog(query: AuditQuery) {
     onReadError(err)
   }
 }
+
+// ---- Money-out security reviews (security.review) ----
+
+export const getSecuritySummary = cache(async () => {
+  try {
+    return await api<SecuritySummary>("/api/admin/security/summary")
+  } catch (err) {
+    onReadError(err)
+  }
+})
+
+export async function getSecurityRequests(status: SecurityRequestStatus, page: number, pageSize: number) {
+  const params = new URLSearchParams({ status, skip: String((page - 1) * pageSize), take: String(pageSize) })
+  try {
+    return await api<SecurityRequestList>(`/api/admin/security/requests?${params}`)
+  } catch (err) {
+    onReadError(err)
+  }
+}
+
+export const getSecurityRequest = (id: string) => read<SecurityRequestDetail>(`/api/admin/security/requests/${encodeURIComponent(id)}`)
+
+export const getBusinessSecurity = (id: string) => read<BusinessSecurityView>(`${businessPath(id)}/security`)

@@ -9,6 +9,7 @@ import {
   ClipboardCheck,
   Flag,
   ShieldAlert,
+  ShieldCheck,
   TriangleAlert,
   UserCog,
   UserPlus,
@@ -35,10 +36,12 @@ const ICONS: Record<string, LucideIcon> = {
   "staff.role_changed": UserCog,
   "compliance.flag_raised": Flag,
   "compliance.business_restricted": ShieldAlert,
+  "security.review_requested": ShieldCheck,
+  "security.reported": ShieldAlert,
 }
 
 // Needs attention: shown with the destructive tint.
-const ALERT_TYPES = new Set(["account.setup_failed", "compliance.flag_raised", "compliance.business_restricted"])
+const ALERT_TYPES = new Set(["account.setup_failed", "compliance.flag_raised", "compliance.business_restricted", "security.reported"])
 
 // After the stream closes for good (e.g. the server refused it), try again this long after.
 const RETRY_MS = 30_000

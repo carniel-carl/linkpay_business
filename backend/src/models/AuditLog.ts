@@ -20,6 +20,12 @@ export const AUDIT_ACTIONS = [
   "payment_link.restored",
   "donation.hidden",
   "donation.shown",
+  // Money-out protection
+  "security.request_approved",
+  "security.request_rejected",
+  "money_out.frozen",
+  "money_out.unfrozen",
+  "user.hold_cleared",
   // Staff management
   "staff.invited",
   "staff.invite_revoked",
@@ -46,7 +52,7 @@ const auditLogSchema = new Schema(
     action: { type: String, enum: AUDIT_ACTIONS, required: true },
     business: { type: Types.ObjectId, ref: "Business" },
     target: {
-      kind: { type: String, enum: ["business", "flag", "staff", "staff_invite", "branch", "payment_link", "checkout", "link_report"] },
+      kind: { type: String, enum: ["business", "flag", "staff", "staff_invite", "branch", "payment_link", "checkout", "link_report", "security_request", "user"] },
       id: { type: Types.ObjectId },
     },
     // One readable line, e.g. "Suspended: Suspicious transactions".

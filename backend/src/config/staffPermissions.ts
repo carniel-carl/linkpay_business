@@ -13,6 +13,7 @@ export const STAFF_PERMISSIONS = {
   "compliance.view": "See risk flags, restrictions, compliance notes and the staff audit log",
   "compliance.manage": "Raise and resolve risk flags, add notes, suspend and reinstate businesses",
   "compliance.ban": "Close (ban) a business and lift a ban",
+  "security.review": "Review settlement accounts and money-out protection changes, freeze and unfreeze money out",
   "staff.manage": "Invite staff, change roles, disable, enable and sign out staff",
 } as const;
 export type StaffPermission = keyof typeof STAFF_PERMISSIONS;
@@ -27,7 +28,7 @@ export const STAFF_ROLE_DETAILS = {
   },
   compliance: {
     label: "Compliance reviewer",
-    description: "Reviews verifications and documents, watches business activity, flags and suspends businesses.",
+    description: "Reviews verifications and documents, watches business activity, flags and suspends businesses, reviews settlement accounts.",
     permissions: [
       "businesses.view",
       "documents.view",
@@ -36,6 +37,7 @@ export const STAFF_ROLE_DETAILS = {
       "activity.view",
       "compliance.view",
       "compliance.manage",
+      "security.review",
     ],
   },
   operations: {

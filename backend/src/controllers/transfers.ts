@@ -1,4 +1,4 @@
-import type { Request, RequestHandler } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import { isValidObjectId, Types } from "mongoose";
 import { z } from "zod";
 import { BranchModel } from "../models/Branch";
@@ -27,6 +27,7 @@ import {
   resolveBankRecipient,
   resolveBranchRecipient,
 } from "../services/transfers";
+import { withStepUp } from "../services/stepUp";
 import { HttpError } from "../utils/HttpError";
 
 type IdParams = { id: string };
@@ -46,7 +47,7 @@ function clientKey(req: Request) {
 
 // ---------------------------------------------------------------------------------------------------------
 
-async function serialize(req: Request, transfers: TransferDocument[]) {
+export async function serialize(req: Request, transfers: TransferDocument[]) {
   const userIds = transfers.flatMap((t) => [
     t.createdBy,
     t.decision?.by,
@@ -86,6 +87,8 @@ async function serialize(req: Request, transfers: TransferDocument[]) {
       branch: t.kind === "internal" ? branch(t.recipient!.branch) : null,
       // The saved beneficiary paid, if any.
       beneficiary: t.recipient!.beneficiary ? String(t.recipient!.beneficiary) : null,
+      // Set on withdrawals to one of the business's settlement accounts.
+      settlementAccount: t.recipient!.settlementAccount ? String(t.recipient!.settlementAccount) : null,
     },
     narration: t.narration ?? null,
     reference: t.reference,
@@ -410,12 +413,22 @@ const recipientInput = z.discriminatedUnion("type", [
 
 /**
  * Sends money from one of the business's branch accounts. Send an Idempotency-Key header to retry safely.
- * `saveBeneficiary: true` adds a new bank recipient to the saved beneficiaries.
+ * `saveBeneficiary: true` adds a new bank recipient to the saved beneficiaries. Needs a step-up
+ * (`transfer.create`), except between the business's own branches.
  */
 export const createTransfer: RequestHandler = async (req, res) => {
   const body = z
     .object({ branch: objectId, amountKobo, narration, recipient: recipientInput, saveBeneficiary: z.boolean().optional() })
     .parse(req.body);
+  if (body.recipient.type === "branch") return void (await sendTransfer(req, res, body));
+  await withStepUp(req, "transfer.create", body, () => sendTransfer(req, res, body));
+};
+
+async function sendTransfer(
+  req: Request,
+  res: Response,
+  body: { branch: string; amountKobo: number; narration?: string; recipient: z.infer<typeof recipientInput>; saveBeneficiary?: boolean },
+) {
   const business = req.business!;
   let beneficiary: Types.ObjectId | undefined;
   let recipient;
@@ -441,7 +454,7 @@ export const createTransfer: RequestHandler = async (req, res) => {
     clientKey: clientKey(req),
   });
   res.status(replayed ? 200 : 201).json((await serialize(req, transfers.slice(0, 1)))[0]);
-};
+}
 
 export const MAX_BULK_ITEMS = 200;
 
@@ -465,18 +478,19 @@ export const createBulkTransfer: RequestHandler = async (req, res) => {
     })
     .parse(req.body);
   const business = req.business!;
-  const requests = await resolvePayoutRows(business, body.items, { save: body.saveBeneficiaries, userId: req.userId! });
-
-  const { transfers, batch, replayed } = await createTransfers({
-    business,
-    membership: req.membership!,
-    userId: req.userId!,
-    branchId: body.branch,
-    requests,
-    batchTitle: body.title,
-    clientKey: clientKey(req),
+  await withStepUp(req, "transfer.bulk", body, async () => {
+    const requests = await resolvePayoutRows(business, body.items, { save: body.saveBeneficiaries, userId: req.userId! });
+    const { transfers, batch, replayed } = await createTransfers({
+      business,
+      membership: req.membership!,
+      userId: req.userId!,
+      branchId: body.branch,
+      requests,
+      batchTitle: body.title,
+      clientKey: clientKey(req),
+    });
+    res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
   });
-  res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
 };
 
 /** `{ batch }` for several rows; `{ batch: null, items }` when a single row became a plain transfer. */
@@ -486,11 +500,14 @@ export async function describeBulkResult(req: Request, transfers: TransferDocume
   return { batch: await serializeBatch(req, savedBatch, transfers) };
 }
 
+/** Needs a step-up (`transfer.approve` with `{ id }`). */
 export const approveTransfer: RequestHandler<IdParams> = async (req, res) => {
   const { note: text } = note.parse(req.body ?? {});
   const transfer = await findTransfer(req, req.params.id);
-  const [decided] = await decideTransfers({ transfers: [transfer], membership: req.membership!, userId: req.userId!, decision: "approve", note: text });
-  res.json((await serialize(req, [decided ?? (await findTransfer(req, req.params.id))]))[0]);
+  await withStepUp(req, "transfer.approve", { id: req.params.id }, async () => {
+    const [decided] = await decideTransfers({ transfers: [transfer], membership: req.membership!, userId: req.userId!, decision: "approve", note: text });
+    res.json((await serialize(req, [decided ?? (await findTransfer(req, req.params.id))]))[0]);
+  });
 };
 
 export const rejectTransfer: RequestHandler<IdParams> = async (req, res) => {
@@ -529,8 +546,13 @@ const decideBatch =
     const { batch, transfers } = await findBatch(req, req.params.id);
     const pending = transfers.filter((t) => t.status === "pending_approval");
     if (!pending.length) throw new HttpError(409, "Nothing in this batch is waiting for approval", "TRANSFER_NOT_PENDING");
-    await decideTransfers({ transfers: pending, membership: req.membership!, userId: req.userId!, decision, note: text });
-    res.json(await serializeBatch(req, batch, await TransferModel.find({ batch: batch._id }).sort({ _id: 1 })));
+    const decide = async () => {
+      await decideTransfers({ transfers: pending, membership: req.membership!, userId: req.userId!, decision, note: text });
+      res.json(await serializeBatch(req, batch, await TransferModel.find({ batch: batch._id }).sort({ _id: 1 })));
+    };
+    // Approving needs a step-up (`batch.approve` with `{ id }`); rejecting doesn't.
+    if (decision === "approve") await withStepUp(req, "batch.approve", { id: req.params.id }, decide);
+    else await decide();
   };
 
 export const approveBatch = decideBatch("approve");

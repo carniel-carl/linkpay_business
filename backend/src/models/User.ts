@@ -16,6 +16,19 @@ const userSchema = new Schema(
       // Holds the secret between /2fa/totp/setup and /2fa/totp/enable.
       pendingTotpSecret: { type: String, select: false },
     },
+    // Money-out protection (services/moneyOut.ts, services/stepUp.ts).
+    security: {
+      // No moving money until then (after a two-step change). `null` with a reason "reported" = until staff clear it.
+      holdUntil: { type: Date },
+      holdReason: { type: String, enum: ["two_factor_changed", "reported", null] },
+      holdIndefinite: { type: Boolean, default: false },
+      // Too many wrong step-up codes.
+      lockedUntil: { type: Date },
+      // Last authenticator time-step accepted for a step-up, so a code can't be used twice.
+      totpLastCounter: { type: Number, select: false },
+      // Every token issued before this is refused (signed out everywhere, web included).
+      sessionsValidAfter: { type: Date },
+    },
   },
   {
     timestamps: true,
@@ -29,6 +42,7 @@ const userSchema = new Schema(
           delete ret.twoFactor.totpSecret;
           delete ret.twoFactor.pendingTotpSecret;
         }
+        if (ret.security) delete ret.security.totpLastCounter;
         return ret;
       },
     },

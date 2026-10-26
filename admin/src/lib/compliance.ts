@@ -67,6 +67,11 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "staff.disabled": "Staff turned off",
   "staff.enabled": "Staff turned on",
   "staff.signed_out": "Staff signed out",
+  "security.request_approved": "Settlement change approved",
+  "security.request_rejected": "Settlement change rejected",
+  "money_out.frozen": "Money out frozen",
+  "money_out.unfrozen": "Money out unfrozen",
+  "user.hold_cleared": "User hold cleared",
 }
 export const AUDIT_ACTIONS = Object.keys(AUDIT_ACTION_LABELS) as AuditAction[]
 

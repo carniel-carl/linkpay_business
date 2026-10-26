@@ -4,7 +4,7 @@ import { NotificationBell } from "@/components/notifications/notification-bell"
 import { PinnedHeader } from "@/components/shell/pinned-header"
 import { UserMenu } from "@/components/shell/user-menu"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
-import { getAdminSummary, getStaff, getStaffRoles, getUnreadNotifications } from "@/lib/data"
+import { getAdminSummary, getSecuritySummary, getStaff, getStaffRoles, getUnreadNotifications } from "@/lib/data"
 import { can, roleLabel } from "@/lib/permissions"
 
 export default async function ConsoleLayout({ children }: LayoutProps<"/">) {
@@ -12,6 +12,7 @@ export default async function ConsoleLayout({ children }: LayoutProps<"/">) {
   const [staff, roles, unread, jar] = await Promise.all([getStaff(), getStaffRoles(), getUnreadNotifications(), cookies()])
   // A role without businesses.view (or a staff member with no role yet) gets no counts.
   const summary = can(staff, "businesses.view") ? await getAdminSummary() : null
+  const security = can(staff, "security.review") ? await getSecuritySummary() : null
 
   return (
     <SidebarProvider defaultOpen={jar.get("sidebar_state")?.value !== "false"}>
@@ -23,10 +24,12 @@ export default async function ConsoleLayout({ children }: LayoutProps<"/">) {
       </a>
       <AdminSidebar
         summary={summary}
+        security={security}
         access={{
           staff: can(staff, "staff.manage"),
           activity: can(staff, "activity.view"),
           compliance: can(staff, "compliance.view"),
+          security: can(staff, "security.review"),
         }}
       />
       {/* Same framed sheet as the business dashboard; the header is fixed (see PinnedHeader). */}

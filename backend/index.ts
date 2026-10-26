@@ -9,6 +9,8 @@ import { startSafelockReleases } from "./src/services/safelocks";
 import { startLinkImageCleanup } from "./src/services/paymentLinkImages";
 import { startTransactionSync } from "./src/services/transactions";
 import { startTransferProcessor } from "./src/services/transfers";
+import { startSecurityRequestProcessor } from "./src/services/settlement";
+import { SECURITY } from "./src/config/security";
 
 await connectDB();
 
@@ -26,6 +28,8 @@ const stopReminders = startInvoiceReminders(15 * 60 * 1000);
 const stopRiskChecks = startRiskChecks(RISK_CHECK_INTERVAL_MS);
 // Releases Safelocks whose unlock day has come and tells the branch's team.
 const stopSafelockReleases = startSafelockReleases(SAFELOCK_RELEASE_INTERVAL_MS);
+// Settlement accounts and protection changes that staff approved, once their cooling-off ends.
+const stopSecurityRequests = startSecurityRequestProcessor(SECURITY.requestCheckIntervalMs);
 // Payment-link pictures uploaded but never attached to a link.
 const stopImageCleanup = startLinkImageCleanup(60 * 60 * 1000);
 
@@ -36,6 +40,7 @@ async function shutdown() {
   stopRiskChecks();
   stopSafelockReleases();
   stopImageCleanup();
+  stopSecurityRequests();
   server.close();
   await disconnectDB();
   process.exit(0);

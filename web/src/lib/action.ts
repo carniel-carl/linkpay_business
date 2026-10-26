@@ -26,6 +26,8 @@ export async function runAction<T>(fn: () => Promise<T>): Promise<ActionResult<T
         missing: err.missing,
         retryAt: (err.details as { retryAt?: string } | undefined)?.retryAt,
         rows: (err.details as { rows?: { row: number; error: string; code?: string }[] } | undefined)?.rows,
+        until: (err.details as { until?: string | null } | undefined)?.until,
+        attemptsLeft: (err.details as { attemptsLeft?: number } | undefined)?.attemptsLeft,
       }
     }
     console.error(err)

@@ -20,7 +20,7 @@ export type AuditEntry = {
   action: AuditAction;
   summary: string;
   business?: Id | null;
-  target?: { kind: "business" | "flag" | "staff" | "staff_invite" | "branch" | "payment_link" | "checkout" | "link_report"; id: Id };
+  target?: { kind: "business" | "flag" | "staff" | "staff_invite" | "branch" | "payment_link" | "checkout" | "link_report" | "security_request" | "user"; id: Id };
   details?: Record<string, unknown>;
 };
 

@@ -39,8 +39,8 @@ export async function verifyToken(token: string, typ: TokenType): Promise<string
   return (await verify(token, typ)).sub!;
 }
 
-/** Returns the user id, and the device session id when the token belongs to one. */
-export async function verifyAccessToken(token: string): Promise<{ userId: string; sessionId?: string }> {
+/** Returns the user id, the device session id when the token belongs to one, and when it was issued (ms). */
+export async function verifyAccessToken(token: string): Promise<{ userId: string; sessionId?: string; issuedAt: number }> {
   const payload = await verify(token, "access");
-  return { userId: payload.sub!, sessionId: typeof payload.sid === "string" ? payload.sid : undefined };
+  return { userId: payload.sub!, sessionId: typeof payload.sid === "string" ? payload.sid : undefined, issuedAt: (payload.iat ?? 0) * 1000 };
 }

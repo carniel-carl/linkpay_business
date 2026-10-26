@@ -5,6 +5,7 @@ import { FileUp, Send } from "lucide-react"
 import { toast } from "sonner"
 import { createBulkTransfer, listBanks } from "@/app/(dashboard)/transfers/actions"
 import { FormError } from "@/components/common/form-error"
+import { useStepUp } from "@/components/security/step-up-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -105,6 +106,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
   const [serverErrors, setServerErrors] = useState<Record<number, string>>({})
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
+  const stepUp = useStepUp()
   const [key, setKey] = useState(newKey)
 
   useEffect(() => {
@@ -138,13 +140,14 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
     setBusy(true)
     setError(undefined)
     setServerErrors({})
-    const result = await createBulkTransfer({
+    const body = {
       branch: sourceId,
       title: title.trim() || undefined,
       items: rows.map((r) => ({ accountNumber: r.accountNumber, bankUuid: r.bank!.uuid, amountKobo: r.amountKobo!, narration: r.narration })),
-      idempotencyKey: key,
-    })
+    }
+    const result = await stepUp.confirm("transfer.bulk", body, (proof) => createBulkTransfer({ ...body, idempotencyKey: key }, proof))
     setBusy(false)
+    if (!result) return
     if (!result.ok) {
       setError(result.error)
       if (result.rows) setServerErrors(Object.fromEntries(result.rows.map((r) => [r.row, r.error])))
@@ -294,6 +297,7 @@ export function BulkTransferDialog({ accounts, defaultBranchId, children }: { ac
           </Button>
         </DialogFooter>
       </DialogContent>
+      {stepUp.dialog}
     </Dialog>
   )
 }

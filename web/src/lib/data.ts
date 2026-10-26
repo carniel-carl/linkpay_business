@@ -38,6 +38,9 @@ import type {
   TransferSettings,
   UnreadCount,
   User,
+  SecurityEvent,
+  SecurityState,
+  SettlementAccount,
 } from "@/lib/api/types"
 
 // Server Components can't change cookies, so an expired session goes through the
@@ -196,6 +199,11 @@ export const getInvoiceCustomers = () => load<{ items: InvoiceCustomer[]; total:
 export const getInvoiceDefaults = () => load<InvoiceDefaults>("/api/invoices/defaults")
 
 /** How the business's invoices look (logo, accent colour, defaults). */
+/** Money-out protection and what's stopping the member moving money (docs/briefs/money-out-security.md). */
+export const getSecurity = cache(() => load<SecurityState>("/api/security"))
+export const getSettlementAccounts = cache(() => load<{ items: SettlementAccount[] }>("/api/settlement-accounts"))
+export const getSecurityEvents = () => load<{ items: SecurityEvent[]; nextBefore: string | null }>("/api/security/events?take=30")
+
 export const getBranding = cache(() => load<Branding>("/api/branding"))
 
 /** GET /api/pockets for a branch (or every branch the member sees). Needs `accounts.view`. */

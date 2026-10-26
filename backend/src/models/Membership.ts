@@ -9,6 +9,8 @@ const membershipSchema = new Schema(
     // Empty = every branch. Always empty for owner and admin.
     branches: { type: [{ type: Types.ObjectId, ref: "Branch" }], default: [] },
     invitedBy: { type: Types.ObjectId, ref: "User" },
+    // Set when someone joins with (or is moved to) a role that moves money: they can't until then.
+    moneyOutAfter: { type: Date },
   },
   {
     timestamps: true,

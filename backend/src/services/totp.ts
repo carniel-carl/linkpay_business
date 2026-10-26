@@ -13,3 +13,13 @@ export function verifyTotp(email: string, base32Secret: string, code: string): b
   // window: 1 accepts the previous/next 30s step to tolerate clock drift.
   return build(email, Secret.fromBase32(base32Secret)).validate({ token: code, window: 1 }) !== null;
 }
+
+/**
+ * The time-step a valid code belongs to, or null. Step-ups store the last step used, so the same code
+ * (seen over a shoulder or phished) can't be used again.
+ */
+export function totpCounter(email: string, base32Secret: string, code: string): number | null {
+  const totp = build(email, Secret.fromBase32(base32Secret));
+  const delta = totp.validate({ token: code, window: 1 });
+  return delta === null ? null : totp.counter() + delta;
+}

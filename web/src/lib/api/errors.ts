@@ -19,7 +19,7 @@ export class ApiError extends Error {
   /** The session token was missing, expired or invalid (not a wrong password). */
   get sessionExpired() {
     if (this.status !== 401) return false
-    return this.code === "UNAUTHENTICATED" || (this.authed && this.code === "INVALID_TOKEN")
+    return this.code === "UNAUTHENTICATED" || (this.authed && (this.code === "INVALID_TOKEN" || this.code === "SESSION_REVOKED"))
   }
 }
 
@@ -106,6 +106,40 @@ const MESSAGES: Record<string, string> = {
   EMBED_NOT_ALLOWED: "This payment link can't be used on this website.",
   TOO_MANY_CHECKOUTS: "Too many attempts. Wait a few minutes and try again.",
   FIELD_REQUIRED: "Fill in the required fields.",
+  // Money-out security: step-up codes
+  STEP_UP_REQUIRED: "Confirm this with a code first.",
+  STEP_UP_EXPIRED: "That code has expired. Send a new one.",
+  STEP_UP_USED: "That code has already been used. Send a new one.",
+  STEP_UP_MISMATCH: "The details changed after we sent the code. Send a new one.",
+  STEP_UP_LIMIT: "You've asked for a lot of codes. Wait a few minutes and try again.",
+  STEP_UP_LOCKED: "Too many wrong codes, so you can't send money for an hour. If this wasn't you, freeze money out and contact support.",
+  INVALID_STEP_UP: "Check the details and try again.",
+  // Money-out security: holds and protection
+  MONEY_OUT_FROZEN: "Money leaving this business is frozen. Nothing can be sent or withdrawn until it's unfrozen.",
+  SECURITY_HOLD: "For your safety you can't send money for 24 hours after a two-step verification change.",
+  NEW_MEMBER_HOLD: "New team members can't send or approve money for their first 24 hours.",
+  SETTLEMENT_ONLY: "This business only allows withdrawals to its settlement accounts and transfers between its own branches.",
+  UNFREEZE_NEEDS_SUPPORT: "LinkPay froze money out to protect your business. Contact support to have it checked and unfrozen.",
+  NOT_FROZEN: "Money out isn't frozen.",
+  SETTLEMENT_ONLY_OFF: "\"Settlement accounts only\" isn't on.",
+  REQUEST_EXISTS: "There's already a request to turn this off.",
+  REQUEST_NOT_FOUND: "There's no request to cancel. Refresh to see the latest.",
+  // Settlement accounts
+  SETTLEMENT_OWN_ACCOUNT: "This is one of your LinkPay accounts. A settlement account is your account at another bank.",
+  SETTLEMENT_LINKPAY_ACCOUNT: "This account belongs to another business on LinkPay. A settlement account must be your own.",
+  TWO_FACTOR_REQUIRED: "Turn on two-step verification under Settings, Security before adding a settlement account.",
+  INCORRECT_PASSWORD: "That password is incorrect.",
+  SETTLEMENT_EXISTS: "This account is already a settlement account, or waiting for review.",
+  SETTLEMENT_LIMIT: "You can have up to 3 settlement accounts. Remove one to add another.",
+  SETTLEMENT_NOT_PENDING: "Only accounts waiting for review can be cancelled.",
+  SETTLEMENT_NOT_ACTIVE: "This settlement account isn't ready for withdrawals.",
+  SETTLEMENT_NOT_FOUND: "We couldn't find that settlement account. Refresh and try again.",
+  SETTLEMENT_NAME_CHANGED: "The bank now shows a different name on this account, so we've stopped this withdrawal. Contact support.",
+  // "This wasn't me" links
+  REPORT_NOT_FOUND: "This link isn't valid. Contact support if you're worried about your account.",
+  REPORT_USED: "This has already been reported. We've frozen money leaving the business and will be in touch.",
+  REPORT_EXPIRED: "This link has expired. Contact support if you're worried about your account.",
+  TOO_MANY_REPORTS: "Too many attempts. Try again later or contact support.",
 }
 
 /** Maps backend errors (some have no `code`) to short, friendly copy. */

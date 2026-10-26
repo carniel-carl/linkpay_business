@@ -42,5 +42,6 @@ export function KindIcon({ transfer, className }: { transfer: Pick<Transfer, "ki
 export const recipientName = (t: Transfer) =>
   t.kind === "internal" && t.recipient.branch ? t.recipient.branch.name : t.recipient.accountName
 
-/** "GTBank · 0123456789" */
-export const recipientBank = (t: Transfer) => [t.recipient.bankName, t.recipient.accountNumber].filter(Boolean).join(" · ")
+/** "GTBank · 0123456789", or "Withdrawal · GTBank · 0123456789" to one of the business's settlement accounts. */
+export const recipientBank = (t: Transfer) =>
+  [t.recipient.settlementAccount ? "Withdrawal" : null, t.recipient.bankName, t.recipient.accountNumber].filter(Boolean).join(" · ")

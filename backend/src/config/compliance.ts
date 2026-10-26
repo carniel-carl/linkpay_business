@@ -6,6 +6,7 @@ export const FLAG_CATEGORIES = {
   fraud_report: "Fraud report or customer complaint",
   identity_concern: "Identity or verification concern",
   sanctions: "Sanctions or politically exposed person match",
+  account_security: "Account security (possible takeover)",
   other: "Other",
 } as const;
 export type FlagCategory = keyof typeof FLAG_CATEGORIES;

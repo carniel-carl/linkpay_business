@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { RotateCw } from "lucide-react"
 import { toast } from "sonner"
 import { actOnTransfer } from "@/app/(dashboard)/transfers/actions"
+import { useStepUp } from "@/components/security/step-up-dialog"
 import { CopyButton } from "@/components/accounts/copy-button"
 import { FormError } from "@/components/common/form-error"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<"approve" | "reject" | "cancel" | null>(null)
   const [checking, startCheck] = useTransition()
+  const stepUp = useStepUp()
   const levels = t.approval?.levels.length ?? 0
   const current = t.approval?.current ?? null
   // Approving an earlier level hands it on; only the last level sends the money.
@@ -43,8 +45,13 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
   async function act(action: "approve" | "reject" | "cancel") {
     setPending(action)
     setError(undefined)
-    const result = await actOnTransfer(t._id, action, note)
+    // Approving moves money, so it needs a code tied to this transfer; rejecting and cancelling don't.
+    const result =
+      action === "approve"
+        ? await stepUp.confirm("transfer.approve", { id: t._id }, (proof) => actOnTransfer(t._id, action, note, proof))
+        : await actOnTransfer(t._id, action, note)
     setPending(null)
+    if (!result) return
     if (!result.ok) return setError(result.error)
     toast.success(
       action === "approve"
@@ -68,6 +75,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
 
   return (
     <>
+      {stepUp.dialog}
       <SheetHeader className="gap-5 border-b bg-muted/50 p-6 pr-14">
         <div className="flex items-center gap-3">
           <KindIcon transfer={t} />
@@ -127,7 +135,7 @@ function Details({ transfer: t, onDone }: { transfer: Transfer; onDone: () => vo
         </Group>
 
         <Group title="Details">
-          <Row label="Type" value={KIND_LABELS[t.kind]} />
+          <Row label="Type" value={t.recipient.settlementAccount ? "Withdrawal to a settlement account" : KIND_LABELS[t.kind]} />
           <Row label="From" value={t.branch?.name} />
           <Row label="Narration" value={t.narration} />
           <Row

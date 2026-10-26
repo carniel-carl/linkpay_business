@@ -9,6 +9,7 @@ import {
   MessageSquareWarning,
   ScrollText,
   ShieldAlert,
+  ShieldCheck,
   TriangleAlert,
   UsersRound,
   type LucideIcon,
@@ -28,7 +29,7 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar"
-import type { AdminSummary } from "@/lib/api/types"
+import type { AdminSummary, SecuritySummary } from "@/lib/api/types"
 import { cn } from "@/lib/utils"
 
 type Item = {
@@ -44,10 +45,10 @@ type Item = {
 }
 
 /** What the signed-in staff member's role can open (see lib/permissions.ts). */
-export type NavAccess = { staff: boolean; activity: boolean; compliance: boolean }
+export type NavAccess = { staff: boolean; activity: boolean; compliance: boolean; security: boolean }
 
 /** Staff console navigation. Counts come from GET /api/admin/summary; each group shows only what the role can open. */
-export function AdminSidebar({ summary, access }: { summary: AdminSummary | null; access: NavAccess }) {
+export function AdminSidebar({ summary, security, access }: { summary: AdminSummary | null; security: SecuritySummary | null; access: NavAccess }) {
   return (
     <Sidebar collapsible="icon" variant="inset" aria-label="Staff console">
       <SidebarHeader className="px-2 pt-3">
@@ -63,7 +64,7 @@ export function AdminSidebar({ summary, access }: { summary: AdminSummary | null
       </SidebarHeader>
       <SidebarContent className="pt-2">
         {summary && <BusinessNav summary={summary} />}
-        <MonitoringNav summary={summary} access={access} />
+        <MonitoringNav summary={summary} security={security} access={access} />
         {access.staff && <NavGroup label="Team" items={TEAM} />}
       </SidebarContent>
       <SidebarRail />
@@ -122,9 +123,23 @@ function BusinessNav({ summary }: { summary: AdminSummary }) {
   )
 }
 
-function MonitoringNav({ summary, access }: { summary: AdminSummary | null; access: NavAccess }) {
+function MonitoringNav({ summary, security, access }: { summary: AdminSummary | null; security: SecuritySummary | null; access: NavAccess }) {
   const flagged = summary?.compliance.flagged ?? 0
+  const waiting = security?.pending ?? 0
   const items: Item[] = [
+    ...(access.security
+      ? [
+          {
+            href: "/security-reviews",
+            label: "Security reviews",
+            icon: ShieldCheck,
+            count: waiting,
+            countLabel: "waiting for review",
+            alert: waiting > 0,
+            isActive: (p: string) => p.startsWith("/security-reviews"),
+          },
+        ]
+      : []),
     ...(access.compliance
       ? [
           {

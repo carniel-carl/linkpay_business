@@ -181,6 +181,50 @@ export const sendTransferFailedEmail = (to: string, opts: { amountKobo: number; 
   });
 
 // ---------------------------------------------------------------------------------------------------------
+// Money-out protection. Every change that loosens where money can go is emailed to the owner and admins,
+// with a personal "This wasn't me" link that stops it. Codes say exactly what they confirm.
+// ---------------------------------------------------------------------------------------------------------
+
+/** A step-up code. The summary is what it confirms, so a code tricked out of someone shows what it's for. */
+export const sendStepUpCodeEmail = (to: string, { summary, code }: { summary: string; code: string }) =>
+  sendEmail({
+    to,
+    subject: `${env.appName} code to confirm: ${summary}`,
+    text:
+      `You asked to: ${summary}\n\nYour code is: ${code}\n\nIt expires in 5 minutes and only works for exactly this. ` +
+      `Only enter it if you're doing this yourself. ${env.appName} staff will never ask you for it.`,
+    html:
+      `<p>You asked to: <strong>${escapeHtml(summary)}</strong></p>` +
+      `<p style="font-size:24px;font-weight:bold;letter-spacing:4px">${code}</p>` +
+      `<p>It expires in 5 minutes and only works for exactly this. Only enter it if you're doing this yourself. ${env.appName} staff will never ask you for it.</p>`,
+  });
+
+/**
+ * A security notice. `reportLink` adds "This wasn't me": opening it shows what happened and lets the
+ * person stop it (the page asks them to confirm, so email scanners following links can't trigger it).
+ */
+export const sendSecurityEmail = (
+  to: string,
+  { subject, intro, details = [], outro, reportLink }: { subject: string; intro: string; details?: string[]; outro?: string; reportLink?: string },
+) =>
+  sendEmail({
+    to,
+    subject,
+    text:
+      `${intro}\n` +
+      (details.length ? `\n${details.map((d) => `- ${d}`).join("\n")}\n` : "") +
+      (outro ? `\n${outro}\n` : "") +
+      (reportLink ? `\nIf this wasn't you or anyone on your team, stop it now: ${reportLink}\nThis also freezes money leaving the business until we've spoken to you.\n` : ""),
+    html:
+      `<p>${escapeHtml(intro)}</p>` +
+      (details.length ? `<ul>${details.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul>` : "") +
+      (outro ? `<p>${escapeHtml(outro)}</p>` : "") +
+      (reportLink
+        ? `<p><strong>If this wasn't you or anyone on your team:</strong> <a href="${reportLink}">This wasn't me, stop it</a>. This also freezes money leaving the business until we've spoken to you.</p>`
+        : ""),
+  });
+
+// ---------------------------------------------------------------------------------------------------------
 // Invoices. Customer emails come from the business (its name, accent colour and logo, replies to its email).
 // ---------------------------------------------------------------------------------------------------------
 

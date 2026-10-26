@@ -10,7 +10,8 @@ const AUTH_ROUTES = ["/sign-in", "/sign-up", "/verify-email"]
 // /i/ is a customer's invoice (page, PDF and logo) and /pay/ a payment link: payers never have an account.
 // /embed.js is the script businesses put on their own websites.
 const PUBLIC_ROUTES = ["/", "/embed.js"]
-const PUBLIC_PREFIXES = ["/invite/", "/i/", "/pay/"]
+// /security/report/: "This wasn't me" links from security emails, opened signed out.
+const PUBLIC_PREFIXES = ["/invite/", "/i/", "/pay/", "/security/report/"]
 const HOME = "/dashboard"
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000"

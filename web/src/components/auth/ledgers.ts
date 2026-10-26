@@ -45,3 +45,13 @@ export const openingLedger = (current: "login" | "email"): Ledger => ({
 })
 
 export const teamLedger: Ledger = { label: "How team access works", rows: TEAM_ROWS }
+
+const REPORT_ROWS: LedgerRow[] = [
+  { key: "stop", title: "The change stops", detail: "A new settlement account is cancelled, or a removed protection is turned back on" },
+  { key: "sign-out", title: "Whoever made it is signed out", detail: "Everywhere, and they can't move money until we've checked" },
+  { key: "freeze", title: "Money out is frozen", detail: "Nothing can be sent or withdrawn. Payments in still arrive" },
+  { key: "call", title: "We contact you", detail: "On a number from your verification, before anything is unfrozen" },
+]
+
+/** "This wasn't me" links from security emails. */
+export const reportLedger: Ledger = { label: "What happens when you report it", rows: REPORT_ROWS }

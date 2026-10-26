@@ -12,6 +12,7 @@ import {
   reportPublicLink,
   startPublicCheckout,
 } from "../controllers/publicPaymentLinks";
+import { getReport, postReport } from "../controllers/security";
 import { env } from "../config/env";
 import { LINK_REPORT_LIMITS } from "../config/paymentLinks";
 
@@ -63,3 +64,15 @@ publicRouter.post("/pay/:slug/checkouts", checkoutLimit, startPublicCheckout);
 publicRouter.get("/checkouts/:token", getPublicCheckout);
 // Test-mode checkouts only.
 publicRouter.post("/checkouts/:token/simulate", simulatePublicCheckout);
+
+// "This wasn't me" links from security emails. Opening one changes nothing; confirming it freezes money out.
+const securityReportLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  skip: () => env.nodeEnv === "test",
+  message: { error: "Too many attempts. Please try again later or contact support.", code: "TOO_MANY_REPORTS" },
+});
+publicRouter.get("/security-reports/:token", getReport);
+publicRouter.post("/security-reports/:token", securityReportLimit, postReport);

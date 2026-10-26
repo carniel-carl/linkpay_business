@@ -184,6 +184,8 @@ export type Permission =
   | "invoices.manage"
   | "savings.manage"
   | "payments.manage"
+  | "settlement.manage"
+  | "security.freeze"
 
 /** Fixed roles today; custom roles may come later, so treat unknown names gracefully. */
 export type TeamRole = "owner" | "admin" | "finance" | "approver" | "viewer" | (string & {})
@@ -313,7 +315,14 @@ export type Transfer = {
   currency: "NGN"
   branch: BranchRef | null
   batch: string | null
-  recipient: { accountNumber: string; accountName: string; bankName: string | null; branch: BranchRef | null }
+  recipient: {
+    accountNumber: string
+    accountName: string
+    bankName: string | null
+    branch: BranchRef | null
+    /** Set on withdrawals to one of the business's settlement accounts. */
+    settlementAccount?: string | null
+  }
   narration: string | null
   reference: string
   failureReason: string | null
@@ -616,6 +625,14 @@ export type NotificationType =
   | "team.role_changed"
   | "team.removed"
   | "security.new_sign_in"
+  | "security.settlement_requested"
+  | "security.settlement_active"
+  | "security.settlement_rejected"
+  | "security.settlement_removed"
+  | "security.money_out_frozen"
+  | "security.money_out_unfrozen"
+  | "security.protection_changed"
+  | "security.two_factor_changed"
   | "savings.target_reached"
   | "savings.safelock_released"
 
@@ -958,4 +975,94 @@ export type PublicCheckout = {
   business: PublicPaymentLink["business"]
   successMessage: string | null
   redirectUrl: string | null
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Money-out security (docs/briefs/money-out-security.md)
+// ---------------------------------------------------------------------------------------------------------
+
+export type StepUpAction =
+  | "transfer.create"
+  | "transfer.bulk"
+  | "transfer.approve"
+  | "batch.approve"
+  | "payout_list.run"
+  | "settlement.add"
+  | "settlement.remove"
+  | "settlement.withdraw"
+  | "settlement_only.enable"
+  | "settlement_only.disable"
+  | "money_out.unfreeze"
+
+/** POST /api/security/step-up */
+export type StepUpChallenge = { challengeId: string; method: "totp" | "email"; summary: string; expiresAt: string }
+
+/** Sent with the action as X-Step-Up-Id / X-Step-Up-Code. */
+export type StepUpProof = { id: string; code: string }
+
+export type SecurityRequestSummary = {
+  _id: string
+  kind: "settlement_account" | "settlement_only_off"
+  status: "pending" | "approved" | "completed" | "rejected" | "cancelled"
+  availableAt: string
+  createdAt: string
+  note: string | null
+}
+
+/** GET /api/security */
+export type SecurityState = {
+  moneyOut: {
+    frozen: { at: string; source: "member" | "report" | "staff"; byName: string | null; reason: string | null; canUnfreeze: boolean } | null
+    settlementOnly: { enabled: boolean; since: string | null; removal: SecurityRequestSummary | null }
+  }
+  me: {
+    stepUpMethod: "totp" | "email"
+    twoFactor: { enabled: boolean; method: "totp" | "email" | null }
+    hold: { until: string | null; reason: "two_factor_changed" | "reported" } | null
+    lockedUntil: string | null
+    memberHoldUntil: string | null
+    blocker: { code: string; message: string; until: string | null } | null
+    /** A hold on this person alone (ignores a freeze). */
+    personalBlocker: { code: string; message: string; until: string | null } | null
+  }
+  rules: {
+    settlementCoolingOffHours: number
+    settlementOnlyOffHours: number
+    maxSettlementAccounts: number
+    twoFactorHoldHours: number
+    newMemberHoldHours: number
+  }
+}
+
+export type SettlementStatus = "pending" | "active" | "rejected" | "cancelled" | "removed"
+
+export type SettlementNameCheck = { result: "match" | "partial"; matchedTo: "business" | "person"; matchedName: string }
+
+export type SettlementAccount = {
+  _id: string
+  accountNumber: string
+  accountName: string
+  bankName: string | null
+  status: SettlementStatus
+  nameCheck: SettlementNameCheck
+  addedBy: { _id: string; name: string } | null
+  createdAt: string
+  activatedAt: string | null
+  endedAt: string | null
+  lastWithdrawalAt: string | null
+  review: { status: SecurityRequestSummary["status"]; availableAt: string; decidedAt: string | null; note: string | null } | null
+}
+
+/** POST /api/settlement-accounts/check */
+export type SettlementCheck = { accountNumber: string; accountName: string; bankName: string | null; nameCheck: SettlementNameCheck }
+
+export type SecurityEvent = { _id: string; type: string; summary: string; actor: { type: string; name: string }; ip: string | null; createdAt: string }
+
+/** GET /api/public/security-reports/:token */
+export type SecurityReportPreview = {
+  subject: "settlement_account" | "settlement_only_off" | "two_factor"
+  summary: string
+  businessName: string | null
+  createdAt: string
+  status: "open" | "used" | "expired"
 }

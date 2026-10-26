@@ -18,7 +18,7 @@ import { HttpError } from "../utils/HttpError";
 import { sendTransferAwaitingApprovalEmail, sendTransferFailedEmail, sendTransferRejectedEmail } from "./email";
 import { liquifia, LiquifiaError, newIdempotencyKey, toKobo, toNaira, type LiquifiaBank } from "./liquifia/client";
 import { transferApprovalRequested, transferSettled, transfersDecided } from "./notificationEvents";
-import { assertMoneyCanMove } from "./compliance";
+import { assertMoneyOutAllowed, assertRecipientsAllowed } from "./moneyOut";
 import { savedByAccount } from "./savings";
 import {
   approvalPlan,
@@ -228,6 +228,8 @@ export type TransferRequest = {
   narration?: string;
   /** The saved beneficiary being paid, if any. */
   beneficiary?: Types.ObjectId;
+  /** A withdrawal to one of the business's settlement accounts. */
+  settlementAccount?: Types.ObjectId;
 };
 
 const newReference = () => `LPB${randomBytes(8).toString("hex").toUpperCase()}`;
@@ -253,7 +255,9 @@ export async function createTransfers(opts: {
   clientKey?: string;
 }) {
   const { business, membership, userId, requests } = opts;
-  assertMoneyCanMove(business);
+  // Restrictions, an emergency freeze, the person's holds, and "settlement accounts only".
+  await assertMoneyOutAllowed(business, membership, userId);
+  await assertRecipientsAllowed(business, requests.map((r) => ({ kind: r.recipient.kind, settlementAccount: r.settlementAccount })));
   const branch = await BranchModel.findOne({ _id: opts.branchId, business: business._id });
   if (!branch || !canAccessBranch(membership, branch._id)) throw new HttpError(404, "Branch not found");
   const account = await VirtualAccountModel.findOne({ branch: branch._id });
@@ -326,6 +330,7 @@ export async function createTransfers(opts: {
             business: r.recipient.business,
             branch: r.recipient.branch,
             beneficiary: r.beneficiary,
+            settlementAccount: r.settlementAccount,
           },
           narration: r.narration,
           reference: newReference(),
@@ -370,8 +375,12 @@ export async function decideTransfers(opts: {
 }) {
   const { transfers, userId, decision, note } = opts;
   if (decision === "approve" && transfers[0]) {
-    const owner = await BusinessModel.findById(transfers[0].business).select("compliance.status");
-    if (owner) assertMoneyCanMove(owner);
+    const owner = await BusinessModel.findById(transfers[0].business);
+    if (owner) {
+      await assertMoneyOutAllowed(owner, opts.membership, userId);
+      // "Settlement accounts only" may have been turned on after these were made.
+      await assertRecipientsAllowed(owner, transfers.map((t) => ({ kind: t.kind, settlementAccount: t.recipient?.settlementAccount })));
+    }
   }
   for (const transfer of transfers) {
     if (!canAccessBranch(opts.membership, transfer.branch)) throw new HttpError(404, "Transfer not found");
@@ -460,10 +469,10 @@ function failureMessage(err: unknown) {
  */
 export async function submitTransfer(transfer: TransferDocument) {
   if (transfer.status !== "processing" || transfer.provider?.payoutId) return transfer;
-  // A suspended or closed business's approved transfers are held, not sent, until it's reinstated.
-  const owner = await BusinessModel.findById(transfer.business).select("compliance.status");
-  const restriction = owner?.compliance?.status;
-  if (restriction === "suspended" || restriction === "banned") {
+  // A suspended, closed or frozen business's approved transfers are held, not sent, until that's lifted.
+  const owner = await BusinessModel.findById(transfer.business).select("compliance.status moneyOut.frozen.at");
+  const restriction = owner?.moneyOut?.frozen?.at ? "frozen" : owner?.compliance?.status;
+  if (restriction === "suspended" || restriction === "banned" || restriction === "frozen") {
     transfer.set({ "provider.lastCheckedAt": new Date(), "provider.lastError": `Held: the business is ${restriction}` });
     await transfer.save();
     return transfer;

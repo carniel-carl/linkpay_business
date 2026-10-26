@@ -9,6 +9,7 @@ import { UserModel } from "../models/User";
 import { resolvePayoutRows, saveBeneficiary } from "../services/beneficiaries";
 import { todayInLagos } from "../services/pockets";
 import { branchScope, canAccessBranch } from "../services/team";
+import { withStepUp } from "../services/stepUp";
 import { createTransfers } from "../services/transfers";
 import { HttpError } from "../utils/HttpError";
 import { describeBulkResult, MAX_BULK_ITEMS } from "./transfers";
@@ -189,22 +190,25 @@ export const runPayoutList: RequestHandler<IdParams> = async (req, res) => {
   if (!branch) throw new HttpError(400, "Choose the account to pay from", "BRANCH_REQUIRED");
 
   const rows = body.items ?? list.items.map((i) => ({ beneficiary: String(i.beneficiary), amountKobo: i.amountKobo, narration: i.narration ?? undefined }));
-  const requests = await resolvePayoutRows(req.business!, rows, { userId: req.userId! });
-  const { transfers, batch, replayed } = await createTransfers({
-    business: req.business!,
-    membership: req.membership!,
-    userId: req.userId!,
-    branchId: branch,
-    requests,
-    batchTitle: body.title ?? `${list.title} (${todayInLagos()})`,
-    payoutList: list._id,
-    clientKey: clientKey(req),
-  });
+  // Needs a step-up (`payout_list.run` with `{ id, branch?, items? }`), tied to this version of the list.
+  await withStepUp(req, "payout_list.run", { id: req.params.id, branch: body.branch, items: body.items }, async () => {
+    const requests = await resolvePayoutRows(req.business!, rows, { userId: req.userId! });
+    const { transfers, batch, replayed } = await createTransfers({
+      business: req.business!,
+      membership: req.membership!,
+      userId: req.userId!,
+      branchId: branch,
+      requests,
+      batchTitle: body.title ?? `${list.title} (${todayInLagos()})`,
+      payoutList: list._id,
+      clientKey: clientKey(req),
+    });
 
-  if (!replayed) {
-    list.set({ lastRunAt: new Date(), lastBatch: batch?._id ?? transfers[0]?.batch ?? undefined });
-    if (body.items && body.saveItems) list.set("items", await checkItems(req, body.items));
-    await list.save();
-  }
-  res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
+    if (!replayed) {
+      list.set({ lastRunAt: new Date(), lastBatch: batch?._id ?? transfers[0]?.batch ?? undefined });
+      if (body.items && body.saveItems) list.set("items", await checkItems(req, body.items));
+      await list.save();
+    }
+    res.status(replayed ? 200 : 201).json(await describeBulkResult(req, transfers, batch));
+  });
 };
